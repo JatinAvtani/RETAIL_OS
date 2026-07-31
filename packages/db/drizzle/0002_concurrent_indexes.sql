@@ -12,3 +12,5 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS "memberships_org_idx" ON "memberships" (
 CREATE INDEX CONCURRENTLY IF NOT EXISTS "audit_logs_org_idx" ON "audit_logs" ("organization_id", "occurred_at" DESC);
 CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "memberships_org_user_unique" ON "memberships" ("organization_id", "user_id") WHERE "deleted_at" IS NULL;
 CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "users_email_unique" ON "users" ("email") WHERE "deleted_at" IS NULL;
+CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "organizations_slug_unique" ON "organizations" ("slug") WHERE "deleted_at" IS NULL;
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "verification_tokens_lookup_idx" ON "verification_tokens" ("token_hash") WHERE "used_at" IS NULL;

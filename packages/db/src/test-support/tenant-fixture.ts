@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm';
 import postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import * as schema from '../schema/index';
-import { organizations, stores } from '../schema/index';
+import { memberships, organizations, stores, users } from '../schema/index';
 import { generateId } from '@retailos/domain';
 
 /**
@@ -20,6 +20,8 @@ export type TenantFixture = {
   organizationId: string;
   storeId: string;
   storeName: string;
+  userId: string;
+  membershipId: string;
 };
 
 export type TwoTenantFixture = {
@@ -38,11 +40,14 @@ export const setUpTwoTenants = async (): Promise<TwoTenantFixture> => {
   const makeTenant = async (label: string): Promise<TenantFixture> => {
     const organizationId = generateId();
     const storeId = generateId();
+    const userId = generateId();
+    const membershipId = generateId();
     const storeName = `${label} Store ${storeId.slice(0, 8)}`;
 
     await adminDb.insert(organizations).values({
       id: organizationId,
       name: `${label} Org`,
+      slug: `${label.toLowerCase()}-org-${organizationId.slice(0, 8)}`,
       baseCurrency: 'USD',
     });
     await adminDb.insert(stores).values({
@@ -51,14 +56,30 @@ export const setUpTwoTenants = async (): Promise<TwoTenantFixture> => {
       name: storeName,
       timezone: 'America/New_York',
     });
+    await adminDb.insert(users).values({
+      id: userId,
+      email: `${label.toLowerCase()}-${userId.slice(0, 8)}@example.test`,
+    });
+    await adminDb.insert(memberships).values({
+      id: membershipId,
+      organizationId,
+      userId,
+      role: 'OWNER',
+      storeIds: [storeId],
+      approvalLimit: '500.0000',
+    });
 
-    return { organizationId, storeId, storeName };
+    return { organizationId, storeId, storeName, userId, membershipId };
   };
 
   const tenantA = await makeTenant('Tenant-A');
   const tenantB = await makeTenant('Tenant-B');
 
   const cleanup = async () => {
+    await adminDb.delete(memberships).where(eq(memberships.organizationId, tenantA.organizationId));
+    await adminDb.delete(memberships).where(eq(memberships.organizationId, tenantB.organizationId));
+    await adminDb.delete(users).where(eq(users.id, tenantA.userId));
+    await adminDb.delete(users).where(eq(users.id, tenantB.userId));
     await adminDb.delete(stores).where(eq(stores.organizationId, tenantA.organizationId));
     await adminDb.delete(stores).where(eq(stores.organizationId, tenantB.organizationId));
     await adminDb.delete(organizations).where(eq(organizations.id, tenantA.organizationId));

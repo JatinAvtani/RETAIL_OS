@@ -15,6 +15,20 @@
       "when": 1785487800000,
       "tag": "0001_rls_and_constraints",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785510231577,
+      "tag": "0003_identity_tenancy_schema_expand",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1785512337844,
+      "tag": "0004_role_enum_uppercase",
+      "breakpoints": true
     }
   ]
 }

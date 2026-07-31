@@ -48,4 +48,14 @@ describe('RLS alone (no repository, no app-layer WHERE clause)', () => {
       })
     ).rejects.toThrow();
   });
+
+  it('RLS blocks cross-tenant reads of memberships, including approval_limit and invited_by', async () => {
+    const rows = await client.begin(async (tx) => {
+      await tx`SELECT set_config('app.current_org_id', ${fixture.tenantA.organizationId}, true)`;
+      return tx`SELECT id, organization_id, approval_limit, invited_by FROM memberships`;
+    });
+
+    expect(rows.some((r) => r.id === fixture.tenantB.membershipId)).toBe(false);
+    expect(rows.some((r) => r.id === fixture.tenantA.membershipId)).toBe(true);
+  });
 });
