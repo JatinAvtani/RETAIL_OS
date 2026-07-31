@@ -1,0 +1,17 @@
+{
+  "name": "@retailos/api",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@retailos/domain": "workspace:*",
+    "@retailos/db": "workspace:*",
+    "@retailos/metrics": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}

@@ -4,3 +4,6 @@ dist/
 .env*
 coverage/
 *.log
+.turbo/
+*.tsbuildinfo
+.claude/settings.local.json

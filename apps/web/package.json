@@ -1,0 +1,16 @@
+{
+  "name": "@retailos/web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@retailos/domain": "workspace:*",
+    "@retailos/ui": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}
