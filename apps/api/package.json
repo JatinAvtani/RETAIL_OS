@@ -5,14 +5,23 @@
   "type": "module",
   "scripts": {
     "build": "tsc --build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "dev": "tsx watch src/start.ts",
+    "test": "vitest run"
   },
   "dependencies": {
-    "@retailos/domain": "workspace:*",
     "@retailos/db": "workspace:*",
-    "@retailos/metrics": "workspace:*"
+    "@retailos/domain": "workspace:*",
+    "@retailos/metrics": "workspace:*",
+    "@trpc/server": "^11.18.0",
+    "fastify": "^5.11.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "typescript": "^5.7.0"
+    "@types/node": "^22.10.2",
+    "drizzle-orm": "^0.36.4",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.8"
   }
 }
