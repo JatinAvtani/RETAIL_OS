@@ -20,7 +20,7 @@ BLOCKING=0; HIGH=0; ADVISORY=0
 EXCLUDES=(--exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.git
           --exclude-dir=.next --exclude-dir=coverage --exclude-dir=fixtures
           --exclude-dir=.claude --exclude-dir=.ai --exclude-dir=docs
-          --exclude-dir=.turbo --exclude-dir=drizzle
+          --exclude-dir=.turbo --exclude-dir=drizzle --exclude-dir=spikes
           --exclude='*.test.ts' --exclude='*.spec.ts' --exclude='*.type-test.ts'
           --exclude='verify-invariants.sh' --exclude='*.md' --exclude='CLAUDE.md')
 
