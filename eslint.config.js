@@ -5,7 +5,9 @@ import globals from 'globals';
 
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/.next/**', '**/node_modules/**', '**/drizzle/**', '**/*.tsbuildinfo'],
+    // spikes/** is deliberately disposable/no-architecture code (see spikes/extraction/README.md)
+    // and isn't held to the same lint bar as packages/apps.
+    ignores: ['**/dist/**', '**/.next/**', '**/node_modules/**', '**/drizzle/**', '**/*.tsbuildinfo', 'spikes/**'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
