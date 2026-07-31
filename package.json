@@ -14,7 +14,7 @@
     "lint": "eslint .",
     "test": "turbo run test",
     "boundaries": "depcruise --config .dependency-cruiser.cjs --output-type err apps packages",
-    "invariants": "bash .claude/skills/verify-invariants/check.sh"
+    "invariants": "bash scripts/verify-invariants.sh"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
