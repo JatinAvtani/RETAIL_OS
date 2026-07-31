@@ -3,14 +3,14 @@ import { organizations } from './organizations';
 import { users } from './users';
 
 /**
- * Append-only record of every mutation (spec 08 SS8.5): actor, action, entity, before/after diff,
- * metadata, timestamp. No id/timestamps/version spread from columns.ts — audit_logs is not a
- * normal tenant table: it is never updated or soft-deleted, and it is PARTITION BY RANGE
- * (occurred_at), which Drizzle's schema builder cannot express, so the partitioning clause and
- * the initial partition are added as raw SQL in the migration (see drizzle/0000_*.sql).
+ * Append-only record of every mutation: actor, action, entity, before/after diff, metadata,
+ * timestamp. No id/timestamps/version spread from columns.ts — audit_logs is not a normal tenant
+ * table: it is never updated or soft-deleted, and it is PARTITION BY RANGE (occurred_at), which
+ * Drizzle's schema builder cannot express, so the partitioning clause and the initial partition
+ * are added as raw SQL in the migration (see drizzle/0000_*.sql).
  *
  * Append-only is enforced by revoking UPDATE/DELETE from the application role in the same
- * migration — not by application discipline alone (I3).
+ * migration — not by application discipline alone.
  */
 export const auditLogs = pgTable('audit_logs', {
   id: uuid('id').primaryKey(),

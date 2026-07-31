@@ -6,7 +6,7 @@ declare const quantityBrand: unique symbol;
 
 /**
  * Branded per-unit so `qtyKg + qtyG` (plain arithmetic on the wrapped Decimal) is a compile
- * error, and mixing units in one expression must go through `convertQuantity` explicitly (I6).
+ * error, and mixing units in one expression must go through `convertQuantity` explicitly.
  * `Quantity<'kg'>` and `Quantity<'g'>` are distinct, incompatible types even though both wrap
  * a Decimal.
  */
@@ -51,10 +51,10 @@ export const compareQuantity = <U extends Unit>(a: Quantity<U>, b: Quantity<NoIn
 
 /**
  * Explicit, global (dimension-internal) unit conversion — e.g. kg <-> g, l <-> ml.
- * This is the ONLY sanctioned way to move a quantity between units (I6): it is a boundary
+ * This is the ONLY sanctioned way to move a quantity between units: it is a boundary
  * operation, called once, never implicit mid-calculation. Throws for cross-dimension or
  * product-specific conversions (e.g. "case" sizing), which must go through the product's own
- * conversion table (UnitOfMeasure / UnitConversion, spec 07 §7.3) — never this global helper.
+ * conversion table — never this global helper.
  */
 export const convertQuantity = <From extends Unit, To extends Unit>(
   q: Quantity<From>,

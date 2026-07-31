@@ -5,12 +5,10 @@ import { StoreRepository } from './store-repository';
 import { setUpTwoTenants, type TwoTenantFixture } from '../test-support/tenant-fixture';
 
 /**
- * The merge gate (spec 08 SS8.1 point 4, plan.md Phase 6): an automated suite that attempts
- * cross-tenant access and asserts it is always denied. The plan's literal example tests HTTP
- * endpoints via callAs(user, endpoint); no HTTP endpoints exist yet (no api app code), so this
- * adapts the same principle to the layer that DOES exist today — StoreRepository, the
- * application-layer half of I4's defense in depth. The RLS half is proven separately in
- * store-repository.rls-only.test.ts, without going through any repository at all.
+ * An automated suite that attempts cross-tenant access and asserts it is always denied. No HTTP
+ * endpoints exist yet, so this exercises the layer that does exist today — StoreRepository, the
+ * application-layer half of the tenant-isolation defense in depth. The RLS half is proven
+ * separately in rls-only.cross-tenant.test.ts, without going through any repository at all.
  *
  * Connects as retailos_app (the real, non-superuser application role), not postgres — a
  * superuser bypasses RLS, which would make this suite pass for the wrong reason.

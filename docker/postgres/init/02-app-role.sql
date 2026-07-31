@@ -1,8 +1,8 @@
--- Non-superuser application role (spec 08 SS8.1). The app must never connect as the `postgres`
--- superuser: a superuser silently bypasses RLS regardless of ENABLE/FORCE, which defeats the
--- entire tenant-isolation mechanism (I4). Migrations still run as `postgres` (they need to
--- CREATE TABLE / ALTER TABLE ... ENABLE ROW LEVEL SECURITY), but the running application
--- connects as `retailos_app`.
+-- Non-superuser application role. The app must never connect as the `postgres` superuser: a
+-- superuser silently bypasses RLS regardless of ENABLE/FORCE, which defeats the entire
+-- tenant-isolation mechanism. Migrations still run as `postgres` (they need to CREATE TABLE /
+-- ALTER TABLE ... ENABLE ROW LEVEL SECURITY), but the running application connects as
+-- `retailos_app`.
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'retailos_app') THEN

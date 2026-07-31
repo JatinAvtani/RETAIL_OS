@@ -1,8 +1,8 @@
 import { integer, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 /**
- * Universal column conventions (spec 08 SS8.2), factored so every tenant table applies them the
- * same way. `id` has no DB-side default — see packages/domain/src/primitives/id.ts for why
+ * Universal column conventions, factored so every tenant table applies them the same way. `id`
+ * has no DB-side default — see packages/domain/src/primitives/id.ts for why
  * (UUID v7, generated in application code, not gen_random_uuid()'s v4).
  */
 export const idColumn = () => uuid('id').primaryKey();

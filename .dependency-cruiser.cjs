@@ -1,6 +1,6 @@
 /**
- * Module boundaries (CLAUDE.md, spec 09 SS9.1): dependency-cruiser is the CI-enforced mechanism
- * that keeps the modular monolith modular.
+ * Module boundaries: dependency-cruiser is the CI-enforced mechanism that keeps the modular
+ * monolith modular.
  *
  * The "no reaching into another package's internals" rule is expressed as one explicit rule per
  * workspace package rather than a single generic regex: dependency-cruiser's `path`/`pathNot`
@@ -40,7 +40,7 @@ module.exports = {
       name: 'no-circular',
       severity: 'error',
       comment:
-        'Circular dependencies make module boundaries meaningless and complicate the extraction path called out in spec 09.',
+        'Circular dependencies make module boundaries meaningless and complicate any future extraction into separate services.',
       from: {},
       to: { circular: true },
     },

@@ -15,8 +15,8 @@ type Db = ReturnType<typeof drizzle<typeof schema>>;
 type TenantScopedTable = PgTable & { organizationId: unknown };
 
 /**
- * I4 layer 3 (spec 08 SS8.1): "a base repository that refuses to build a query without an org
- * scope." This is independent of RLS, not a wrapper around it — RLS catches what the app misses,
+ * A base repository that refuses to build a query without an org scope. This is independent of
+ * RLS, not a wrapper around it — RLS catches what the app misses,
  * this catches what RLS misconfiguration misses (e.g. someone disables FORCE ROW LEVEL SECURITY,
  * or a future migration on a new table forgets the policy). Two mechanisms that both have to
  * fail for a cross-tenant leak to occur.
@@ -38,7 +38,7 @@ export abstract class TenantScopedRepository<T extends TenantScopedTable> {
     if (!organizationId || organizationId.trim().length === 0) {
       throw new Error(
         `${new.target.name} constructed without an organizationId — every tenant-scoped ` +
-          'repository must be scoped to exactly one organization for its lifetime (I4).'
+          'repository must be scoped to exactly one organization for its lifetime.'
       );
     }
     this.db = db;

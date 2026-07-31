@@ -6,7 +6,7 @@ declare const moneyBrand: unique symbol;
 /**
  * Branded so `const m: Money = 5` and `const m: Money = new Decimal(5)` are both compile
  * errors — Money can only be constructed via `money()`. Carries its currency so
- * `addMoney(usd, eur)` is a compile error, not a silent wrong-currency sum (I5).
+ * `addMoney(usd, eur)` is a compile error, not a silent wrong-currency sum.
  */
 export type Money = {
   readonly [moneyBrand]: 'Money';

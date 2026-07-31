@@ -6,7 +6,7 @@ export type Tx = PostgresJsTransaction<typeof schema, ExtractTablesWithRelations
 
 /**
  * Sets the RLS session variable for the current transaction ONLY, via SET LOCAL — never bare
- * SET (spec 08 SS8.1, plan.md Phase 5 verify step). A bare SET persists on the underlying
+ * SET. A bare SET persists on the underlying
  * connection; once that connection returns to the pool, the next unrelated request could
  * inherit the previous tenant's organization_id, which is a cross-tenant leak with a completely
  * different mechanism than a missing WHERE clause.

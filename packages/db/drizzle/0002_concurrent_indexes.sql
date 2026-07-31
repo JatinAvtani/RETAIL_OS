@@ -1,4 +1,4 @@
--- CONCURRENTLY indexes (spec 08 SS8.7): avoids an ACCESS EXCLUSIVE lock on the table while the
+-- CONCURRENTLY indexes: avoids an ACCESS EXCLUSIVE lock on the table while the
 -- index builds. On an empty table (true for this first migration) the lock would be instant
 -- either way, but the pattern is established from the first migration that adds indexes so it is
 -- never "temporarily" skipped and then forgotten once these tables hold real data.

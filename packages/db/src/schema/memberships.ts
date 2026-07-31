@@ -16,9 +16,9 @@ export const membershipRoleEnum = pgEnum('membership_role', [
 ]);
 
 /**
- * Joins User <-> Organization with a Role, plus optional store scoping (spec 07 SS7.2). Modeling
- * role as a column on User would break the accountant persona and multi-org owners on day one —
- * this is why it's a join entity rather than a user attribute.
+ * Joins User <-> Organization with a Role, plus optional store scoping. Modeling role as a column
+ * on User would break the accountant persona and multi-org owners on day one — this is why it's
+ * a join entity rather than a user attribute.
  */
 export const memberships = pgTable('memberships', {
   id: idColumn(),

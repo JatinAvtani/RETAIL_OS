@@ -6,14 +6,14 @@ import type { MassUnit, VolumeUnit } from './unit';
 const massUnit = fc.constantFrom<MassUnit>('mg', 'g', 'kg');
 const volumeUnit = fc.constantFrom<VolumeUnit>('ml', 'l');
 
-// Bounded to a realistic quantity range (matching NUMERIC(19,6), spec 08 SS8.2) via integer
+// Bounded to a realistic quantity range (matching NUMERIC(19,6)) via integer
 // micro-units, not fc.double() directly - see money.property.test.ts for why an unbounded
 // double generator produces values like 5e-324 that no finite-precision decimal arithmetic can
 // round-trip against a value ~280 orders of magnitude larger, which is a property of the
 // generator's range, not a bug in addQuantity/subtractQuantity/convertQuantity.
 const positiveAmount = fc.integer({ min: 0, max: 1_000_000_000_000 }).map((micro) => micro / 1_000_000);
 
-describe('Quantity unit-conversion properties (I6)', () => {
+describe('Quantity unit-conversion properties', () => {
   it('converting mass to another mass unit and back returns the original amount', () => {
     fc.assert(
       fc.property(positiveAmount, massUnit, massUnit, (amount, fromUnit, toUnit) => {

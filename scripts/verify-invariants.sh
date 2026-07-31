@@ -82,13 +82,13 @@ echo "────────────────────────�
 r=$(search '(prompt|system|instruction).*(calculate|compute|sum up|add up|total the)' \
            '' '*.ts')
 report BLOCKING I1 "Prompt may instruct the model to compute" \
-  "LLMs narrate; metric functions compute. Verify no arithmetic is delegated. (spec 10 §10.2)" "$r"
+  "LLMs narrate; metric functions compute. Verify no arithmetic is delegated." "$r"
 
 # ── I9 — AI has no write tools ────────────────────────────────────────────────
 r=$(search '(defineTool|registerTool)\(' 'packages/ai/(evals|__)' '*.ts' \
    | grep -Ei 'insert|update|delete|create|approve|send|post|mutate|write' || true)
 report BLOCKING I9 "AI tool definition contains a mutating verb" \
-  "The AI drafts; humans approve. No tool may write business state. (spec 10 §10.2)" "$r"
+  "The AI drafts; humans approve. No tool may write business state." "$r"
 
 # ── I4 — Tenant isolation ─────────────────────────────────────────────────────
 # Cache calls: check the surrounding 5 lines, since the key is often built just above.
@@ -102,17 +102,17 @@ while IFS= read -r hit; do
   echo "$ctx" | grep -qE 'organization_?[Ii]d|orgId|tenantId|__tenant' || r+="$hit"$'\n'
 done < <(search '(cacheKey|redis\.(get|set|setex)|cache\.(get|set))' '' '*.ts')
 report BLOCKING I4 "Cache key may lack a tenant component" \
-  "A cache hit bypasses RLS entirely — a leak with a different mechanism. (spec 09 §9.8)" "$r"
+  "A cache hit bypasses RLS entirely — a leak with a different mechanism." "$r"
 
 r=$(search "SET +(SESSION +)?app\.current_org_id" '' '' | grep -Ev 'SET +LOCAL' || true)
 report BLOCKING I4 "Tenant context set session-scoped (must be SET LOCAL)" \
-  "On a pooled connection a session variable leaks to the next request — possibly another tenant. (spec 08 §8.1)" "$r"
+  "On a pooled connection a session variable leaks to the next request — possibly another tenant." "$r"
 
 r=$(search '(vectorSearch|embeddingSearch|\.similaritySearch|<=>|<->)' '' '*.ts' \
    | grep -Ev 'organization_?[Ii]d|orgId|tenantId' \
    | grep -Ev ':\s*(//|\*|/\*)' || true)
 report BLOCKING I4 "Vector/semantic query may lack an explicit tenant filter" \
-  "Retrieval leakage is the likeliest serious failure in an AI product. Filter at query level, not only RLS. (spec 10 §10.4)" "$r"
+  "Retrieval leakage is the likeliest serious failure in an AI product. Filter at query level, not only RLS." "$r"
 
 # RLS coverage: any table whose CREATE statement declares organization_id needs a policy.
 # Reads each .sql file, splits on ';', and inspects each CREATE TABLE block.
@@ -132,55 +132,55 @@ while IFS= read -r sqlfile; do
 done < <(if (( DIFF_MODE )); then printf '%s\n' "${FILES[@]}" | grep '\.sql$' || true
          else grep -rl 'CREATE TABLE' . --include='*.sql' "${EXCLUDES[@]}" 2>/dev/null || true; fi)
 report BLOCKING I4 "Tenant table without an RLS policy" \
-  "Every table with organization_id needs ENABLE + FORCE RLS and a policy. (spec 08 §8.1)" "$missing"
+  "Every table with organization_id needs ENABLE + FORCE RLS and a policy." "$missing"
 
 # ── I2 — Metric catalog is the only read path ─────────────────────────────────
 r=$(search '\b(SUM|AVG)\s*\(' 'packages/metrics/|packages/db/|\.sql:' '*.ts' || true)
 report HIGH I2 "Aggregate outside the metric catalog" \
-  "Business numbers come from registered metrics only, or dashboards and the AI diverge. (spec 12 §12.6)" "$r"
+  "Business numbers come from registered metrics only, or dashboards and the AI diverge." "$r"
 
 # ── I3 — Ledger is append-only ────────────────────────────────────────────────
 r=$(search '(UPDATE|DELETE +FROM) +(stock_movements|audit_logs|sales_transactions|outbox_events)' '' '')
 report HIGH I3 "Mutation of an append-only table" \
-  "Corrections are compensating rows, never edits. Destroys auditability and shrinkage math. (spec 08 §8.6)" "$r"
+  "Corrections are compensating rows, never edits. Destroys auditability and shrinkage math." "$r"
 
 # ── I5 — Money/quantity typing ────────────────────────────────────────────────
 r=$(search '[A-Za-z_]*([Pp]rice|[Cc]ost|[Aa]mount|[Tt]otal|[Rr]evenue|[Mm]argin|[Qq]uantity|[Qq]ty)[A-Za-z_]*[[:space:]]*:[[:space:]]*number\b' '' '*.ts')
 report HIGH I5 "Money or quantity typed as \`number\`" \
-  "Float arithmetic on money loses precision silently. Use Money / Quantity<Unit>. (spec 09 §9.3)" "$r"
+  "Float arithmetic on money loses precision silently. Use Money / Quantity<Unit>." "$r"
 
 r=$(search '(price|cost|amount|total|revenue|quantity)[a-z_]*\s+(float|double|real)' '' '*.sql')
 report HIGH I5 "Float column in a monetary/quantity path" \
-  "Money is NUMERIC(19,4); quantity NUMERIC(19,6). (spec 08 §8.2)" "$r"
+  "Money is NUMERIC(19,4); quantity NUMERIC(19,6)." "$r"
 
 # ── I7 — Degrade to unknown, never zero ───────────────────────────────────────
 r=$(search '(\?\?|\|\|)[[:space:]]*0\b|COALESCE\([^,]+,[[:space:]]*0\)' 'format|display|/ui/' '' \
    | grep -Ei 'cost|price|margin|revenue|cogs|consumption|qty|quantity|yield' || true)
 report HIGH I7 "Null-to-zero coercion in a costing path" \
-  "\`?? 0\` looks defensive; in costing it silently inflates margin to 100%. Degrade to unknown. (spec 05 §5.1.3)" "$r"
+  "\`?? 0\` looks defensive; in costing it silently inflates margin to 100%. Degrade to unknown." "$r"
 
 # ── I8 — Transactional outbox ─────────────────────────────────────────────────
 r=$(search '(await[[:space:]]+)?(publish|emit|enqueue)\(' '' '*.ts' \
    | grep -Ev 'outbox|Outbox' || true)
 report HIGH I8 "Event publication not via the outbox" \
-  "Commit succeeds, publish fails, nothing looks broken. Write the outbox row inside the transaction. (spec 09 §9.4)" "$r"
+  "Commit succeeds, publish fails, nothing looks broken. Write the outbox row inside the transaction." "$r"
 
 # ── Advisory — architectural boundaries ───────────────────────────────────────
 r=$(search "from ['\"]@?(anthropic|openai|cohere|@anthropic-ai)" 'packages/ai/' '*.ts')
 report ADVISORY ARCH "Model provider SDK imported outside packages/ai" \
-  "All model calls go through the provider interface, or swapping providers touches business logic. (spec 09 §9.3)" "$r"
+  "All model calls go through the provider interface, or swapping providers touches business logic." "$r"
 
 r=$(search "from ['\"].*packages/(domain|metrics|db)/src/[a-z]" '' '*.ts' | grep -v '/index' || true)
 report ADVISORY ARCH "Import of module internals rather than its public interface" \
-  "Boundaries keep the monolith modular and extractable. (spec 09 §9.1)" "$r"
+  "Boundaries keep the monolith modular and extractable." "$r"
 
 r=$(search '(OFFSET[[:space:]]+\$?[0-9]|\.offset\()' '' '*.ts')
 report ADVISORY PERF "OFFSET pagination" \
-  "OFFSET degrades linearly with tenant data volume. Use keyset pagination. (spec 11 §11.6)" "$r"
+  "OFFSET degrades linearly with tenant data volume. Use keyset pagination." "$r"
 
 r=$(search 'CREATE INDEX' '' '*.sql' | grep -v 'CONCURRENTLY' || true)
 report ADVISORY MIGRATION "CREATE INDEX without CONCURRENTLY" \
-  "Takes ACCESS EXCLUSIVE on a populated table — a direct outage. (spec 08 §8.7)" "$r"
+  "Takes ACCESS EXCLUSIVE on a populated table — a direct outage." "$r"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo

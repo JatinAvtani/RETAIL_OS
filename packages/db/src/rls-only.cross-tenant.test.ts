@@ -5,11 +5,10 @@ import { setUpTwoTenants, type TwoTenantFixture } from './test-support/tenant-fi
 /**
  * Proves RLS alone blocks cross-tenant reads, with NO application-layer WHERE organization_id
  * predicate at all — simulating a hypothetical future repository that forgets to scope its
- * query. This is the automated version of the manual proof done by hand in 001-07/001-08
- * (seed two tenants, connect as retailos_app, query with no predicate, confirm only the current
- * tenant's row comes back). If a future migration disables FORCE ROW LEVEL SECURITY on a tenant
- * table, or a policy is dropped, this test fails — that is the point of it existing independently
- * of the repository-layer test in store-repository.cross-tenant.test.ts.
+ * query (seed two tenants, connect as retailos_app, query with no predicate, confirm only the
+ * current tenant's row comes back). If a future migration disables FORCE ROW LEVEL SECURITY on a
+ * tenant table, or a policy is dropped, this test fails — that is the point of it existing
+ * independently of the repository-layer test in store-repository.cross-tenant.test.ts.
  */
 const APP_CONNECTION_STRING =
   process.env.TEST_DATABASE_URL ??

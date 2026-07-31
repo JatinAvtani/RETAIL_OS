@@ -9,8 +9,7 @@ import { generateId } from '@retailos/domain';
  * Test-only helper: creates two real, isolated tenants (with one store each) directly in the
  * database the tests run against, and tears them down afterward. Deliberately does NOT reuse
  * fixed UUIDs across test files — each call generates fresh IDs, so tests can run concurrently
- * or repeatedly without colliding, unlike the throwaway fixed-UUID scripts used to manually
- * verify 001-07/001-08.
+ * or repeatedly without colliding.
  *
  * Connects as `postgres` (not `retailos_app`) to seed/clean up, since seeding must write across
  * tenants in one call — exactly the kind of operation RLS is designed to prevent for the

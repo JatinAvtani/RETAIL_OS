@@ -1,7 +1,7 @@
--- Row-Level Security (spec 08 SS8.1) on every tenant table, without exception.
+-- Row-Level Security on every tenant table, without exception.
 -- ENABLE + FORCE together: FORCE ensures even the table owner (the migration role) is subject to
 -- the policy, not just other roles — otherwise a superuser or owner silently bypasses RLS, which
--- defeats the entire mechanism (I4).
+-- defeats the entire mechanism.
 --
 -- current_setting() is called WITHOUT missing_ok=true deliberately: if a connection queries a
 -- tenant table without first running SET LOCAL app.current_org_id (see src/tenant-context.ts),
@@ -33,16 +33,16 @@ CREATE POLICY "tenant_isolation" ON "audit_logs"
 -- row-level organization_id predicate — there is nothing here for RLS to filter on.
 --> statement-breakpoint
 
--- Tenant-first composite indexes, and the partial unique indexes, are NOT here — spec 08 SS8.7
--- requires CREATE INDEX CONCURRENTLY to avoid an ACCESS EXCLUSIVE lock on populated tables, and
+-- Tenant-first composite indexes, and the partial unique indexes, are NOT here — CONCURRENTLY
+-- is required to avoid an ACCESS EXCLUSIVE lock on populated tables, and
 -- CONCURRENTLY cannot run inside a transaction block. Drizzle's migrate() wraps every migration
 -- file in one transaction with no per-file opt-out, so these indexes are deliberately split into
 -- 0002_concurrent_indexes.sql and applied by a separate, non-transactional runner
 -- (src/migrate-concurrent.ts) instead of the normal `pnpm db:migrate`. See that file for why.
 --> statement-breakpoint
 
--- audit_logs is append-only (I3): no UPDATE or DELETE, ever, enforced at the role level, not just
--- by application discipline. Corrections are new rows, never edits to history.
+-- audit_logs is append-only: no UPDATE or DELETE, ever, enforced at the role level, not just by
+-- application discipline. Corrections are new rows, never edits to history.
 --
 -- Revoked from PUBLIC *and* retailos_app explicitly: ALTER DEFAULT PRIVILEGES grants UPDATE/DELETE
 -- directly to retailos_app (not via PUBLIC) when the table is created, so revoking only from

@@ -3,8 +3,8 @@ import { organizations } from './organizations';
 import { idColumn, softDelete, timestamps, optimisticVersion } from './columns';
 
 /**
- * A physical location — the operational unit (spec 07 SS7.2). Stock, sales, staff, and counts
- * belong to a store, not directly to an org, because ~35% of the target segment expands to a
+ * A physical location — the operational unit. Stock, sales, staff, and counts belong to a store,
+ * not directly to an org, because a meaningful share of the target segment expands to a
  * second location and retrofitting this dimension later is the single most expensive migration
  * this system could face.
  */
