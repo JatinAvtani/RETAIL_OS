@@ -1,0 +1,24 @@
+{
+  "name": "extraction-spike",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "gen-corpus": "tsx src/gen-corpus.ts",
+    "gen-images": "tsx src/gen-images.ts",
+    "degrade": "tsx src/degrade.ts",
+    "extract": "node --env-file=../../.env.local --import tsx src/run-extraction.ts",
+    "extract:tesseract": "tsx src/run-tesseract.ts",
+    "inject-errors": "tsx src/inject-errors.ts",
+    "score": "tsx src/score.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "playwright": "^1.62.1",
+    "sharp": "^0.35.3",
+    "tsx": "^4.23.1"
+  },
+  "dependencies": {
+    "@google/genai": "^2.15.0"
+  }
+}

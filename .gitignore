@@ -12,3 +12,6 @@ coverage/
 .claude/
 docs/
 CLAUDE.md
+
+spikes/extraction/corpus/
+spikes/extraction/results/
