@@ -3,11 +3,11 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**", ".next/**"]
+      "outputs": ["dist/**", ".next/**", "tsconfig.tsbuildinfo"]
     },
     "typecheck": {
       "dependsOn": ["^build"],
-      "outputs": []
+      "outputs": ["tsconfig.tsbuildinfo"]
     },
     "lint": {
       "outputs": []
