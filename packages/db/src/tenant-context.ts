@@ -1,5 +1,8 @@
-import type { PgTransaction } from 'drizzle-orm/pg-core';
-import { sql } from 'drizzle-orm';
+import type { PostgresJsTransaction } from 'drizzle-orm/postgres-js';
+import { sql, type ExtractTablesWithRelations } from 'drizzle-orm';
+import type * as schema from './schema/index';
+
+export type Tx = PostgresJsTransaction<typeof schema, ExtractTablesWithRelations<typeof schema>>;
 
 /**
  * Sets the RLS session variable for the current transaction ONLY, via SET LOCAL — never bare
@@ -19,7 +22,7 @@ import { sql } from 'drizzle-orm';
  * user-controlled value into a SET statement.
  */
 export const withTenantContext = async <T>(
-  tx: PgTransaction<any, any, any>,
+  tx: Tx,
   organizationId: string,
   fn: () => Promise<T>
 ): Promise<T> => {

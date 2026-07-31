@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/retailos
+
+jobs:
+  # Fast, no-database checks first — fail here before paying for a Postgres service container.
+  static:
+    name: typecheck, lint, module boundaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Module boundaries (dependency-cruiser)
+        run: pnpm boundaries
+
+      - name: Invariant scan (I1-I9)
+        run: pnpm invariants
+
+  # Real Postgres, real migrations, real RLS — the cross-tenant suite proves nothing on a mock.
+  integration:
+    name: unit + integration (real Postgres)
+    runs-on: ubuntu-latest
+    needs: static
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: retailos
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d retailos"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # ubuntu-latest ships postgresql-client preinstalled; verified locally via `docker exec
+      # postgres psql ...` against an isolated container since this Windows dev machine has no
+      # local psql client to test the exact `psql -h localhost` invocation directly.
+      - name: Enable required Postgres extensions
+        run: |
+          PGPASSWORD=postgres psql -h localhost -U postgres -d retailos -f docker/postgres/init/01-extensions.sql
+          PGPASSWORD=postgres psql -h localhost -U postgres -d retailos -f docker/postgres/init/02-app-role.sql
+
+      - name: Run migrations
+        run: pnpm --filter @retailos/db db:migrate
+
+      - name: Run concurrent-index migration
+        run: pnpm --filter @retailos/db db:migrate:concurrent
+
+      - name: Unit + integration tests
+        run: pnpm test

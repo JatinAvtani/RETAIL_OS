@@ -11,6 +11,7 @@
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/migrate.ts",
+    "db:migrate:concurrent": "tsx src/migrate-concurrent.ts",
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {

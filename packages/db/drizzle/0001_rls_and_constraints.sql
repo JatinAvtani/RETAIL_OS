@@ -33,19 +33,12 @@ CREATE POLICY "tenant_isolation" ON "audit_logs"
 -- row-level organization_id predicate — there is nothing here for RLS to filter on.
 --> statement-breakpoint
 
--- Tenant-first composite indexes (spec 08 SS8.2, SS8.6) — RLS adds an organization_id predicate
--- to every query; an index that doesn't lead with it forces a filter after the scan.
-CREATE INDEX IF NOT EXISTS "stores_org_idx" ON "stores" ("organization_id") WHERE "deleted_at" IS NULL;
---> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "memberships_org_idx" ON "memberships" ("organization_id", "user_id") WHERE "deleted_at" IS NULL;
---> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "audit_logs_org_idx" ON "audit_logs" ("organization_id", "occurred_at" DESC);
---> statement-breakpoint
-
--- Partial unique indexes so a deleted membership/store doesn't block reuse (spec 08 SS8.3).
-CREATE UNIQUE INDEX IF NOT EXISTS "memberships_org_user_unique" ON "memberships" ("organization_id", "user_id") WHERE "deleted_at" IS NULL;
---> statement-breakpoint
-CREATE UNIQUE INDEX IF NOT EXISTS "users_email_unique" ON "users" ("email") WHERE "deleted_at" IS NULL;
+-- Tenant-first composite indexes, and the partial unique indexes, are NOT here — spec 08 SS8.7
+-- requires CREATE INDEX CONCURRENTLY to avoid an ACCESS EXCLUSIVE lock on populated tables, and
+-- CONCURRENTLY cannot run inside a transaction block. Drizzle's migrate() wraps every migration
+-- file in one transaction with no per-file opt-out, so these indexes are deliberately split into
+-- 0002_concurrent_indexes.sql and applied by a separate, non-transactional runner
+-- (src/migrate-concurrent.ts) instead of the normal `pnpm db:migrate`. See that file for why.
 --> statement-breakpoint
 
 -- audit_logs is append-only (I3): no UPDATE or DELETE, ever, enforced at the role level, not just

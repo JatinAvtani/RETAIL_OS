@@ -3,7 +3,7 @@ import type { PgTable } from 'drizzle-orm/pg-core';
 import type postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import * as schema from './schema/index';
-import { withTenantContext } from './tenant-context';
+import { withTenantContext, type Tx } from './tenant-context';
 
 type Db = ReturnType<typeof drizzle<typeof schema>>;
 
@@ -63,11 +63,9 @@ export abstract class TenantScopedRepository<T extends TenantScopedTable> {
    * (through withTenantContext) for this repository's organizationId. Every public method a
    * subclass exposes must go through this — it is the only way this class touches the database.
    */
-  protected async runScoped<R>(fn: (db: Db, scopedWhere: (extra?: SQL) => SQL) => Promise<R>): Promise<R> {
+  protected async runScoped<R>(fn: (db: Tx, scopedWhere: (extra?: SQL) => SQL) => Promise<R>): Promise<R> {
     return this.db.transaction((tx) =>
-      withTenantContext(tx as never, this.organizationId, () =>
-        fn(tx as unknown as Db, (extra) => this.scopedWhere(extra))
-      )
+      withTenantContext(tx, this.organizationId, () => fn(tx, (extra) => this.scopedWhere(extra)))
     );
   }
 }
