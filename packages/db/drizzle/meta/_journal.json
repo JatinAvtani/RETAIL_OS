@@ -29,6 +29,13 @@
       "when": 1785512337844,
       "tag": "0004_role_enum_uppercase",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1785600000000,
+      "tag": "0005_login_membership_lookup",
+      "breakpoints": true
     }
   ]
 }

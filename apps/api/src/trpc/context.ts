@@ -1,23 +1,30 @@
 import { createDb } from '@retailos/db';
+import { createRedisClient, SessionStore } from '@retailos/session';
 import type { CreateFastifyContextOptions } from '@trpc/server/adapters/fastify';
 
 /**
- * One connection pool for the process lifetime, not one per request — `createDb` wraps a
- * `postgres` connection pool internally, so calling it per-request would open a new pool on every
- * call instead of reusing connections.
+ * One connection pool / Redis client for the process lifetime, not one per request — both
+ * `createDb` and `createRedisClient` wrap long-lived connections internally.
  */
 const { db } = createDb(
   process.env.DATABASE_URL ?? 'postgresql://retailos_app:retailos_app_local_only@localhost:5432/retailos'
 );
+const redis = createRedisClient(process.env.REDIS_URL ?? 'redis://localhost:6379');
+const sessionStore = new SessionStore(redis);
 
 /**
- * No session/auth data yet — every procedure using this context today is unauthenticated
- * (signup). Session resolution (reading the cookie, loading the SessionRecord from
- * packages/session, building an AuthContext from packages/authz) is added when the first
- * authenticated procedure needs it, not spec'd out speculatively here.
+ * `req`/`res` are exposed so a procedure can read the session cookie or set/clear one — signup and
+ * verify-email don't need this (unauthenticated), login does. There is no `authContext` here: it
+ * isn't resolved eagerly from the cookie on every request, since most procedures today don't need
+ * one and reading + validating a session on every request regardless of whether it's used would
+ * be wasted Redis round trips. A procedure that needs an authenticated caller reads the cookie
+ * itself via `ctx.req`/`ctx.sessionStore`, not through an ambient pre-resolved field.
  */
-export const createContext = (_opts: CreateFastifyContextOptions) => ({
+export const createContext = ({ req, res }: CreateFastifyContextOptions) => ({
   db,
+  sessionStore,
+  req,
+  res,
 });
 
 export type Context = Awaited<ReturnType<typeof createContext>>;

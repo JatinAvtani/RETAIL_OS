@@ -1,6 +1,13 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
-import { checkPasswordPolicy, hashPassword, UserRepository } from '@retailos/db';
+import {
+  checkPasswordPolicy,
+  hashPassword,
+  MembershipRepository,
+  UserRepository,
+  verifyPassword,
+} from '@retailos/db';
+import { permissionsForRole } from '@retailos/authz';
 import { publicProcedure, router } from '../trpc';
 
 const signupInput = z.object({
@@ -11,6 +18,23 @@ const signupInput = z.object({
 const verifyEmailInput = z.object({
   token: z.string(),
 });
+
+const loginInput = z.object({
+  email: z.string().email(),
+  password: z.string(),
+});
+
+const SESSION_COOKIE_NAME = '__Host-session';
+
+/**
+ * A real Argon2id hash of an arbitrary, never-used password — verified against when the email
+ * doesn't match any user, so a nonexistent-email login takes roughly the same time as a
+ * wrong-password one. Without this, the two cases have a measurably different response time (a
+ * real Argon2id verify vs. an immediate return), which is exactly the account-enumeration timing
+ * side-channel spec 14 §14.2 calls out ("timing-equalized responses").
+ */
+const DUMMY_PASSWORD_HASH =
+  '$argon2id$v=19$m=19456,t=2,p=1$bBI2ZkESMxXpGxfUtN7N1Q$vemx3i7Rv+2XEKGnPq7fIhqoVgEhmjs6Jc98p1tg6Kk';
 
 /**
  * Enumeration-safe by design (spec 14 §14.2's "generic errors, no enumeration" intent, applied to
@@ -65,5 +89,70 @@ export const authRouter = router({
     }
 
     return { message: 'Email verified.' };
+  }),
+
+  /**
+   * Generic "invalid credentials" for every failure case (nonexistent email, wrong password,
+   * unverified email, zero/multiple accepted memberships) — spec 14 §14.2 requires this
+   * specifically for login to prevent account enumeration. The one exception is the
+   * unverified-email case, which is safe to be specific about: it only fires AFTER the password
+   * has already been confirmed correct, so it confirms nothing an attacker without the real
+   * password could learn.
+   *
+   * Multi-org users (the accountant/multi-org-owner personas) are not yet supported at login —
+   * there is no org-selection UI or endpoint yet, so a user with more than one accepted membership
+   * gets an explicit, distinct error rather than this endpoint silently picking one for them.
+   */
+  login: publicProcedure.input(loginInput).mutation(async ({ ctx, input }) => {
+    const userRepository = new UserRepository(ctx.db);
+    const user = await userRepository.findByEmail(input.email);
+
+    const passwordIsValid = await verifyPassword(user?.passwordHash ?? DUMMY_PASSWORD_HASH, input.password);
+
+    if (!user || !passwordIsValid) {
+      throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Invalid credentials.' });
+    }
+
+    if (!user.emailVerifiedAt) {
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'Please verify your email before logging in.',
+      });
+    }
+
+    const membershipRepository = new MembershipRepository(ctx.db);
+    const acceptedMemberships = await membershipRepository.findAcceptedMembershipsForLogin(user.id);
+
+    if (acceptedMemberships.length === 0) {
+      throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Invalid credentials.' });
+    }
+    if (acceptedMemberships.length > 1) {
+      throw new TRPCError({
+        code: 'NOT_IMPLEMENTED',
+        message: 'Accounts with multiple organizations are not yet supported at login.',
+      });
+    }
+
+    const membership = acceptedMemberships[0]!;
+    const { token } = await ctx.sessionStore.create(
+      {
+        userId: user.id,
+        organizationId: membership.organizationId,
+        storeIds: membership.storeIds ?? 'ALL',
+        role: membership.role,
+        permissions: [...permissionsForRole(membership.role)],
+      },
+      ctx.req.ip,
+      ctx.req.headers['user-agent'] ?? 'unknown',
+    );
+
+    ctx.res.setCookie(SESSION_COOKIE_NAME, token, {
+      path: '/',
+      httpOnly: true,
+      secure: true,
+      sameSite: 'lax',
+    });
+
+    return { message: 'Logged in.' };
   }),
 });

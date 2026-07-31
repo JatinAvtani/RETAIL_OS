@@ -10,9 +10,12 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@fastify/cookie": "^11.1.2",
+    "@retailos/authz": "workspace:*",
     "@retailos/db": "workspace:*",
     "@retailos/domain": "workspace:*",
     "@retailos/metrics": "workspace:*",
+    "@retailos/session": "workspace:*",
     "@trpc/server": "^11.18.0",
     "fastify": "^5.11.0",
     "zod": "^4.4.3"
