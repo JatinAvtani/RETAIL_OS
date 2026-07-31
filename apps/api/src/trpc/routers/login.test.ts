@@ -264,3 +264,142 @@ describe('auth.login', () => {
     expect(asError(body).message).toBe('Accounts with multiple organizations are not yet supported at login.');
   });
 });
+
+describe('auth.logout', () => {
+  let app: FastifyInstance;
+  const { db } = createDb(
+    process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/retailos'
+  );
+  const redis = createRedisClient(process.env.REDIS_URL ?? 'redis://localhost:6379');
+  const createdUserIds: string[] = [];
+  const createdOrgIds: string[] = [];
+
+  beforeAll(async () => {
+    app = buildServer({ logger: false });
+    await app.ready();
+  });
+
+  afterEach(async () => {
+    for (const userId of createdUserIds) {
+      const tokens = await redis.smembers(`user-sessions:${userId}`);
+      if (tokens.length > 0) {
+        await redis.del(...tokens.map((t) => `session:${t}`), `user-sessions:${userId}`);
+      }
+      await db.delete(memberships).where(eq(memberships.userId, userId));
+      await db.delete(verificationTokens).where(eq(verificationTokens.userId, userId));
+      await db.delete(users).where(eq(users.id, userId));
+    }
+    for (const orgId of createdOrgIds) {
+      await db.delete(organizations).where(eq(organizations.id, orgId));
+    }
+    createdUserIds.length = 0;
+    createdOrgIds.length = 0;
+  });
+
+  afterAll(async () => {
+    await app.close();
+    await redis.quit();
+  });
+
+  const uniqueEmail = (label: string) =>
+    `${label}-${Date.now()}-${Math.random().toString(36).slice(2)}@example.test`;
+
+  const loginRealUser = async (): Promise<{ userId: string; sessionToken: string }> => {
+    const email = uniqueEmail('logout');
+    const password = 'a-genuinely-long-password-123';
+    const userId = generateId();
+    createdUserIds.push(userId);
+    const passwordHash = await hashPassword(password);
+
+    await db.insert(users).values({ id: userId, email, passwordHash, emailVerifiedAt: new Date() });
+
+    const organizationId = generateId();
+    createdOrgIds.push(organizationId);
+    await db.insert(organizations).values({
+      id: organizationId,
+      name: `Test Org ${organizationId.slice(0, 8)}`,
+      slug: `test-org-${organizationId.slice(0, 8)}`,
+      baseCurrency: 'USD',
+    });
+    await db.insert(memberships).values({
+      id: generateId(),
+      organizationId,
+      userId,
+      role: 'STAFF',
+      acceptedAt: new Date(),
+    });
+
+    const { cookies } = await rpc(app, 'auth.login', { email, password });
+    return { userId, sessionToken: cookies['__Host-session']! };
+  };
+
+  it('revokes a real session and clears the cookie', async () => {
+    const { userId, sessionToken } = await loginRealUser();
+
+    expect(await redis.get(`session:${sessionToken}`)).not.toBeNull();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/trpc/auth.logout',
+      payload: {},
+      cookies: { '__Host-session': sessionToken },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(asSuccess(response.json())).toEqual({ message: 'Logged out.' });
+
+    const setCookieHeader = response.headers['set-cookie'];
+    const header = Array.isArray(setCookieHeader) ? setCookieHeader[0] : setCookieHeader;
+    expect(header).toContain('__Host-session=;');
+
+    expect(await redis.get(`session:${sessionToken}`)).toBeNull();
+    expect(await redis.smembers(`user-sessions:${userId}`)).not.toContain(sessionToken);
+  });
+
+  it('is idempotent: logging out twice with the same (now-revoked) cookie still succeeds', async () => {
+    const { sessionToken } = await loginRealUser();
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/trpc/auth.logout',
+      payload: {},
+      cookies: { '__Host-session': sessionToken },
+    });
+    const second = await app.inject({
+      method: 'POST',
+      url: '/trpc/auth.logout',
+      payload: {},
+      cookies: { '__Host-session': sessionToken },
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+  });
+
+  it('succeeds with no session cookie at all — nothing to reveal to a caller who was never logged in', async () => {
+    const response = await app.inject({ method: 'POST', url: '/trpc/auth.logout', payload: {} });
+
+    expect(response.statusCode).toBe(200);
+    expect(asSuccess(response.json())).toEqual({ message: 'Logged out.' });
+  });
+
+  it("does not revoke a different user's session", async () => {
+    const { sessionToken: victimToken } = await loginRealUser();
+
+    await app.inject({
+      method: 'POST',
+      url: '/trpc/auth.logout',
+      payload: {},
+      cookies: { '__Host-session': 'a-token-that-was-never-issued' },
+    });
+
+    expect(await redis.get(`session:${victimToken}`)).not.toBeNull();
+  });
+});
+
+const asSuccess = (body: TrpcSuccess | TrpcError): TrpcSuccess['result']['data'] => {
+  if (!('result' in body)) {
+    throw new Error(`Expected a successful tRPC response, got an error: ${JSON.stringify(body)}`);
+  }
+  return body.result.data;
+};

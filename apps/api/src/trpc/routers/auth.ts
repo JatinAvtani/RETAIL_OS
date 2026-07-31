@@ -155,4 +155,25 @@ export const authRouter = router({
 
     return { message: 'Logged in.' };
   }),
+
+  /**
+   * Idempotent by design: called with no cookie, an already-expired token, or a token that was
+   * never valid, this still succeeds and still clears the cookie — a client doesn't need to know
+   * whether its session was already gone before asking to log out, and there's no information a
+   * distinct "no session" error would give a legitimate caller that's worth the extra branch.
+   */
+  logout: publicProcedure.mutation(async ({ ctx }) => {
+    const token = ctx.req.cookies[SESSION_COOKIE_NAME];
+
+    if (token) {
+      const session = await ctx.sessionStore.get(token);
+      if (session) {
+        await ctx.sessionStore.revoke(token, session.userId);
+      }
+    }
+
+    ctx.res.clearCookie(SESSION_COOKIE_NAME, { path: '/' });
+
+    return { message: 'Logged out.' };
+  }),
 });
