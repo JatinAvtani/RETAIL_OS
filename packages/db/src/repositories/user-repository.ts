@@ -38,6 +38,44 @@ export class UserRepository {
     return rows[0] ?? null;
   }
 
+  async findByGoogleId(googleId: string) {
+    const rows = await this.db
+      .select()
+      .from(users)
+      .where(and(eq(users.googleId, googleId), isNull(users.deletedAt)));
+    return rows[0] ?? null;
+  }
+
+  /**
+   * A brand-new account arriving via Google, not linked to any existing user. Pre-verified: Google
+   * already confirmed this email belongs to whoever is signing in, so there is no separate
+   * verification step to gate on (unlike password signup, where the email is only a claim until
+   * proven). No password_hash — this account can only ever sign in via Google unless it later sets
+   * one through a password-reset-shaped flow, which doesn't exist yet.
+   */
+  async createFromGoogle(email: string, googleId: string, name: string | null) {
+    const userId = generateId();
+    await this.db.insert(users).values({
+      id: userId,
+      email,
+      name,
+      googleId,
+      emailVerifiedAt: new Date(),
+    });
+    return userId;
+  }
+
+  /**
+   * Attaches a Google identity to an existing, already-verified user — the "log in with Google for
+   * the first time on an account you originally created with a password" case. Never called for an
+   * unverified account: that would let anyone claiming a matching Google email silently take it
+   * over before the real owner ever proved they controlled the address (the account-takeover path
+   * plan.md calls out explicitly).
+   */
+  async linkGoogleId(userId: string, googleId: string) {
+    await this.db.update(users).set({ googleId }).where(eq(users.id, userId));
+  }
+
   /**
    * Creates an unverified user and issues an email-verification token in one call, since a
    * signup without a way to verify the email is an incomplete signup. Returns the raw token

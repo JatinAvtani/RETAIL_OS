@@ -36,6 +36,13 @@
       "when": 1785600000000,
       "tag": "0005_login_membership_lookup",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1785700000000,
+      "tag": "0006_users_google_id",
+      "breakpoints": true
     }
   ]
 }

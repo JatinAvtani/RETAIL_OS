@@ -3,6 +3,7 @@ import fastifyCookie from '@fastify/cookie';
 import { fastifyTRPCPlugin } from '@trpc/server/adapters/fastify';
 import { appRouter } from './trpc/router';
 import { createContext } from './trpc/context';
+import { registerGoogleOAuthRoutes } from './oauth/routes';
 
 export const buildServer = (options: { logger?: boolean } = {}) => {
   const app = Fastify({ logger: options.logger ?? true });
@@ -19,6 +20,9 @@ export const buildServer = (options: { logger?: boolean } = {}) => {
       createContext,
     },
   });
+
+  // Plain routes, not tRPC — OAuth's browser-redirect flow has no clean tRPC representation.
+  registerGoogleOAuthRoutes(app);
 
   return app;
 };

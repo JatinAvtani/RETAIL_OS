@@ -1,13 +1,11 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
+import { checkPasswordPolicy, hashPassword, UserRepository, verifyPassword } from '@retailos/db';
 import {
-  checkPasswordPolicy,
-  hashPassword,
-  MembershipRepository,
-  UserRepository,
-  verifyPassword,
-} from '@retailos/db';
-import { permissionsForRole } from '@retailos/authz';
+  establishSessionForUser,
+  SESSION_COOKIE_NAME,
+  setSessionCookie,
+} from '../../auth/establish-session';
 import { publicProcedure, router } from '../trpc';
 
 const signupInput = z.object({
@@ -23,8 +21,6 @@ const loginInput = z.object({
   email: z.string().email(),
   password: z.string(),
 });
-
-const SESSION_COOKIE_NAME = '__Host-session';
 
 /**
  * A real Argon2id hash of an arbitrary, never-used password — verified against when the email
@@ -120,38 +116,25 @@ export const authRouter = router({
       });
     }
 
-    const membershipRepository = new MembershipRepository(ctx.db);
-    const acceptedMemberships = await membershipRepository.findAcceptedMembershipsForLogin(user.id);
-
-    if (acceptedMemberships.length === 0) {
-      throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Invalid credentials.' });
-    }
-    if (acceptedMemberships.length > 1) {
-      throw new TRPCError({
-        code: 'NOT_IMPLEMENTED',
-        message: 'Accounts with multiple organizations are not yet supported at login.',
-      });
-    }
-
-    const membership = acceptedMemberships[0]!;
-    const { token } = await ctx.sessionStore.create(
-      {
-        userId: user.id,
-        organizationId: membership.organizationId,
-        storeIds: membership.storeIds ?? 'ALL',
-        role: membership.role,
-        permissions: [...permissionsForRole(membership.role)],
-      },
+    const result = await establishSessionForUser(
+      ctx.db,
+      ctx.sessionStore,
+      user.id,
       ctx.req.ip,
       ctx.req.headers['user-agent'] ?? 'unknown',
     );
 
-    ctx.res.setCookie(SESSION_COOKIE_NAME, token, {
-      path: '/',
-      httpOnly: true,
-      secure: true,
-      sameSite: 'lax',
-    });
+    if (!result.ok) {
+      if (result.reason === 'multiple_organizations') {
+        throw new TRPCError({
+          code: 'NOT_IMPLEMENTED',
+          message: 'Accounts with multiple organizations are not yet supported at login.',
+        });
+      }
+      throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Invalid credentials.' });
+    }
+
+    setSessionCookie(ctx.res, result.token);
 
     return { message: 'Logged in.' };
   }),

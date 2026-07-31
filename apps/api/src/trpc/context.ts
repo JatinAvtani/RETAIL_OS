@@ -4,13 +4,17 @@ import type { CreateFastifyContextOptions } from '@trpc/server/adapters/fastify'
 
 /**
  * One connection pool / Redis client for the process lifetime, not one per request — both
- * `createDb` and `createRedisClient` wrap long-lived connections internally.
+ * `createDb` and `createRedisClient` wrap long-lived connections internally. Exported (not just
+ * used locally) so `server.ts` can wire the same instances into the plain Fastify OAuth routes,
+ * which sit outside the tRPC context entirely (a browser redirect, not a tRPC procedure call).
  */
-const { db } = createDb(
+export const { db } = createDb(
   process.env.DATABASE_URL ?? 'postgresql://retailos_app:retailos_app_local_only@localhost:5432/retailos'
 );
-const redis = createRedisClient(process.env.REDIS_URL ?? 'redis://localhost:6379');
-const sessionStore = new SessionStore(redis);
+export const redis: ReturnType<typeof createRedisClient> = createRedisClient(
+  process.env.REDIS_URL ?? 'redis://localhost:6379'
+);
+export const sessionStore = new SessionStore(redis);
 
 /**
  * `req`/`res` are exposed so a procedure can read the session cookie or set/clear one — signup and

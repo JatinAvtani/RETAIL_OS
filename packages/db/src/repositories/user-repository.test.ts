@@ -117,4 +117,62 @@ describe('UserRepository', () => {
     expect(await repo.findByEmail(email)).not.toBeNull();
     expect(await repo.findByEmail('definitely-not-registered@example.test')).toBeNull();
   });
+
+  it('createFromGoogle creates a pre-verified user with no password', async () => {
+    const email = `test-${Date.now()}-google@example.test`;
+    const googleId = `google-sub-${Date.now()}`;
+    const userId = await repo.createFromGoogle(email, googleId, 'Real Name');
+    createdUserIds.push(userId);
+
+    const user = await repo.findById(userId);
+    expect(user).not.toBeNull();
+    expect(user?.emailVerifiedAt).not.toBeNull();
+    expect(user?.passwordHash).toBeNull();
+    expect(user?.googleId).toBe(googleId);
+    expect(user?.name).toBe('Real Name');
+  });
+
+  it('findByGoogleId finds a created Google user and returns null for an unrecognized id', async () => {
+    const googleId = `google-sub-${Date.now()}-findby`;
+    const userId = await repo.createFromGoogle(
+      `test-${Date.now()}-findbygoogle@example.test`,
+      googleId,
+      null
+    );
+    createdUserIds.push(userId);
+
+    const found = await repo.findByGoogleId(googleId);
+    expect(found?.id).toBe(userId);
+    expect(await repo.findByGoogleId('this-google-id-was-never-issued')).toBeNull();
+  });
+
+  it('linkGoogleId attaches a Google identity to an existing password account', async () => {
+    const passwordHash = await hashPassword('a-real-password-123');
+    const { userId } = await repo.createWithVerificationToken(
+      `test-${Date.now()}-link@example.test`,
+      passwordHash
+    );
+    createdUserIds.push(userId);
+
+    const googleId = `google-sub-${Date.now()}-link`;
+    await repo.linkGoogleId(userId, googleId);
+
+    const user = await repo.findById(userId);
+    expect(user?.googleId).toBe(googleId);
+    expect(user?.passwordHash).not.toBeNull(); // linking doesn't erase the existing password
+  });
+
+  it('two different users cannot claim the same Google id (unique constraint)', async () => {
+    const googleId = `google-sub-${Date.now()}-dupe`;
+    const firstUserId = await repo.createFromGoogle(
+      `test-${Date.now()}-dupe1@example.test`,
+      googleId,
+      null
+    );
+    createdUserIds.push(firstUserId);
+
+    await expect(
+      repo.createFromGoogle(`test-${Date.now()}-dupe2@example.test`, googleId, null)
+    ).rejects.toThrow();
+  });
 });
