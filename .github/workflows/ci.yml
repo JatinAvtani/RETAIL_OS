@@ -41,8 +41,9 @@ jobs:
         run: pnpm invariants
 
   # Real Postgres, real migrations, real RLS — the cross-tenant suite proves nothing on a mock.
+  # Real Redis too — packages/session's tests exercise actual TTL/atomicity behavior, not a mock.
   integration:
-    name: unit + integration (real Postgres)
+    name: unit + integration (real Postgres, real Redis)
     runs-on: ubuntu-latest
     needs: static
     services:
@@ -56,6 +57,15 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd "pg_isready -U postgres -d retailos"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10

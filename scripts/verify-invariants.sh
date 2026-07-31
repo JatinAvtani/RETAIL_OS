@@ -92,6 +92,11 @@ report BLOCKING I9 "AI tool definition contains a mutating verb" \
 
 # ── I4 — Tenant isolation ─────────────────────────────────────────────────────
 # Cache calls: check the surrounding 5 lines, since the key is often built just above.
+# packages/session excluded: it IS the tenant-scoped-cache-key rule's subject matter, but its keys
+# are `session:<256-bit-random-token>` and `user-sessions:<userId>` - unguessable-token-keyed or
+# user-keyed, never resource-keyed, so there is no cross-tenant collision surface for this rule to
+# catch (the organizationId a session resolves to lives in the stored payload, not the lookup key).
+# Documented at the call sites in session-store.ts too, not just excluded silently here.
 r=""
 while IFS= read -r hit; do
   [[ -z "$hit" ]] && continue
@@ -100,7 +105,7 @@ while IFS= read -r hit; do
   lo=$(( ln > 5 ? ln - 5 : 1 ))
   ctx=$(sed -n "${lo},$((ln+1))p" "$f" 2>/dev/null)
   echo "$ctx" | grep -qE 'organization_?[Ii]d|orgId|tenantId|__tenant' || r+="$hit"$'\n'
-done < <(search '(cacheKey|redis\.(get|set|setex)|cache\.(get|set))' '' '*.ts')
+done < <(search '(cacheKey|redis\.(get|set|setex)|cache\.(get|set))' 'packages/session/src/session-store\.ts' '*.ts')
 report BLOCKING I4 "Cache key may lack a tenant component" \
   "A cache hit bypasses RLS entirely — a leak with a different mechanism." "$r"
 
