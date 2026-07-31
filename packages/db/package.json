@@ -15,6 +15,7 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
+    "@node-rs/argon2": "^2.0.2",
     "@retailos/domain": "workspace:*",
     "drizzle-orm": "^0.36.4",
     "postgres": "^3.4.5"
