@@ -81,6 +81,10 @@ importers:
         version: 5.9.3
 
   packages/domain:
+    dependencies:
+      decimal.js:
+        specifier: ^10.4.3
+        version: 10.6.0
     devDependencies:
       typescript:
         specifier: ^5.7.0
@@ -137,6 +141,9 @@ packages:
     cpu: [arm64]
     os: [win32]
 
+  decimal.js@10.6.0:
+    resolution: {integrity: sha512-YpgQiITW3JXGntzdUmyUR1V812Hn8T1YVXhCu+wO3OpS4eU9l4YdD3qjyiKdV6mvV29zapkMeD390UVEf2lkUg==}
+
   turbo@2.10.7:
     resolution: {integrity: sha512-GHx6WExIFSKNJ5qMlzDpXBXlu9ApxaMjqxAVrCNcW94xf/+uqgIz41SAuRUMbXva2ExNAaY/h8V0q90SWSzmRw==}
     hasBin: true
@@ -165,6 +172,8 @@ snapshots:
 
   '@turbo/windows-arm64@2.10.7':
     optional: true
+
+  decimal.js@10.6.0: {}
 
   turbo@2.10.7:
     optionalDependencies:
