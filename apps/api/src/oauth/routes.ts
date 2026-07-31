@@ -81,6 +81,7 @@ export const registerGoogleOAuthRoutes = (app: FastifyInstance): void => {
         db,
         sessionStore,
         resolved.userId,
+        identity.email,
         request.ip,
         request.headers['user-agent'] ?? 'unknown',
       );

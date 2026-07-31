@@ -1,4 +1,4 @@
-import { createDb, MembershipRepository } from '@retailos/db';
+import { createDb, findPendingInvitationsByEmail, MembershipRepository } from '@retailos/db';
 import { permissionsForRole } from '@retailos/authz';
 import type { SessionStore } from '@retailos/session';
 import type { FastifyReply } from 'fastify';
@@ -28,11 +28,22 @@ export type SessionEstablishmentResult =
  * supported yet (no org-selection UI exists), so exactly one accepted membership is required.
  * Deliberately does not touch the response/cookie — that differs between a tRPC mutation (JSON) and
  * an OAuth callback (a 302 redirect), so callers handle transport themselves.
+ *
+ * `email` is needed for the zero-membership fallback below: a brand-new invitee has no accepted
+ * membership yet (login would normally reject them the same as any zero-membership account), but
+ * they need SOME session to ever call `invitations.accept` in the first place. If exactly one
+ * pending invitation exists for this email, a minimal session scoped to that invitation's org is
+ * issued instead, with an EMPTY permission set — `packages/authz`'s `hasPermission` denies
+ * everything for an empty set by design (fail-closed), so this session can do nothing except what
+ * `invitations.accept` itself allows (which doesn't check permissions), until the invite is
+ * actually accepted and a real membership — and a real, permission-bearing session on the next
+ * login — exists.
  */
 export const establishSessionForUser = async (
   db: Db,
   sessionStore: SessionStore,
   userId: string,
+  email: string,
   ip: string,
   userAgent: string
 ): Promise<SessionEstablishmentResult> => {
@@ -40,6 +51,24 @@ export const establishSessionForUser = async (
   const acceptedMemberships = await membershipRepository.findAcceptedMembershipsForLogin(userId);
 
   if (acceptedMemberships.length === 0) {
+    const pendingInvitations = await findPendingInvitationsByEmail(db, email);
+
+    if (pendingInvitations.length === 1) {
+      const invitation = pendingInvitations[0]!;
+      const { token } = await sessionStore.create(
+        {
+          userId,
+          organizationId: invitation.organizationId,
+          storeIds: [],
+          role: invitation.role,
+          permissions: [],
+        },
+        ip,
+        userAgent
+      );
+      return { ok: true, token };
+    }
+
     return { ok: false, reason: 'no_accepted_membership' };
   }
   if (acceptedMemberships.length > 1) {

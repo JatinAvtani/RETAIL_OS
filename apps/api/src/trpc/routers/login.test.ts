@@ -111,8 +111,8 @@ describe('auth.login', () => {
     createdOrgIds.push(organizationId);
     await db.insert(organizations).values({
       id: organizationId,
-      name: `Test Org ${organizationId.slice(0, 8)}`,
-      slug: `test-org-${organizationId.slice(0, 8)}`,
+      name: `Test Org ${organizationId}`,
+      slug: `test-org-${organizationId}`,
       baseCurrency: 'USD',
     });
     await db.insert(memberships).values({
@@ -246,8 +246,8 @@ describe('auth.login', () => {
     createdOrgIds.push(secondOrgId);
     await db.insert(organizations).values({
       id: secondOrgId,
-      name: `Second Org ${secondOrgId.slice(0, 8)}`,
-      slug: `second-org-${secondOrgId.slice(0, 8)}`,
+      name: `Second Org ${secondOrgId}`,
+      slug: `second-org-${secondOrgId}`,
       baseCurrency: 'USD',
     });
     await db.insert(memberships).values({
@@ -317,8 +317,8 @@ describe('auth.logout', () => {
     createdOrgIds.push(organizationId);
     await db.insert(organizations).values({
       id: organizationId,
-      name: `Test Org ${organizationId.slice(0, 8)}`,
-      slug: `test-org-${organizationId.slice(0, 8)}`,
+      name: `Test Org ${organizationId}`,
+      slug: `test-org-${organizationId}`,
       baseCurrency: 'USD',
     });
     await db.insert(memberships).values({

@@ -120,6 +120,7 @@ export const authRouter = router({
       ctx.db,
       ctx.sessionStore,
       user.id,
+      user.email,
       ctx.req.ip,
       ctx.req.headers['user-agent'] ?? 'unknown',
     );

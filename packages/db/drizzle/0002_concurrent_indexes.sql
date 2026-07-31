@@ -15,3 +15,5 @@ CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "users_email_unique" ON "users" (
 CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "organizations_slug_unique" ON "organizations" ("slug") WHERE "deleted_at" IS NULL;
 CREATE INDEX CONCURRENTLY IF NOT EXISTS "verification_tokens_lookup_idx" ON "verification_tokens" ("token_hash") WHERE "used_at" IS NULL;
 CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "users_google_id_unique" ON "users" ("google_id") WHERE "deleted_at" IS NULL AND "google_id" IS NOT NULL;
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "invitations_org_idx" ON "invitations" ("organization_id") WHERE "accepted_at" IS NULL AND "revoked_at" IS NULL;
+CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "invitations_token_hash_unique" ON "invitations" ("token_hash");

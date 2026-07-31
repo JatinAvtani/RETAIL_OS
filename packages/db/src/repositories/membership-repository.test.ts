@@ -59,7 +59,9 @@ describe('MembershipRepository.findAcceptedMembershipsForLogin', () => {
     await adminDb.insert(organizations).values({
       id: organizationId,
       name: label,
-      slug: `${label.toLowerCase().replace(/\s+/g, '-')}-${organizationId.slice(0, 8)}`,
+      // Full id, not a truncated prefix: UUID v7 is time-ordered, so its leading chars encode the
+      // millisecond timestamp and two ids minted in the same millisecond can share a prefix.
+      slug: `${label.toLowerCase().replace(/\s+/g, '-')}-${organizationId}`,
       baseCurrency: 'USD',
     });
     return organizationId;

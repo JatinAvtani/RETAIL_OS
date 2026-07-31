@@ -42,12 +42,16 @@ export const setUpTwoTenants = async (): Promise<TwoTenantFixture> => {
     const storeId = generateId();
     const userId = generateId();
     const membershipId = generateId();
-    const storeName = `${label} Store ${storeId.slice(0, 8)}`;
+    // Full ids, not truncated prefixes: UUID v7 is time-ordered, so its leading chars encode the
+    // millisecond timestamp — two ids minted in the same millisecond (routine when this function
+    // calls makeTenant twice in a row for tenant A and B) can share a prefix and collide on a
+    // unique constraint (slug) that a truncated id was relied on to make unique.
+    const storeName = `${label} Store ${storeId}`;
 
     await adminDb.insert(organizations).values({
       id: organizationId,
       name: `${label} Org`,
-      slug: `${label.toLowerCase()}-org-${organizationId.slice(0, 8)}`,
+      slug: `${label.toLowerCase()}-org-${organizationId}`,
       baseCurrency: 'USD',
     });
     await adminDb.insert(stores).values({
@@ -58,7 +62,7 @@ export const setUpTwoTenants = async (): Promise<TwoTenantFixture> => {
     });
     await adminDb.insert(users).values({
       id: userId,
-      email: `${label.toLowerCase()}-${userId.slice(0, 8)}@example.test`,
+      email: `${label.toLowerCase()}-${userId}@example.test`,
     });
     await adminDb.insert(memberships).values({
       id: membershipId,
