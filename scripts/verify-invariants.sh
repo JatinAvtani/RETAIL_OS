@@ -38,6 +38,16 @@ fi
 
 # search PATTERN [PATH_FILTER_REGEX] [INCLUDE_GLOB]
 # Returns file:line:match. PATH_FILTER_REGEX (if given) EXCLUDES matching paths.
+#
+# Test files (*.test.ts, *.spec.ts, *.type-test.ts) are ALWAYS excluded from results, via a
+# result-level grep -v rather than relying on grep's own --include/--exclude flags to compose
+# correctly when both are given in the same invocation. They don't: GNU grep's documented
+# behavior is that --include takes precedence for any file matching both, which silently
+# re-admitted every *.test.ts file into every check that also passed an INCLUDE_GLOB (most of
+# them) - discovered when a genuinely test-only Redis call in apps/api/src/trpc/routers/
+# login.test.ts got flagged by the I4 cache-key rule despite *.test.ts being in the global
+# EXCLUDES array the whole time. This was a real, previously-undetected defect in the scanner
+# itself, not a one-off false positive to route around at the call site.
 search() {
   local pattern="$1" exclude_paths="${2:-}" include="${3:-}"
   local out=""
@@ -53,6 +63,7 @@ search() {
     out=$(grep -rnEH "$pattern" . "${EXCLUDES[@]}" "${inc_args[@]}" 2>/dev/null || true)
   fi
 
+  out=$(echo "$out" | grep -Ev '\.(test|spec|type-test)\.ts:' || true)
   [[ -n "$exclude_paths" ]] && out=$(echo "$out" | grep -Ev "$exclude_paths" || true)
   echo "$out"
 }
