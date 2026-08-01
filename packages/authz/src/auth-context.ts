@@ -32,8 +32,12 @@ export const hasAllPermissions = (ctx: AuthContext, permissions: readonly Permis
  * the permission at all — a Manager of Store A has `inventory:write`, but must still fail this
  * check for Store B's resources. `storeIds: 'ALL'` means org-wide access (Owner, or a Manager with
  * no store restriction); an array means the caller is scoped to exactly those stores.
+ *
+ * Takes just the one field it needs, not a full `AuthContext` — callers with only a raw session
+ * record (e.g. `apps/api`'s `protectedProcedure`, which doesn't build a full `AuthContext` since
+ * nothing needed the other fields until this check) can call this without fabricating one.
  */
-export const canAccessStore = (ctx: AuthContext, storeId: string): boolean =>
+export const canAccessStore = (ctx: Pick<AuthContext, 'storeIds'>, storeId: string): boolean =>
   ctx.storeIds === 'ALL' || ctx.storeIds.includes(storeId);
 
 /**

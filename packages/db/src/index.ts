@@ -4,5 +4,6 @@ export * from './auth/verification-token';
 export * from './repositories/user-repository';
 export * from './repositories/membership-repository';
 export * from './repositories/invitation-repository';
+export * from './repositories/store-repository';
 export * from './auth/invitation-token';
 export * from './client';
