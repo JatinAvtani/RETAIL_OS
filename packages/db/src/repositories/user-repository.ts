@@ -7,6 +7,7 @@ import {
   hashToken,
   issueVerificationToken,
   isTokenExpired,
+  passwordResetTokenExpiry,
   verificationTokenExpiry,
   type IssuedToken,
 } from '../auth/verification-token';
@@ -156,6 +157,82 @@ export class UserRepository {
       await tx.update(users).set({ emailVerifiedAt: new Date() }).where(eq(users.id, record.userId));
 
       return { ok: true } as const;
+    });
+  }
+
+  /**
+   * Issues a password-reset token for a user, if one exists with a password to reset (an
+   * OAuth-only account has no `passwordHash` — a reset flow makes no sense for it, since there is
+   * no password to replace, and silently creating one would be a surprising side channel for
+   * setting a password on an account that never had one). Returns `null` for both "no such email"
+   * and "OAuth-only account" so the caller can give an identical, enumeration-safe response either
+   * way — the same posture signup already uses for "email already registered."
+   */
+  async requestPasswordReset(email: string): Promise<IssuedToken | null> {
+    const user = await this.findByEmail(email);
+    if (!user || !user.passwordHash) {
+      return null;
+    }
+
+    const token = issueVerificationToken();
+    await this.db.insert(verificationTokens).values({
+      id: generateId(),
+      userId: user.id,
+      purpose: 'password_reset',
+      tokenHash: token.hash,
+      expiresAt: passwordResetTokenExpiry(),
+    });
+
+    return token;
+  }
+
+  /**
+   * Consumes a raw password-reset token and sets the new password hash — same single-use,
+   * transactional consumption shape as `verifyEmail`, so a token can never be replayed even under
+   * concurrent requests. Returns the userId on success so the caller (the tRPC procedure) can
+   * revoke all of that user's existing sessions — a password reset should kill any session an
+   * attacker already holds, not just block future logins with the old password. This repository
+   * has no dependency on `packages/session`, so it deliberately does not revoke sessions itself.
+   */
+  async resetPassword(
+    rawToken: string,
+    newPasswordHash: string
+  ): Promise<{ ok: true; userId: string } | { ok: false; reason: 'invalid' | 'expired' }> {
+    const tokenHash = hashToken(rawToken);
+
+    return this.db.transaction(async (tx) => {
+      const rows = await tx
+        .select()
+        .from(verificationTokens)
+        .where(
+          and(
+            eq(verificationTokens.tokenHash, tokenHash),
+            eq(verificationTokens.purpose, 'password_reset'),
+            isNull(verificationTokens.usedAt)
+          )
+        );
+      const record = rows[0];
+
+      if (!record) {
+        return { ok: false, reason: 'invalid' } as const;
+      }
+      if (isTokenExpired(record.expiresAt)) {
+        return { ok: false, reason: 'expired' } as const;
+      }
+
+      const consumed = await tx
+        .update(verificationTokens)
+        .set({ usedAt: new Date() })
+        .where(and(eq(verificationTokens.id, record.id), isNull(verificationTokens.usedAt)))
+        .returning({ id: verificationTokens.id });
+
+      if (consumed.length === 0) {
+        return { ok: false, reason: 'invalid' } as const;
+      }
+
+      await tx.update(users).set({ passwordHash: newPasswordHash }).where(eq(users.id, record.userId));
+
+      return { ok: true, userId: record.userId } as const;
     });
   }
 }

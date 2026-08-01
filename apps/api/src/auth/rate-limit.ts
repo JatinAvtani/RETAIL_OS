@@ -17,15 +17,24 @@ type Redis = ReturnType<typeof createRedisClient>;
  */
 const ACCOUNT_LIMIT_OPTIONS = { maxAttempts: 5, windowSeconds: 15 * 60, lockoutSeconds: 15 * 60 };
 const IP_LIMIT_OPTIONS = { maxAttempts: 20, windowSeconds: 15 * 60, lockoutSeconds: 15 * 60 };
+/**
+ * Its own scope, not `auth-ip`: a password-reset request is a much lower-frequency legitimate
+ * action than signup, so it gets its own, tighter budget rather than sharing signup's counter
+ * (which would let a burst of real signups from one IP eat into an unrelated reset budget, or
+ * vice versa).
+ */
+const RESET_REQUEST_IP_LIMIT_OPTIONS = { maxAttempts: 10, windowSeconds: 15 * 60, lockoutSeconds: 15 * 60 };
 
 export type AuthRateLimiters = {
   perAccount: RateLimiter;
   perIp: RateLimiter;
+  passwordResetRequestPerIp: RateLimiter;
 };
 
 export const createAuthRateLimiters = (redis: Redis): AuthRateLimiters => ({
   perAccount: new RateLimiter(redis, 'auth-account', ACCOUNT_LIMIT_OPTIONS),
   perIp: new RateLimiter(redis, 'auth-ip', IP_LIMIT_OPTIONS),
+  passwordResetRequestPerIp: new RateLimiter(redis, 'password-reset-request-ip', RESET_REQUEST_IP_LIMIT_OPTIONS),
 });
 
 /** Emails are matched case-insensitively everywhere else in this codebase (citext); match that here. */
@@ -92,4 +101,25 @@ export const enforceSignupRateLimit = async (limiters: AuthRateLimiters, ip: str
 
 export const recordSignupAttempt = async (limiters: AuthRateLimiters, ip: string): Promise<void> => {
   await limiters.perIp.recordFailure(ip);
+};
+
+/** IP-only, same shape as signup's: a reset request has no reliably-known account until the token exists. */
+export const enforcePasswordResetRequestRateLimit = async (
+  limiters: AuthRateLimiters,
+  ip: string
+): Promise<void> => {
+  const check = await limiters.passwordResetRequestPerIp.check(ip);
+  if (!check.allowed) {
+    throw new TRPCError({
+      code: 'TOO_MANY_REQUESTS',
+      message: 'Too many attempts. Please try again later.',
+    });
+  }
+};
+
+export const recordPasswordResetRequestAttempt = async (
+  limiters: AuthRateLimiters,
+  ip: string
+): Promise<void> => {
+  await limiters.passwordResetRequestPerIp.recordFailure(ip);
 };

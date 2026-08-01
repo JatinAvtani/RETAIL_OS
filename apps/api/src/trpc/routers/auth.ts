@@ -8,8 +8,10 @@ import {
 } from '../../auth/establish-session';
 import {
   enforceAuthRateLimit,
+  enforcePasswordResetRequestRateLimit,
   enforceSignupRateLimit,
   recordAuthFailure,
+  recordPasswordResetRequestAttempt,
   recordSignupAttempt,
   resetAuthRateLimit,
 } from '../../auth/rate-limit';
@@ -27,6 +29,15 @@ const verifyEmailInput = z.object({
 const loginInput = z.object({
   email: z.string().email(),
   password: z.string(),
+});
+
+const requestPasswordResetInput = z.object({
+  email: z.string().email(),
+});
+
+const resetPasswordInput = z.object({
+  token: z.string(),
+  newPassword: z.string(),
 });
 
 /**
@@ -178,5 +189,57 @@ export const authRouter = router({
     ctx.res.clearCookie(SESSION_COOKIE_NAME, { path: '/' });
 
     return { message: 'Logged out.' };
+  }),
+
+  /**
+   * Enumeration-safe like signup: identical response whether the email exists, doesn't exist, or
+   * belongs to an OAuth-only account with no password to reset — a distinct response for any of
+   * those would confirm which emails are registered and how they authenticate. IP-only rate limit,
+   * same shape as signup's: no account is reliably known yet at request time.
+   */
+  requestPasswordReset: publicProcedure.input(requestPasswordResetInput).mutation(async ({ ctx, input }) => {
+    await enforcePasswordResetRequestRateLimit(ctx.authRateLimiters, ctx.req.ip);
+    await recordPasswordResetRequestAttempt(ctx.authRateLimiters, ctx.req.ip);
+
+    const userRepository = new UserRepository(ctx.db);
+    const token = await userRepository.requestPasswordReset(input.email);
+
+    return {
+      message: 'If an account exists for that email, a password reset link has been sent.',
+      // TEMPORARY, same posture as signup's verification token: no email-sending infrastructure
+      // exists yet, so the raw token is returned directly instead of emailed. Undefined (and thus
+      // absent from the response, not null) for a nonexistent/OAuth-only email — never emitted at
+      // all for those cases, matching the message's enumeration-safe framing above.
+      _devOnlyPasswordResetToken: token?.raw,
+    };
+  }),
+
+  /**
+   * Consumes the reset token and revokes every existing session for the account (`revokeAll`,
+   * built since session 3 but unused until now) — a password reset should also kill any session an
+   * attacker already holds, not just block future logins with the old password. Generic errors for
+   * the same reasons as `verifyEmail`: whether a token is invalid vs. expired vs. already used
+   * isn't information a caller needs.
+   */
+  resetPassword: publicProcedure.input(resetPasswordInput).mutation(async ({ ctx, input }) => {
+    const policyViolations = await checkPasswordPolicy(input.newPassword);
+    if (policyViolations.length > 0) {
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: `Password does not meet policy: ${policyViolations.join(', ')}`,
+      });
+    }
+
+    const newPasswordHash = await hashPassword(input.newPassword);
+    const userRepository = new UserRepository(ctx.db);
+    const result = await userRepository.resetPassword(input.token, newPasswordHash);
+
+    if (!result.ok) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'This password reset link is invalid or has expired.' });
+    }
+
+    await ctx.sessionStore.revokeAll(result.userId);
+
+    return { message: 'Password has been reset.' };
   }),
 });
