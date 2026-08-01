@@ -6,6 +6,13 @@ import {
   SESSION_COOKIE_NAME,
   setSessionCookie,
 } from '../../auth/establish-session';
+import {
+  enforceAuthRateLimit,
+  enforceSignupRateLimit,
+  recordAuthFailure,
+  recordSignupAttempt,
+  resetAuthRateLimit,
+} from '../../auth/rate-limit';
 import { publicProcedure, router } from '../trpc';
 
 const signupInput = z.object({
@@ -46,6 +53,12 @@ const DUMMY_PASSWORD_HASH =
  */
 export const authRouter = router({
   signup: publicProcedure.input(signupInput).mutation(async ({ ctx, input }) => {
+    // Signup has no existing account to guess against — the abuse this bounds is mass account
+    // creation from one IP, not per-account brute force. Every call counts, not just failures:
+    // each signup attempt IS the cost being bounded, successful or not.
+    await enforceSignupRateLimit(ctx.authRateLimiters, ctx.req.ip);
+    await recordSignupAttempt(ctx.authRateLimiters, ctx.req.ip);
+
     const policyViolations = await checkPasswordPolicy(input.password);
     if (policyViolations.length > 0) {
       throw new TRPCError({
@@ -100,16 +113,20 @@ export const authRouter = router({
    * gets an explicit, distinct error rather than this endpoint silently picking one for them.
    */
   login: publicProcedure.input(loginInput).mutation(async ({ ctx, input }) => {
+    await enforceAuthRateLimit(ctx.authRateLimiters, input.email, ctx.req.ip);
+
     const userRepository = new UserRepository(ctx.db);
     const user = await userRepository.findByEmail(input.email);
 
     const passwordIsValid = await verifyPassword(user?.passwordHash ?? DUMMY_PASSWORD_HASH, input.password);
 
     if (!user || !passwordIsValid) {
+      await recordAuthFailure(ctx.authRateLimiters, input.email, ctx.req.ip);
       throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Invalid credentials.' });
     }
 
     if (!user.emailVerifiedAt) {
+      await recordAuthFailure(ctx.authRateLimiters, input.email, ctx.req.ip);
       throw new TRPCError({
         code: 'FORBIDDEN',
         message: 'Please verify your email before logging in.',
@@ -132,9 +149,11 @@ export const authRouter = router({
           message: 'Accounts with multiple organizations are not yet supported at login.',
         });
       }
+      await recordAuthFailure(ctx.authRateLimiters, input.email, ctx.req.ip);
       throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Invalid credentials.' });
     }
 
+    await resetAuthRateLimit(ctx.authRateLimiters, input.email, ctx.req.ip);
     setSessionCookie(ctx.res, result.token);
 
     return { message: 'Logged in.' };

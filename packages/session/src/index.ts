@@ -1,3 +1,4 @@
 export * from './session';
 export * from './session-store';
 export * from './redis-client';
+export * from './rate-limiter';

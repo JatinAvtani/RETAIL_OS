@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
-import { db, redis, sessionStore } from '../trpc/context';
+import { authRateLimiters, db, redis, sessionStore } from '../trpc/context';
 import { establishSessionForUser, setSessionCookie } from '../auth/establish-session';
+import { enforceSignupRateLimit, recordSignupAttempt } from '../auth/rate-limit';
 import { OAuthStateStore } from './state-store';
 import { resolveGoogleUser } from './resolve-user';
 import { buildGoogleAuthorizationUrl, exchangeCodeForGoogleIdentity, type GoogleOAuthConfig } from './google';
@@ -47,9 +48,16 @@ export const registerGoogleOAuthRoutes = (app: FastifyInstance): void => {
         return;
       }
 
+      // Per-IP only (spec 14 §14.2): no account identity is known until the code exchange below
+      // succeeds, so there's nothing to key a per-account scope on yet at this point in the flow.
+      // Reuses the signup scope's IP limiter rather than the login one, since this endpoint has the
+      // same "no known account yet" shape signup does, not login's "known account, bad credential" one.
+      await enforceSignupRateLimit(authRateLimiters, request.ip);
+
       const { code, state, error } = request.query;
 
       if (error) {
+        await recordSignupAttempt(authRateLimiters, request.ip);
         // The user declined consent, or Google reported some other error — nothing to recover,
         // just send them back to a plain sign-in page rather than showing a raw query-string error.
         reply.redirect('/login?error=google_oauth_denied');
@@ -57,6 +65,7 @@ export const registerGoogleOAuthRoutes = (app: FastifyInstance): void => {
       }
 
       if (!code || !state || !(await stateStore.consume(state))) {
+        await recordSignupAttempt(authRateLimiters, request.ip);
         // Missing/replayed/expired state — treated identically to a denied consent from the
         // caller's point of view (no information gained either way about which case it was).
         reply.redirect('/login?error=google_oauth_invalid_state');
@@ -67,12 +76,14 @@ export const registerGoogleOAuthRoutes = (app: FastifyInstance): void => {
       try {
         identity = await exchangeCodeForGoogleIdentity(config, code);
       } catch {
+        await recordSignupAttempt(authRateLimiters, request.ip);
         reply.redirect('/login?error=google_oauth_failed');
         return;
       }
 
       const resolved = await resolveGoogleUser(db, identity);
       if (!resolved.ok) {
+        await recordSignupAttempt(authRateLimiters, request.ip);
         reply.redirect('/login?error=verify_password_account_first');
         return;
       }
@@ -87,12 +98,16 @@ export const registerGoogleOAuthRoutes = (app: FastifyInstance): void => {
       );
 
       if (!result.ok) {
+        if (result.reason !== 'multiple_organizations') {
+          await recordSignupAttempt(authRateLimiters, request.ip);
+        }
         const errorCode =
           result.reason === 'multiple_organizations' ? 'multiple_organizations' : 'no_membership';
         reply.redirect(`/login?error=${errorCode}`);
         return;
       }
 
+      await authRateLimiters.perIp.reset(request.ip);
       setSessionCookie(reply, result.token);
       reply.redirect('/');
     }

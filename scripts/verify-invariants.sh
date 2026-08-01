@@ -103,14 +103,16 @@ report BLOCKING I9 "AI tool definition contains a mutating verb" \
 
 # ── I4 — Tenant isolation ─────────────────────────────────────────────────────
 # Cache calls: check the surrounding 5 lines, since the key is often built just above.
-# packages/session/session-store.ts and apps/api/oauth/state-store.ts excluded: both ARE the
-# tenant-scoped-cache-key rule's subject matter, but their keys are `session:<256-bit-random-token>`,
-# `user-sessions:<userId>`, and `oauth-state:<256-bit-random-nonce>` - unguessable-token-keyed,
-# user-keyed, or (for the OAuth state nonce specifically) not tied to any user/org at all, since it
-# exists for the window BEFORE any identity is established. None are resource-keyed, so there is no
-# cross-tenant collision surface for this rule to catch (a session's organizationId lives in its
-# stored payload, not its lookup key; the OAuth state has no organizationId to leak at all).
-# Documented at the call sites themselves too, not just excluded silently here.
+# packages/session/session-store.ts, apps/api/oauth/state-store.ts, and
+# packages/session/rate-limiter.ts excluded: all three ARE the tenant-scoped-cache-key rule's
+# subject matter, but their keys are `session:<256-bit-random-token>`, `user-sessions:<userId>`,
+# `oauth-state:<256-bit-random-nonce>`, and `rate-limit:<scope>:<ip-or-email>` - unguessable-token-
+# keyed, user-keyed, or (for the OAuth state nonce and the rate limiter specifically) not tied to
+# any org at all, since both exist for the window BEFORE any identity/tenant is established. None
+# are resource-keyed, so there is no cross-tenant collision surface for this rule to catch (a
+# session's organizationId lives in its stored payload, not its lookup key; the OAuth state and the
+# rate-limit counter have no organizationId to leak at all - an auth attempt has no tenant yet by
+# definition, that's what's being resolved). Documented at the call sites too, not just here.
 r=""
 while IFS= read -r hit; do
   [[ -z "$hit" ]] && continue
@@ -119,7 +121,7 @@ while IFS= read -r hit; do
   lo=$(( ln > 5 ? ln - 5 : 1 ))
   ctx=$(sed -n "${lo},$((ln+1))p" "$f" 2>/dev/null)
   echo "$ctx" | grep -qE 'organization_?[Ii]d|orgId|tenantId|__tenant' || r+="$hit"$'\n'
-done < <(search '(cacheKey|redis\.(get|set|setex)|cache\.(get|set))' 'packages/session/src/session-store\.ts|apps/api/src/oauth/state-store\.ts' '*.ts')
+done < <(search '(cacheKey|redis\.(get|set|setex)|cache\.(get|set))' 'packages/session/src/session-store\.ts|apps/api/src/oauth/state-store\.ts|packages/session/src/rate-limiter\.ts' '*.ts')
 report BLOCKING I4 "Cache key may lack a tenant component" \
   "A cache hit bypasses RLS entirely — a leak with a different mechanism." "$r"
 

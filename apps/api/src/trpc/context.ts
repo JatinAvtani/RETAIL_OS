@@ -1,6 +1,7 @@
 import { createDb } from '@retailos/db';
 import { createRedisClient, SessionStore } from '@retailos/session';
 import type { CreateFastifyContextOptions } from '@trpc/server/adapters/fastify';
+import { createAuthRateLimiters } from '../auth/rate-limit';
 
 /**
  * One connection pool / Redis client for the process lifetime, not one per request — both
@@ -15,6 +16,7 @@ export const redis: ReturnType<typeof createRedisClient> = createRedisClient(
   process.env.REDIS_URL ?? 'redis://localhost:6379'
 );
 export const sessionStore = new SessionStore(redis);
+export const authRateLimiters = createAuthRateLimiters(redis);
 
 /**
  * `req`/`res` are exposed so a procedure can read the session cookie or set/clear one — signup and
@@ -27,6 +29,7 @@ export const sessionStore = new SessionStore(redis);
 export const createContext = ({ req, res }: CreateFastifyContextOptions) => ({
   db,
   sessionStore,
+  authRateLimiters,
   req,
   res,
 });
