@@ -3,3 +3,4 @@ export * from './unit.js';
 export * from './money.js';
 export * from './quantity.js';
 export * from './id.js';
+export * from './conversion-table.js';

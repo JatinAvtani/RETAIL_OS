@@ -6,3 +6,6 @@ export * from './memberships';
 export * from './audit-logs';
 export * from './verification-tokens';
 export * from './invitations';
+export * from './units';
+export * from './categories';
+export * from './products';

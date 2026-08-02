@@ -50,6 +50,20 @@
       "when": 1785800000000,
       "tag": "0007_invitations",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1785900000000,
+      "tag": "0008_units_and_conversions",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1786000000000,
+      "tag": "0009_categories_products",
+      "breakpoints": true
     }
   ]
 }
