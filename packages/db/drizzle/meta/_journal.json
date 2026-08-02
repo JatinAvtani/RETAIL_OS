@@ -64,6 +64,20 @@
       "when": 1786000000000,
       "tag": "0009_categories_products",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1786100000000,
+      "tag": "0010_suppliers_pricing",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786200000000,
+      "tag": "0011_recipes",
+      "breakpoints": true
     }
   ]
 }

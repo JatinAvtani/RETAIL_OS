@@ -42,3 +42,19 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS "product_variants_product_idx" ON "produ
 -- At most one default variant per product — "every product gets a default variant on creation"
 -- (plan.md) only holds if this is enforced, not just followed by convention in the repository.
 CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "product_variants_one_default_per_product" ON "product_variants" ("product_id") WHERE "is_default" = true AND "deleted_at" IS NULL;
+
+-- Added for 0010_suppliers_pricing.sql (suppliers/supplier_products/supplier_prices).
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "suppliers_org_idx" ON "suppliers" ("organization_id") WHERE "deleted_at" IS NULL;
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "supplier_products_org_idx" ON "supplier_products" ("organization_id");
+-- A given supplier's SKU maps to at most one confirmed product mapping per org — matches spec
+-- 05 SS5.3.2's "confirmed mapping stored permanently," enforced as a real constraint, not convention.
+CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "supplier_products_supplier_sku_unique" ON "supplier_products" ("organization_id", "supplier_id", "supplier_sku");
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "supplier_prices_supplier_product_idx" ON "supplier_prices" ("supplier_product_id");
+
+-- Added for 0011_recipes.sql (recipes/recipe_components/menu_items).
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "recipes_org_idx" ON "recipes" ("organization_id");
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "recipes_group_idx" ON "recipes" ("recipe_group_id");
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "recipe_components_recipe_idx" ON "recipe_components" ("recipe_id");
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "recipe_components_sub_recipe_group_idx" ON "recipe_components" ("sub_recipe_group_id") WHERE "sub_recipe_group_id" IS NOT NULL;
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "menu_items_org_idx" ON "menu_items" ("organization_id");
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "menu_items_recipe_group_idx" ON "menu_items" ("recipe_group_id");

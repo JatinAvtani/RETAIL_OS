@@ -1,0 +1,99 @@
+import { and, desc, eq, isNull } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/postgres-js';
+import * as schema from '../schema/index';
+import { supplierPrices } from '../schema/index';
+import { withTenantContext, type Tx } from '../tenant-context';
+
+type Db = ReturnType<typeof drizzle<typeof schema>>;
+
+/**
+ * Not a TenantScopedRepository: `supplier_prices` has no `organization_id` column of its own (see
+ * schema comment — a price only means anything in the context of its `supplierProductId`). RLS
+ * still enforces tenant isolation via the subquery-based policy on this table; this class just
+ * can't use the base class's direct-column WHERE-ANDing, so `withTenantContext` is called
+ * explicitly instead, same effect via a different mechanism (mirroring what
+ * TenantScopedRepository.runScoped does internally).
+ */
+export class SupplierPriceRepository {
+  private readonly db: Db;
+  private readonly organizationId: string;
+
+  constructor(db: Db, organizationId: string) {
+    if (!organizationId || organizationId.trim().length === 0) {
+      throw new Error('SupplierPriceRepository constructed without an organizationId.');
+    }
+    this.db = db;
+    this.organizationId = organizationId;
+  }
+
+  private async runScoped<R>(fn: (tx: Tx) => Promise<R>): Promise<R> {
+    return this.db.transaction((tx) => withTenantContext(tx, this.organizationId, () => fn(tx)));
+  }
+
+  /** Effective-dated history for a supplier product, newest first. */
+  async findHistory(supplierProductId: string) {
+    return this.runScoped((tx) =>
+      tx
+        .select()
+        .from(supplierPrices)
+        .where(eq(supplierPrices.supplierProductId, supplierProductId))
+        .orderBy(desc(supplierPrices.validFrom))
+    );
+  }
+
+  /** The currently-effective price (validTo IS NULL), or null if none exists. */
+  async findCurrent(supplierProductId: string) {
+    const rows = await this.runScoped((tx) =>
+      tx
+        .select()
+        .from(supplierPrices)
+        .where(and(eq(supplierPrices.supplierProductId, supplierProductId), isNull(supplierPrices.validTo)))
+    );
+    return rows[0] ?? null;
+  }
+
+  /**
+   * A price change is NEVER an UPDATE of the old row's values (I3's append-preferred spirit,
+   * applied to cost history) — it closes the currently-open row (sets validTo = the new row's
+   * validFrom) and inserts a fresh one, both in one transaction. The exclusion constraint
+   * (supplier_prices_no_overlapping_validity) is the backstop that makes a mistake here a hard
+   * database error, not a silently wrong historical cost.
+   */
+  async recordNewPrice(input: {
+    id: string;
+    supplierProductId: string;
+    unitPrice: string;
+    currency: string;
+    validFrom: Date;
+    sourceDocumentId?: string;
+  }) {
+    return this.runScoped(async (tx) => {
+      const current = await tx
+        .select()
+        .from(supplierPrices)
+        .where(and(eq(supplierPrices.supplierProductId, input.supplierProductId), isNull(supplierPrices.validTo)));
+
+      if (current[0]) {
+        await tx.update(supplierPrices).set({ validTo: input.validFrom }).where(eq(supplierPrices.id, current[0].id));
+      }
+
+      const rows = await tx
+        .insert(supplierPrices)
+        .values({
+          id: input.id,
+          supplierProductId: input.supplierProductId,
+          unitPrice: input.unitPrice,
+          currency: input.currency,
+          validFrom: input.validFrom,
+          sourceDocumentId: input.sourceDocumentId ?? null,
+        })
+        .returning();
+
+      const created = rows[0];
+      if (!created) {
+        throw new Error('Supplier price insert returned no row.');
+      }
+      return created;
+    });
+  }
+}
