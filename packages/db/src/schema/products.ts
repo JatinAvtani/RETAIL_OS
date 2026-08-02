@@ -2,6 +2,7 @@ import { boolean, integer, jsonb, pgEnum, pgTable, text, uuid } from 'drizzle-or
 import { organizations } from './organizations';
 import { categories } from './categories';
 import { units } from './units';
+import { storageLocations } from './storage-locations';
 import { idColumn, softDelete, timestamps, optimisticVersion } from './columns';
 
 /**
@@ -25,8 +26,9 @@ export const productTypeEnum = pgEnum('product_type', ['INGREDIENT', 'SELLABLE',
  * recipe consumption units, etc. all convert to/from this one unit via `unit_conversions`, never
  * directly between each other (I6).
  *
- * `storageLocationId` has no FK yet — storage_locations doesn't exist until 004-13 — same
- * expand-contract pattern as unit_conversions.productId did before this migration.
+ * `storageLocationId` now has its real FK to `storage_locations.id` (004-13) — the
+ * expand-contract "contract" step, same shape as `unit_conversions.productId` gaining its FK
+ * once `products` existed.
  */
 export const products = pgTable('products', {
   id: idColumn(),
@@ -42,8 +44,10 @@ export const products = pgTable('products', {
   trackingPolicy: productTrackingPolicyEnum('tracking_policy').notNull().default('NONE'),
   isPerishable: boolean('is_perishable').notNull().default(false),
   defaultShelfLifeDays: integer('default_shelf_life_days'),
-  storageLocationId: uuid('storage_location_id'),
-  imageUrl: text('image_url'),
+  storageLocationId: uuid('storage_location_id').references(() => storageLocations.id),
+  // Stores the object's storage KEY (packages/storage), never a URL — spec 14 §14.5 objects are
+  // never public; every read goes through a short-lived presigned URL generated on demand.
+  imageKey: text('image_key'),
   type: productTypeEnum('type').notNull(),
   ...timestamps,
   ...softDelete,

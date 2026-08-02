@@ -7,6 +7,9 @@ on:
 
 env:
   DATABASE_URL: postgresql://postgres:postgres@localhost:5432/retailos
+  S3_ENDPOINT: http://localhost:9000
+  S3_ACCESS_KEY: minioadmin
+  S3_SECRET_KEY: minioadmin
 
 jobs:
   # Fast, no-database checks first — fail here before paying for a Postgres service container.
@@ -84,6 +87,22 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # packages/storage's tests need a real S3-compatible endpoint, not a mock — a presigned URL
+      # actually accepting a PUT only means something against a real server. Run as a plain `docker
+      # run` step, not a job-level `services:` entry: GitHub Actions service containers cannot
+      # override a job's command (only image/env/ports/options), and the MinIO image's default
+      # command with no arguments just prints help text and exits rather than starting a server —
+      # confirmed locally (`docker run --rm minio/minio:latest` exits 0 immediately, no server).
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio:latest server /data
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:9000/minio/health/live && break
+            sleep 1
+          done
+
       # ubuntu-latest ships postgresql-client preinstalled; verified locally via `docker exec
       # postgres psql ...` against an isolated container since this Windows dev machine has no
       # local psql client to test the exact `psql -h localhost` invocation directly.
@@ -98,5 +117,14 @@ jobs:
       - name: Run concurrent-index migration
         run: pnpm --filter @retailos/db db:migrate:concurrent
 
+      # apps/api's own runtime connection (apps/api/src/trpc/context.ts) must be the RLS-scoped
+      # retailos_app role, never the job-level DATABASE_URL superuser (needed above for migrations
+      # and for cross-tenant tests' own admin/seeding connection, which legitimately needs
+      # superuser to write across two tenants). Without this override, the entire apps/api
+      # cross-tenant suite runs against a connection that bypasses RLS via BYPASSRLS — a real,
+      # previously-undetected gap found during 004-15's development: RLS was never actually
+      # exercised in CI for apps/api, only application-layer checks were.
       - name: Unit + integration tests
+        env:
+          APP_DATABASE_URL: postgresql://retailos_app:retailos_app_local_only@localhost:5432/retailos
         run: pnpm test

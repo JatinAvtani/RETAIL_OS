@@ -58,3 +58,12 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS "recipe_components_recipe_idx" ON "recip
 CREATE INDEX CONCURRENTLY IF NOT EXISTS "recipe_components_sub_recipe_group_idx" ON "recipe_components" ("sub_recipe_group_id") WHERE "sub_recipe_group_id" IS NOT NULL;
 CREATE INDEX CONCURRENTLY IF NOT EXISTS "menu_items_org_idx" ON "menu_items" ("organization_id");
 CREATE INDEX CONCURRENTLY IF NOT EXISTS "menu_items_recipe_group_idx" ON "menu_items" ("recipe_group_id");
+
+-- Added for 0012_storage_locations.sql. Tenant-first per project convention, plus a store-first
+-- index since "all locations for this store" (populating a stocktake's grouping UI) is the
+-- table's actual access pattern, not just "all locations for this org".
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "storage_locations_org_idx" ON "storage_locations" ("organization_id") WHERE "deleted_at" IS NULL;
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "storage_locations_store_idx" ON "storage_locations" ("store_id") WHERE "deleted_at" IS NULL;
+-- A location name is unique within its store (not globally, not per-org) — two different stores
+-- in the same org can each have their own "Walk-in".
+CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "storage_locations_store_name_unique" ON "storage_locations" ("store_id", "name") WHERE "deleted_at" IS NULL;

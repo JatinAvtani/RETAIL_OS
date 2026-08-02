@@ -9,6 +9,7 @@ export * from './repositories/unit-repository';
 export * from './repositories/unit-conversion-repository';
 export * from './repositories/category-repository';
 export * from './repositories/product-repository';
+export * from './repositories/storage-location-repository';
 export * from './repositories/supplier-repository';
 export * from './repositories/supplier-product-repository';
 export * from './repositories/supplier-price-repository';

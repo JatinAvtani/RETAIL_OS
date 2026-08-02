@@ -1,6 +1,18 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { createDb, hashPassword, memberships, organizations, stores, users } from '@retailos/db';
+import {
+  createDb,
+  categories,
+  hashPassword,
+  memberships,
+  organizations,
+  productVariants,
+  products,
+  recipeComponents,
+  recipes,
+  stores,
+  users,
+} from '@retailos/db';
 import { createRedisClient } from '@retailos/session';
 import { generateId } from '@retailos/domain';
 import { buildServer } from '../server';
@@ -47,6 +59,26 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
     }
     for (const orgId of createdOrgIds) {
       await db.delete(stores).where(eq(stores.organizationId, orgId));
+      // products.requestImageUpload/confirmImageUpload/products.create's registry entries seed
+      // real products — products.create specifically calls the REAL create endpoint, which always
+      // inserts a default product_variants row too (ProductRepository.create's own invariant), so
+      // variants must go before products, which must go before categories (products.create's
+      // categoryId FK), which must go before the org, in strict FK order.
+      // recipes.get/cost/create's registry entries seed real recipes+components — components
+      // reference products via a real FK, so they must go before products; recipes reference the
+      // org directly, so they must go before the org too.
+      const orgRecipes = await db.select({ id: recipes.id }).from(recipes).where(eq(recipes.organizationId, orgId));
+      for (const r of orgRecipes) {
+        await db.delete(recipeComponents).where(eq(recipeComponents.recipeId, r.id));
+      }
+      await db.delete(recipes).where(eq(recipes.organizationId, orgId));
+
+      const orgProducts = await db.select({ id: products.id }).from(products).where(eq(products.organizationId, orgId));
+      for (const p of orgProducts) {
+        await db.delete(productVariants).where(eq(productVariants.productId, p.id));
+      }
+      await db.delete(products).where(eq(products.organizationId, orgId));
+      await db.delete(categories).where(eq(categories.organizationId, orgId));
       await db.delete(organizations).where(eq(organizations.id, orgId));
     }
     createdUserIds.length = 0;
@@ -114,7 +146,12 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
           return [];
         }
         const inputSchema = def.inputs?.[0] as { shape?: Record<string, unknown> } | undefined;
-        const looksResourceScoped = Boolean(inputSchema?.shape && 'id' in inputSchema.shape);
+        // Catches 'id' AND any 'xxxId' field (productId, storeId, ...) — a literal-'id'-only check
+        // silently misses an endpoint like requestImageUpload({ productId }), which is exactly as
+        // resource-scoped as one shaped { id }, just with a more specific field name.
+        const looksResourceScoped = Boolean(
+          inputSchema?.shape && Object.keys(inputSchema.shape).some((key) => key === 'id' || key.endsWith('Id'))
+        );
         return looksResourceScoped ? [prefix] : [];
       }
       return Object.entries(node).flatMap(([key, child]) =>
@@ -135,7 +172,7 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
       const tenantB = await setUpRealTenant('Tenant-B');
 
       const resourceId = await procedure.seedResource(db, tenantA.organizationId);
-      const input = procedure.buildInput(resourceId);
+      const input = await procedure.buildInput(resourceId, tenantA.organizationId, db);
 
       const response =
         procedure.type === 'query'
@@ -162,7 +199,7 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
       const tenantA = await setUpRealTenant('Tenant-A');
 
       const resourceId = await procedure.seedResource(db, tenantA.organizationId);
-      const input = procedure.buildInput(resourceId);
+      const input = await procedure.buildInput(resourceId, tenantA.organizationId, db);
 
       const response =
         procedure.type === 'query'

@@ -1,0 +1,11 @@
+-- Hand-written, not `drizzle-kit generate` output — the snapshot chain has been stale since
+-- migration 0005 (see 0008_units_and_conversions.sql's header and project memory for why); every
+-- migration since then is hand-written to avoid `generate` re-emitting unrelated prior tables as
+-- "new" against a stale baseline.
+--
+-- products.image_url (added in 0009, never used by any code until now) is renamed to
+-- products.image_key: it stores an object storage KEY (packages/storage), never a URL — spec
+-- objects are never public, every read goes through a short-lived presigned URL generated on
+-- demand. Renaming, not adding a new column and dropping the old one, since the column has zero
+-- application traffic to migrate.
+ALTER TABLE "products" RENAME COLUMN "image_url" TO "image_key";

@@ -1,22 +1,45 @@
 import { createDb } from '@retailos/db';
 import { createRedisClient, SessionStore } from '@retailos/session';
+import { createStorageClient } from '@retailos/storage';
+import type { S3Client } from '@aws-sdk/client-s3';
 import type { CreateFastifyContextOptions } from '@trpc/server/adapters/fastify';
 import { createAuthRateLimiters } from '../auth/rate-limit';
+
+export const PRODUCT_IMAGES_BUCKET = 'retailos-product-images';
 
 /**
  * One connection pool / Redis client for the process lifetime, not one per request — both
  * `createDb` and `createRedisClient` wrap long-lived connections internally. Exported (not just
  * used locally) so `server.ts` can wire the same instances into the plain Fastify OAuth routes,
  * which sit outside the tRPC context entirely (a browser redirect, not a tRPC procedure call).
+ *
+ * `APP_DATABASE_URL` (falling back to `DATABASE_URL`) — NEVER just `DATABASE_URL` alone — because
+ * this connection is the app's real runtime connection and must always be the RLS-scoped
+ * `retailos_app` role, never a superuser. In local dev/production `DATABASE_URL` naturally IS
+ * that connection, so the fallback is transparent. In CI, `DATABASE_URL` is the migration/seed
+ * admin connection (superuser, needed for DDL and cross-tenant test seeding) — a real,
+ * previously-undetected gap found during 004-15: `ci.yml` set `DATABASE_URL` to the superuser for
+ * the whole job, which meant every `apps/api` test, including the entire cross-tenant suite, ran
+ * against a connection that bypasses RLS (`BYPASSRLS`) — RLS was never actually exercised in CI
+ * for this app, only application-layer checks were. `ci.yml`'s test step now sets
+ * `APP_DATABASE_URL` to the real `retailos_app` role explicitly for this reason.
  */
 export const { db } = createDb(
-  process.env.DATABASE_URL ?? 'postgresql://retailos_app:retailos_app_local_only@localhost:5432/retailos'
+  process.env.APP_DATABASE_URL ??
+    process.env.DATABASE_URL ??
+    'postgresql://retailos_app:retailos_app_local_only@localhost:5432/retailos'
 );
 export const redis: ReturnType<typeof createRedisClient> = createRedisClient(
   process.env.REDIS_URL ?? 'redis://localhost:6379'
 );
 export const sessionStore = new SessionStore(redis);
 export const authRateLimiters = createAuthRateLimiters(redis);
+export const storageClient: S3Client = createStorageClient({
+  endpoint: process.env.S3_ENDPOINT ?? 'http://localhost:9000',
+  accessKeyId: process.env.S3_ACCESS_KEY ?? 'minioadmin',
+  secretAccessKey: process.env.S3_SECRET_KEY ?? 'minioadmin',
+  bucket: PRODUCT_IMAGES_BUCKET,
+});
 
 /**
  * `req`/`res` are exposed so a procedure can read the session cookie or set/clear one — signup and

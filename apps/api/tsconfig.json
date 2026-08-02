@@ -10,6 +10,7 @@
     { "path": "../../packages/db" },
     { "path": "../../packages/metrics" },
     { "path": "../../packages/authz" },
-    { "path": "../../packages/session" }
+    { "path": "../../packages/session" },
+    { "path": "../../packages/storage" }
   ]
 }

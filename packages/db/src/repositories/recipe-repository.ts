@@ -33,6 +33,14 @@ export class RecipeCycleError extends Error {
  * `SupplierPriceRepository` doesn't: `recipe_components` has no `organization_id` of its own, so
  * its RLS policy is subquery-based, and the base class's direct-column WHERE-ANDing has nothing to
  * AND against on that table. `withTenantContext` is called explicitly instead.
+ *
+ * `recipes` itself DOES have a real `organization_id` column, so unlike `recipe_components`,
+ * every query against it explicitly ANDs `organization_id = this.organizationId` too — the same
+ * defense-in-depth `TenantScopedRepository` gives every other tenant table (RLS catches what the
+ * app misses; this catches what RLS misconfiguration misses). A real gap here was found and
+ * closed during 004-15's development: the original methods trusted `withTenantContext`/RLS alone
+ * with no explicit predicate, and a misconfigured DATABASE_URL (pointed at a superuser that
+ * bypasses RLS) during local testing made the leak directly visible.
  */
 export class RecipeRepository {
   private readonly db: Db;
@@ -50,6 +58,16 @@ export class RecipeRepository {
     return this.db.transaction((tx) => withTenantContext(tx, this.organizationId, () => fn(tx)));
   }
 
+  /** Every currently-open recipe version (validTo IS NULL) — one row per recipeGroupId. */
+  async findAllCurrent() {
+    return this.runScoped((tx) =>
+      tx
+        .select()
+        .from(recipes)
+        .where(and(eq(recipes.organizationId, this.organizationId), isNull(recipes.validTo)))
+    );
+  }
+
   /** The version of `recipeGroupId` valid at `asOf`, or null if none exists. */
   async findVersionAsOf(recipeGroupId: string, asOf: Date) {
     const rows = await this.runScoped((tx) =>
@@ -58,6 +76,7 @@ export class RecipeRepository {
         .from(recipes)
         .where(
           and(
+            eq(recipes.organizationId, this.organizationId),
             eq(recipes.recipeGroupId, recipeGroupId),
             lte(recipes.validFrom, asOf),
             or(isNull(recipes.validTo), gt(recipes.validTo, asOf))
@@ -67,8 +86,22 @@ export class RecipeRepository {
     return rows[0] ?? null;
   }
 
+  /**
+   * `recipe_components` has no `organization_id` of its own (subquery RLS through `recipes`), so
+   * this joins through `recipes` explicitly rather than trusting a bare `recipeId` — the same
+   * defense-in-depth reasoning as every other method here, applied to the one query in this class
+   * that reads `recipe_components` directly by a caller-supplied id rather than one this class
+   * just fetched itself.
+   */
   async findComponents(recipeId: string) {
-    return this.runScoped((tx) => tx.select().from(recipeComponents).where(eq(recipeComponents.recipeId, recipeId)));
+    return this.runScoped((tx) =>
+      tx
+        .select({ component: recipeComponents })
+        .from(recipeComponents)
+        .innerJoin(recipes, eq(recipes.id, recipeComponents.recipeId))
+        .where(and(eq(recipes.id, recipeId), eq(recipes.organizationId, this.organizationId)))
+        .then((rows) => rows.map((row) => row.component))
+    );
   }
 
   /**
@@ -105,6 +138,7 @@ export class RecipeRepository {
         .from(recipes)
         .where(
           and(
+            eq(recipes.organizationId, this.organizationId),
             eq(recipes.recipeGroupId, groupId),
             lte(recipes.validFrom, asOf),
             or(isNull(recipes.validTo), gt(recipes.validTo, asOf))
@@ -205,7 +239,13 @@ export class RecipeRepository {
       const current = await tx
         .select()
         .from(recipes)
-        .where(and(eq(recipes.recipeGroupId, input.recipeGroupId), isNull(recipes.validTo)));
+        .where(
+          and(
+            eq(recipes.organizationId, this.organizationId),
+            eq(recipes.recipeGroupId, input.recipeGroupId),
+            isNull(recipes.validTo)
+          )
+        );
       if (current[0]) {
         await tx.update(recipes).set({ validTo: input.validFrom }).where(eq(recipes.id, current[0].id));
       }

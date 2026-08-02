@@ -113,4 +113,51 @@ export class ProductRepository extends TenantScopedRepository<typeof products> {
         .where(and(eq(productVariants.productId, productId), isNull(productVariants.deletedAt)))
     );
   }
+
+  /**
+   * Edits the fields a catalog UI actually lets a user change post-creation — not `baseUnitId`
+   * (retroactively changing the unit every stock/recipe/costing calculation for this product is
+   * expressed in would silently corrupt existing quantities, I6) and not `sku` (the partial unique
+   * index keys off it; changing it live is a separate, deliberate decision this task doesn't need).
+   */
+  async update(
+    productId: string,
+    input: { name?: string; categoryId?: string | null; isPerishable?: boolean; defaultShelfLifeDays?: number | null }
+  ) {
+    const rows = await this.runScoped((db, scopedWhere) =>
+      db
+        .update(products)
+        .set({
+          ...(input.name !== undefined && { name: input.name }),
+          ...(input.categoryId !== undefined && { categoryId: input.categoryId }),
+          ...(input.isPerishable !== undefined && { isPerishable: input.isPerishable }),
+          ...(input.defaultShelfLifeDays !== undefined && { defaultShelfLifeDays: input.defaultShelfLifeDays }),
+        })
+        .where(scopedWhere(and(eq(products.id, productId), isNull(products.deletedAt))))
+        .returning()
+    );
+    return rows[0] ?? null;
+  }
+
+  /**
+   * `imageKey` is an object storage key (packages/storage), never a URL — spec 14 §14.5: objects
+   * are never public, every read goes through a short-lived presigned URL generated on demand.
+   * The caller (apps/api's `confirmImageUpload`) is responsible for verifying the object's actual
+   * bytes before calling this; this method trusts the key it's given the same way every other
+   * write in this class trusts its caller's already-validated input.
+   */
+  async setImageKey(productId: string, imageKey: string) {
+    const rows = await this.runScoped((db, scopedWhere) =>
+      db
+        .update(products)
+        .set({ imageKey })
+        .where(scopedWhere(eq(products.id, productId)))
+        .returning()
+    );
+    const updated = rows[0];
+    if (!updated) {
+      throw new Error(`Cannot set imageKey for product '${productId}' — not found in this organization.`);
+    }
+    return updated;
+  }
 }

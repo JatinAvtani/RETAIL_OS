@@ -8,6 +8,7 @@ export * from './verification-tokens';
 export * from './invitations';
 export * from './units';
 export * from './categories';
+export * from './storage-locations';
 export * from './products';
 export * from './suppliers';
 export * from './supplier-products';

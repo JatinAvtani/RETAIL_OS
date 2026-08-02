@@ -15,7 +15,7 @@ import {
   recordSignupAttempt,
   resetAuthRateLimit,
 } from '../../auth/rate-limit';
-import { publicProcedure, router } from '../trpc';
+import { protectedProcedure, publicProcedure, router } from '../trpc';
 
 const signupInput = z.object({
   email: z.string().email(),
@@ -63,6 +63,19 @@ const DUMMY_PASSWORD_HASH =
  * end-to-end before email delivery exists; a real deployment must never return the token this way.
  */
 export const authRouter = router({
+  /**
+   * The frontend's only way to answer "am I logged in" — the session cookie is httpOnly (opaque
+   * to JS by design, see packages/session), so there is no client-side way to inspect it directly.
+   * A 401 (thrown by protectedProcedure itself when the cookie is missing/invalid) is the "not
+   * logged in" signal; the caller catches that and redirects to /login rather than this endpoint
+   * returning a nullable success shape.
+   */
+  me: protectedProcedure.query(({ ctx }) => ({
+    organizationId: ctx.session.organizationId,
+    role: ctx.session.role,
+    permissions: ctx.session.permissions,
+  })),
+
   signup: publicProcedure.input(signupInput).mutation(async ({ ctx, input }) => {
     // Signup has no existing account to guess against — the abuse this bounds is mass account
     // creation from one IP, not per-account brute force. Every call counts, not just failures:

@@ -5,6 +5,11 @@ packages:
 ignoredBuiltDependencies:
   - '@google/genai'
   - protobufjs
+  # Native binary only needed for next/image's optimization pipeline, which this project doesn't
+  # use yet (no product images are rendered through next/image). Skips a native-module build,
+  # consistent with this project's caution around native deps after argon2 crashed on this
+  # machine — revisit if next/image optimization becomes a real requirement.
+  - sharp
 
 onlyBuiltDependencies:
   - esbuild

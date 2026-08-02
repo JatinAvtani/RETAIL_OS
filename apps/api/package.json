@@ -3,6 +3,8 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
   "scripts": {
     "build": "tsc --build",
     "typecheck": "tsc --noEmit",
@@ -11,16 +13,20 @@
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",
+    "@fastify/cors": "^10.0.1",
     "@retailos/authz": "workspace:*",
     "@retailos/db": "workspace:*",
     "@retailos/domain": "workspace:*",
     "@retailos/metrics": "workspace:*",
     "@retailos/session": "workspace:*",
+    "@retailos/storage": "workspace:*",
     "@trpc/server": "^11.18.0",
+    "decimal.js": "^10.4.3",
     "fastify": "^5.11.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@aws-sdk/client-s3": "^3.700.0",
     "@types/node": "^22.10.2",
     "drizzle-orm": "^0.36.4",
     "tsx": "^4.19.2",
