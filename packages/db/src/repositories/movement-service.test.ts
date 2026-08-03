@@ -412,4 +412,201 @@ describe('MovementService', () => {
       expect(ledgerSum).toBe(12);
     });
   });
+
+  describe('logWaste', () => {
+    it('allocates from the earliest-expiring lot via FEFO, draws it down, and posts a WASTE movement with the given reason code', async () => {
+      const lotRepo = new LotRepository(createScopedDb(client), organizationId);
+      const earlierExpiry = await lotRepo.receive({
+        id: generateId(),
+        storeId,
+        productId,
+        variantId,
+        receivedAt: new Date('2026-08-01T00:00:00Z'),
+        expiryDate: '2026-08-10',
+        initialQuantity: '20.000000',
+        unitCost: '1.5000',
+        currency: 'USD',
+      });
+      await lotRepo.receive({
+        id: generateId(),
+        storeId,
+        productId,
+        variantId,
+        receivedAt: new Date('2026-08-02T00:00:00Z'),
+        expiryDate: '2026-09-01',
+        initialQuantity: '20.000000',
+        unitCost: '3.0000',
+        currency: 'USD',
+      });
+
+      const service = new MovementService(createScopedDb(client), organizationId);
+      const result = await service.logWaste({
+        storeId,
+        productId,
+        variantId,
+        quantity: '5.000000',
+        unit: 'g',
+        reasonCode: 'EXPIRED',
+        occurredAt: new Date(),
+        sourceType: 'manual',
+      });
+
+      expect(result.movements).toHaveLength(1);
+      expect(result.movements[0]?.lotId).toBe(earlierExpiry.id);
+      expect(result.movements[0]?.quantity).toBe('-5.000000');
+      expect(result.movements[0]?.movementType).toBe('WASTE');
+      expect(result.movements[0]?.reasonCode).toBe('EXPIRED');
+      expect(result.totalCost?.amount.toString()).toBe('7.5');
+
+      const updatedLot = await lotRepo.findById(earlierExpiry.id);
+      expect(updatedLot?.remainingQuantity).toBe('15.000000');
+    });
+
+    it('throws InsufficientStockError rather than silently posting a partial waste log', async () => {
+      const lotRepo = new LotRepository(createScopedDb(client), organizationId);
+      await lotRepo.receive({
+        id: generateId(),
+        storeId,
+        productId,
+        variantId,
+        receivedAt: new Date(),
+        initialQuantity: '2.000000',
+        unitCost: '1.0000',
+        currency: 'USD',
+      });
+
+      const service = new MovementService(createScopedDb(client), organizationId);
+      await expect(
+        service.logWaste({
+          storeId,
+          productId,
+          variantId,
+          quantity: '10.000000',
+          unit: 'g',
+          reasonCode: 'DAMAGED',
+          occurredAt: new Date(),
+          sourceType: 'manual',
+        })
+      ).rejects.toThrow(InsufficientStockError);
+
+      const adminDb = drizzle(adminClient, { schema });
+      const movements = await adminDb.select().from(stockMovements).where(eq(stockMovements.organizationId, organizationId));
+      expect(movements).toHaveLength(0);
+    });
+
+    it('a real invalid reason code is rejected by the database itself, not just this method\'s TypeScript type', async () => {
+      const lotRepo = new LotRepository(createScopedDb(client), organizationId);
+      await lotRepo.receive({
+        id: generateId(),
+        storeId,
+        productId,
+        variantId,
+        receivedAt: new Date(),
+        initialQuantity: '10.000000',
+        unitCost: '1.0000',
+        currency: 'USD',
+      });
+
+      const service = new MovementService(createScopedDb(client), organizationId);
+      // Bypasses the TypeScript union deliberately, proving the CHECK constraint is a real
+      // database backstop and not merely a compile-time convenience.
+      await expect(
+        service.logWaste({
+          storeId,
+          productId,
+          variantId,
+          quantity: '1.000000',
+          unit: 'g',
+          reasonCode: 'NOT_A_REAL_REASON' as never,
+          occurredAt: new Date(),
+          sourceType: 'manual',
+        })
+      ).rejects.toThrow();
+    });
+  });
+
+  describe('logWasteFromLot', () => {
+    it('draws the exact specified lot (overriding FEFO order) and posts a WASTE movement at that lot\'s cost', async () => {
+      const lotRepo = new LotRepository(createScopedDb(client), organizationId);
+      const earlierExpiry = await lotRepo.receive({
+        id: generateId(),
+        storeId,
+        productId,
+        variantId,
+        receivedAt: new Date('2026-08-01T00:00:00Z'),
+        expiryDate: '2026-08-10',
+        initialQuantity: '20.000000',
+        unitCost: '1.5000',
+        currency: 'USD',
+      });
+      const laterExpiry = await lotRepo.receive({
+        id: generateId(),
+        storeId,
+        productId,
+        variantId,
+        receivedAt: new Date('2026-08-02T00:00:00Z'),
+        expiryDate: '2026-09-01',
+        initialQuantity: '20.000000',
+        unitCost: '3.0000',
+        currency: 'USD',
+      });
+
+      // FEFO would pick earlierExpiry first — this proves the override deliberately draws the
+      // LATER-expiring lot instead, since a real operator sometimes knows the specific batch
+      // that's actually spoiled.
+      const service = new MovementService(createScopedDb(client), organizationId);
+      const result = await service.logWasteFromLot({
+        storeId,
+        productId,
+        variantId,
+        lotId: laterExpiry.id,
+        quantity: '4.000000',
+        reasonCode: 'QUALITY_REJECT',
+        occurredAt: new Date(),
+        sourceType: 'manual',
+      });
+
+      expect(result.movement.lotId).toBe(laterExpiry.id);
+      expect(result.movement.quantity).toBe('-4.000000');
+      expect(result.movement.movementType).toBe('WASTE');
+      expect(result.movement.reasonCode).toBe('QUALITY_REJECT');
+      expect(result.unitCost.amount.toString()).toBe('3');
+
+      const untouchedLot = await lotRepo.findById(earlierExpiry.id);
+      expect(untouchedLot?.remainingQuantity).toBe('20.000000');
+      const drawnLot = await lotRepo.findById(laterExpiry.id);
+      expect(drawnLot?.remainingQuantity).toBe('16.000000');
+    });
+
+    it('throws rather than drawing more than the specified lot actually has remaining', async () => {
+      const lotRepo = new LotRepository(createScopedDb(client), organizationId);
+      const lot = await lotRepo.receive({
+        id: generateId(),
+        storeId,
+        productId,
+        variantId,
+        receivedAt: new Date(),
+        initialQuantity: '3.000000',
+        unitCost: '1.0000',
+        currency: 'USD',
+      });
+
+      const service = new MovementService(createScopedDb(client), organizationId);
+      await expect(
+        service.logWasteFromLot({
+          storeId,
+          productId,
+          variantId,
+          lotId: lot.id,
+          quantity: '10.000000',
+          reasonCode: 'SPILLAGE',
+          occurredAt: new Date(),
+          sourceType: 'manual',
+        })
+      ).rejects.toThrow(InsufficientStockError);
+
+      const untouchedLot = await lotRepo.findById(lot.id);
+      expect(untouchedLot?.remainingQuantity).toBe('3.000000');
+    });
+  });
 });

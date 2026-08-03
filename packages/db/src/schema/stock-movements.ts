@@ -17,6 +17,27 @@ export const movementTypeEnum = pgEnum('movement_type', [
 ]);
 
 /**
+ * 005-10 (spec 05 §5.1.5): the fixed set a `WASTE` movement's `reason_code` must be one of — "Free
+ * text here would make the whole module worthless" per the spec's own words. Not a `pgEnum` like
+ * `movementTypeEnum` — `reason_code` stays a plain `text` column (it's used generically across
+ * every movement type, not just `WASTE`), enforced instead by a CHECK constraint scoped to `WASTE`
+ * rows only (`stock_movements_waste_reason_code`, migration `0020`). This tuple is the single
+ * source of truth both the constraint's literal values and this codebase's `WasteReasonCode` type
+ * are derived from — keeping them in sync is a discipline, not machine-enforced across the two
+ * layers, so if this list ever changes, the migration must change with it.
+ */
+export const wasteReasonCodeEnum = [
+  'EXPIRED',
+  'DAMAGED',
+  'PREP_ERROR',
+  'CUSTOMER_RETURN',
+  'OVERPRODUCTION',
+  'SPILLAGE',
+  'QUALITY_REJECT',
+  'THEFT_SUSPECTED',
+] as const;
+
+/**
  * The ledger (spec 07 §7.4) — the single factual record of everything that happened to stock.
  * Append-only: no UPDATE/DELETE, ever, enforced by revoking the grant from the application role
  * in the migration (see drizzle/0014_stock_movements.sql), not by application discipline alone.

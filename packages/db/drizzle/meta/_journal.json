@@ -120,6 +120,41 @@
       "when": 1786800000000,
       "tag": "0017_outbox_events",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1786900000000,
+      "tag": "0018_unmapped_sales",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1787000000000,
+      "tag": "0019_stock_par_levels",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1787100000000,
+      "tag": "0020_waste_reason_code",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1787200000000,
+      "tag": "0021_stock_counts",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1787300000000,
+      "tag": "0022_stock_transfers",
+      "breakpoints": true
     }
   ]
 }

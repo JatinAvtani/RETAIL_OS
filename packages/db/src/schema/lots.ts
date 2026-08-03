@@ -5,7 +5,7 @@ import { products, productVariants } from './products';
 import { suppliers } from './suppliers';
 import { idColumn, timestamps } from './columns';
 
-export const lotStatusEnum = pgEnum('lot_status', ['ACTIVE', 'DEPLETED', 'EXPIRED']);
+export const lotStatusEnum = pgEnum('lot_status', ['ACTIVE', 'DEPLETED', 'EXPIRED', 'IN_TRANSIT']);
 
 /**
  * A received batch with expiry and actual cost (spec 07 §7.4) — the workhorse for FEFO
@@ -19,6 +19,13 @@ export const lotStatusEnum = pgEnum('lot_status', ['ACTIVE', 'DEPLETED', 'EXPIRE
  * while stock remained — a distinct terminal state representing loss, not use). Transitioning
  * ACTIVE → EXPIRED is a background job / query-time concern for a later task (005-15's expiry
  * queue), not built here — this schema only defines the state space.
+ *
+ * `IN_TRANSIT` (005-13) added later, matching migration `0022`'s `ALTER TYPE ... ADD VALUE` —
+ * this Drizzle schema declaration must stay in sync with the real Postgres enum by hand for every
+ * value added after the original `CREATE TYPE`, since Drizzle has no migration-time introspection
+ * of enum values; a destination lot created by `TransferService.initiateTransfer` starts here,
+ * deliberately excluded from every FEFO query (which only ever selects `status = 'ACTIVE'`) until
+ * `receiveTransfer` flips it.
  *
  * `remaining_quantity` starts equal to `initial_quantity` and only ever decreases (FEFO
  * allocation, waste, transfers-out) — enforced as a real CHECK constraint

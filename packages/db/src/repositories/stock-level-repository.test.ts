@@ -226,10 +226,12 @@ describe('StockLevelRepository', () => {
 
   it('projection quantity equals the ledger sum across a mixed sequence of movements (the epic acceptance criterion)', async () => {
     const repo = new StockLevelRepository(createScopedDb(client), organizationId);
-    const movements: { movementType: 'RECEIPT' | 'SALE_CONSUMPTION' | 'WASTE' | 'COUNT_ADJUSTMENT'; quantity: string }[] = [
+    const movements: { movementType: 'RECEIPT' | 'SALE_CONSUMPTION' | 'WASTE' | 'COUNT_ADJUSTMENT'; quantity: string; reasonCode?: string }[] = [
       { movementType: 'RECEIPT', quantity: '50.000000' },
       { movementType: 'SALE_CONSUMPTION', quantity: '-12.500000' },
-      { movementType: 'WASTE', quantity: '-2.000000' },
+      // A real WASTE movement requires one of the fixed reason codes (005-10's CHECK constraint,
+      // stock_movements_waste_reason_code) — this test predates that constraint and needs one now.
+      { movementType: 'WASTE', quantity: '-2.000000', reasonCode: 'SPILLAGE' },
       { movementType: 'RECEIPT', quantity: '30.000000' },
       { movementType: 'COUNT_ADJUSTMENT', quantity: '-1.000000' },
     ];
@@ -246,6 +248,7 @@ describe('StockLevelRepository', () => {
         currency: 'USD',
         occurredAt: new Date(),
         sourceType: 'manual',
+        ...(m.reasonCode !== undefined ? { reasonCode: m.reasonCode } : {}),
       });
       lastProjection = result.projection;
     }

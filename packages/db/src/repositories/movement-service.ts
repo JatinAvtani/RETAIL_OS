@@ -1,12 +1,22 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import * as schema from '../schema/index';
-import { auditLogs, lots, outboxEvents, stockLevels, stockMovements } from '../schema/index';
+import { auditLogs, lots, outboxEvents, stockLevels, stockMovements, wasteReasonCodeEnum } from '../schema/index';
 import { withTenantContext, type Tx } from '../tenant-context';
 import { generateId, allocateFefo, quantity, money, type CurrencyCode, type Lot, type Unit } from '@retailos/domain';
 import type { MovementType } from './stock-movement-repository';
 
 type Db = ReturnType<typeof drizzle<typeof schema>>;
+
+/**
+ * 005-10 (spec 05 SS5.1.5): a fixed, groupable set — free text here would make waste analytics
+ * worthless, per the spec's own words. Enforced at the database layer too, not just this type
+ * (`stock_movements_waste_reason_code`, migration 0020, scoped to WASTE rows only via a CHECK
+ * constraint) — proven directly via raw psql before any of this code existed: an invalid or NULL
+ * reason code on a WASTE row is genuinely rejected by Postgres, and a non-WASTE row's free-text
+ * `reason_code` is genuinely unaffected.
+ */
+export type WasteReasonCode = (typeof wasteReasonCodeEnum)[number];
 
 /** Movement types that increase stock on hand — the only ones that ever move `avgUnitCost`. */
 const INCREASING_MOVEMENT_TYPES: ReadonlySet<MovementType> = new Set([
@@ -29,6 +39,19 @@ export class InsufficientStockError extends Error {
   ) {
     super(`FEFO allocation could not fully cover the requested quantity — shortfall of ${shortfall} ${unit}.`);
     this.name = 'InsufficientStockError';
+  }
+}
+
+/**
+ * `lots.unit_cost` is NOT NULL at the database layer, but a stocktake surplus line's `t0UnitCost`
+ * can genuinely be null (I7 — a product `stock_levels` has never priced). Confirmed with the user
+ * rather than guessed: a surplus with no known cost basis blocks approval entirely — never a
+ * silent `$0.00` invented cost, which would misreport the surplus as genuinely free stock.
+ */
+export class UnknownCostSurplusError extends Error {
+  constructor(public readonly productId: string) {
+    super(`A stocktake surplus for product '${productId}' has no known unit cost — cannot create an adjustment lot without guessing a cost (I7).`);
+    this.name = 'UnknownCostSurplusError';
   }
 }
 
@@ -87,7 +110,16 @@ export class MovementService {
     );
   }
 
-  private async postMovementInTx(
+  /**
+   * The shared movement-posting primitive `postMovement`/`consumeFefo`/`logWaste` all use
+   * internally, made PUBLIC (005-13) for the same reason `reconcileCountLineInTx` is public: a
+   * caller that already owns its own transaction (`TransferService`'s initiate/receive/cancel
+   * steps) needs to post a movement as part of that SAME atomic unit, not open a second
+   * transaction. Every other public entry point on this class (`postMovement`, `consumeFefo`,
+   * `logWaste`) opens its own transaction and calls this internally — this is the one seam where
+   * an external caller can join in directly.
+   */
+  async postMovementInTx(
     tx: Tx,
     input: {
       id?: string;
@@ -236,74 +268,313 @@ export class MovementService {
     actorUserId?: string;
   }) {
     return this.db.transaction((tx) =>
+      withTenantContext(tx, this.organizationId, () =>
+        this.allocateAndPostInTx(tx, { ...input, movementType: 'SALE_CONSUMPTION' })
+      )
+    );
+  }
+
+  /**
+   * Waste logging (005-10, spec 05 SS5.1.5): "FEFO default, overridable." This is the FEFO-default
+   * path — identical allocation mechanics to `consumeFefo` (same `allocateFefo` call, same
+   * one-transaction discipline), differing only in `movementType` (`WASTE` instead of
+   * `SALE_CONSUMPTION`) and the mandatory `reasonCode`. Reuses `allocateAndPostInTx` rather than
+   * duplicating the allocation loop — the two flows are the same mechanism applied to a different
+   * business reason, not two different mechanisms.
+   */
+  async logWaste(input: {
+    storeId: string;
+    productId: string;
+    variantId: string;
+    quantity: string;
+    unit: Unit;
+    reasonCode: WasteReasonCode;
+    occurredAt: Date;
+    sourceType: string;
+    sourceId?: string;
+    actorUserId?: string;
+    notes?: string;
+  }) {
+    return this.db.transaction((tx) =>
+      withTenantContext(tx, this.organizationId, () =>
+        this.allocateAndPostInTx(tx, {
+          storeId: input.storeId,
+          productId: input.productId,
+          variantId: input.variantId,
+          requiredQuantity: input.quantity,
+          unit: input.unit,
+          occurredAt: input.occurredAt,
+          sourceType: input.sourceType,
+          movementType: 'WASTE',
+          reasonCode: input.reasonCode,
+          ...(input.sourceId !== undefined ? { sourceId: input.sourceId } : {}),
+          ...(input.actorUserId !== undefined ? { actorUserId: input.actorUserId } : {}),
+          ...(input.notes !== undefined ? { notes: input.notes } : {}),
+        })
+      )
+    );
+  }
+
+  /**
+   * Waste logging's override path (spec 05 SS5.1.5): staff specifies the EXACT lot wasted, rather
+   * than letting FEFO pick — e.g. a specific batch is visibly spoiled while an earlier-expiring
+   * lot of the same product is fine. Draws `quantity` from `lotId` directly (no `allocateFefo`
+   * call at all), posts one `WASTE` movement at that lot's own cost, in one transaction. Throws if
+   * `quantity` exceeds the lot's `remainingQuantity` — this is an explicit, mandatory operator
+   * choice, so silently capping to what's available would misrecord what was actually thrown out.
+   */
+  async logWasteFromLot(input: {
+    storeId: string;
+    productId: string;
+    variantId: string;
+    lotId: string;
+    quantity: string;
+    reasonCode: WasteReasonCode;
+    occurredAt: Date;
+    sourceType: string;
+    sourceId?: string;
+    actorUserId?: string;
+    notes?: string;
+  }) {
+    return this.db.transaction((tx) =>
       withTenantContext(tx, this.organizationId, async () => {
-        const candidateRows = await tx
+        const lotRows = await tx
           .select()
           .from(lots)
-          .where(
-            and(
-              eq(lots.organizationId, this.organizationId),
-              eq(lots.storeId, input.storeId),
-              eq(lots.productId, input.productId),
-              eq(lots.status, 'ACTIVE')
-            )
-          )
-          .orderBy(sql`${lots.expiryDate} ASC NULLS LAST`, lots.receivedAt);
-
-        const candidates: Lot[] = candidateRows
-          .filter((row) => Number(row.remainingQuantity) > 0)
-          .map((row) => ({
-            lotId: row.id,
-            remainingQuantity: quantity(row.remainingQuantity, input.unit),
-            unitCost: money(row.unitCost, row.currency as CurrencyCode),
-            expiryDate: row.expiryDate ? new Date(row.expiryDate) : null,
-            receivedAt: row.receivedAt,
-          }));
-
-        const result = allocateFefo(candidates, quantity(input.requiredQuantity, input.unit));
-
-        if (result.shortfall) {
-          throw new InsufficientStockError(result.shortfall.amount.toString(), result.shortfall.unit);
+          .where(and(eq(lots.id, input.lotId), eq(lots.organizationId, this.organizationId), eq(lots.status, 'ACTIVE')));
+        const lotRow = lotRows[0];
+        if (!lotRow) {
+          throw new Error(`Cannot draw from lot '${input.lotId}' — not found, not ACTIVE, or not in this organization.`);
+        }
+        if (Number(input.quantity) > Number(lotRow.remainingQuantity)) {
+          throw new InsufficientStockError(
+            (Number(input.quantity) - Number(lotRow.remainingQuantity)).toString(),
+            'lot'
+          );
         }
 
-        const movements = [];
-        for (const allocation of result.allocations) {
-          const lotRow = candidateRows.find((row) => row.id === allocation.lotId);
-          if (!lotRow) throw new Error(`Allocated lot '${allocation.lotId}' vanished mid-transaction.`);
-
-          const drawnRows = await tx
-            .update(lots)
-            .set({
-              remainingQuantity: sql`${lots.remainingQuantity} - ${allocation.quantity.amount.toString()}`,
-              status: sql`CASE WHEN ${lots.remainingQuantity} - ${allocation.quantity.amount.toString()} <= 0 THEN 'DEPLETED'::lot_status ELSE ${lots.status} END`,
-            })
-            .where(
-              and(eq(lots.id, allocation.lotId), eq(lots.organizationId, this.organizationId), eq(lots.status, 'ACTIVE'))
-            )
-            .returning();
-          if (!drawnRows[0]) {
-            throw new Error(`Cannot draw from lot '${allocation.lotId}' — not found, not ACTIVE, or not in this organization.`);
-          }
-
-          const posted = await this.postMovementInTx(tx, {
-            storeId: input.storeId,
-            productId: input.productId,
-            variantId: input.variantId,
-            lotId: allocation.lotId,
-            movementType: 'SALE_CONSUMPTION',
-            quantity: `-${allocation.quantity.amount.toString()}`,
-            unitCost: lotRow.unitCost,
-            currency: lotRow.currency,
-            occurredAt: input.occurredAt,
-            sourceType: input.sourceType,
-            ...(input.sourceId !== undefined ? { sourceId: input.sourceId } : {}),
-            ...(input.actorUserId !== undefined ? { actorUserId: input.actorUserId } : {}),
-          });
-          movements.push(posted.movement);
+        const drawnRows = await tx
+          .update(lots)
+          .set({
+            remainingQuantity: sql`${lots.remainingQuantity} - ${input.quantity}`,
+            status: sql`CASE WHEN ${lots.remainingQuantity} - ${input.quantity} <= 0 THEN 'DEPLETED'::lot_status ELSE ${lots.status} END`,
+          })
+          .where(and(eq(lots.id, input.lotId), eq(lots.organizationId, this.organizationId), eq(lots.status, 'ACTIVE')))
+          .returning();
+        if (!drawnRows[0]) {
+          throw new Error(`Cannot draw from lot '${input.lotId}' — not found, not ACTIVE, or not in this organization.`);
         }
 
-        return { movements, allocations: result.allocations, totalCost: result.totalCost };
+        const posted = await this.postMovementInTx(tx, {
+          storeId: input.storeId,
+          productId: input.productId,
+          variantId: input.variantId,
+          lotId: input.lotId,
+          movementType: 'WASTE',
+          quantity: `-${input.quantity}`,
+          unitCost: lotRow.unitCost,
+          currency: lotRow.currency,
+          occurredAt: input.occurredAt,
+          sourceType: input.sourceType,
+          reasonCode: input.reasonCode,
+          ...(input.sourceId !== undefined ? { sourceId: input.sourceId } : {}),
+          ...(input.actorUserId !== undefined ? { actorUserId: input.actorUserId } : {}),
+          ...(input.notes !== undefined ? { notes: input.notes } : {}),
+        });
+
+        return { movement: posted.movement, unitCost: money(lotRow.unitCost, lotRow.currency as CurrencyCode) };
       })
     );
+  }
+
+  /**
+   * The shared FEFO-allocate-then-post-per-lot loop behind both `consumeFefo` and `logWaste` —
+   * extracted so the two flows can't silently drift apart on the allocation mechanics while each
+   * differs only in `movementType`/`reasonCode`. `InsufficientStockError` on a shortfall, exactly
+   * as `consumeFefo` always did — the caller decides how to handle it, this function never
+   * silently posts a partial allocation.
+   */
+  private async allocateAndPostInTx(
+    tx: Tx,
+    input: {
+      storeId: string;
+      productId: string;
+      variantId: string;
+      requiredQuantity: string;
+      unit: Unit;
+      occurredAt: Date;
+      sourceType: string;
+      sourceId?: string;
+      actorUserId?: string;
+      movementType: 'SALE_CONSUMPTION' | 'WASTE' | 'COUNT_ADJUSTMENT';
+      reasonCode?: WasteReasonCode;
+      notes?: string;
+    }
+  ) {
+    const candidateRows = await tx
+      .select()
+      .from(lots)
+      .where(
+        and(
+          eq(lots.organizationId, this.organizationId),
+          eq(lots.storeId, input.storeId),
+          eq(lots.productId, input.productId),
+          eq(lots.status, 'ACTIVE')
+        )
+      )
+      .orderBy(sql`${lots.expiryDate} ASC NULLS LAST`, lots.receivedAt);
+
+    const candidates: Lot[] = candidateRows
+      .filter((row) => Number(row.remainingQuantity) > 0)
+      .map((row) => ({
+        lotId: row.id,
+        remainingQuantity: quantity(row.remainingQuantity, input.unit),
+        unitCost: money(row.unitCost, row.currency as CurrencyCode),
+        expiryDate: row.expiryDate ? new Date(row.expiryDate) : null,
+        receivedAt: row.receivedAt,
+      }));
+
+    const result = allocateFefo(candidates, quantity(input.requiredQuantity, input.unit));
+
+    if (result.shortfall) {
+      throw new InsufficientStockError(result.shortfall.amount.toString(), result.shortfall.unit);
+    }
+
+    const movements = [];
+    for (const allocation of result.allocations) {
+      const lotRow = candidateRows.find((row) => row.id === allocation.lotId);
+      if (!lotRow) throw new Error(`Allocated lot '${allocation.lotId}' vanished mid-transaction.`);
+
+      const drawnRows = await tx
+        .update(lots)
+        .set({
+          remainingQuantity: sql`${lots.remainingQuantity} - ${allocation.quantity.amount.toString()}`,
+          status: sql`CASE WHEN ${lots.remainingQuantity} - ${allocation.quantity.amount.toString()} <= 0 THEN 'DEPLETED'::lot_status ELSE ${lots.status} END`,
+        })
+        .where(
+          and(eq(lots.id, allocation.lotId), eq(lots.organizationId, this.organizationId), eq(lots.status, 'ACTIVE'))
+        )
+        .returning();
+      if (!drawnRows[0]) {
+        throw new Error(`Cannot draw from lot '${allocation.lotId}' — not found, not ACTIVE, or not in this organization.`);
+      }
+
+      const posted = await this.postMovementInTx(tx, {
+        storeId: input.storeId,
+        productId: input.productId,
+        variantId: input.variantId,
+        lotId: allocation.lotId,
+        movementType: input.movementType,
+        quantity: `-${allocation.quantity.amount.toString()}`,
+        unitCost: lotRow.unitCost,
+        currency: lotRow.currency,
+        occurredAt: input.occurredAt,
+        sourceType: input.sourceType,
+        ...(input.reasonCode !== undefined ? { reasonCode: input.reasonCode } : {}),
+        ...(input.notes !== undefined ? { notes: input.notes } : {}),
+        ...(input.sourceId !== undefined ? { sourceId: input.sourceId } : {}),
+        ...(input.actorUserId !== undefined ? { actorUserId: input.actorUserId } : {}),
+      });
+      movements.push(posted.movement);
+    }
+
+    return { movements, allocations: result.allocations, totalCost: result.totalCost };
+  }
+
+  /**
+   * 005-11's stocktake-approval lot reconciliation, called from `StockCountService.approveCount`
+   * with an EXTERNAL transaction (its own, already holding the count/line status writes) — unlike
+   * every other public method on this class, which each open their own transaction. This is the
+   * one deliberate exception: a stocktake approval needs the count status transition AND the
+   * lot/ledger writes to commit as one atomic unit, and `StockCountService` already owns that
+   * transaction, so this method must run inside it rather than opening a second one (the exact
+   * failure mode I8/atomicity discipline exists to prevent, documented on this class's other
+   * methods).
+   *
+   * A negative `varianceQuantity` (counted < theoretical, a shortfall) draws down existing ACTIVE
+   * lots FEFO-style — identical mechanics to `consumeFefo`/`logWaste`'s `allocateFefo` call, valued
+   * at each real lot's own cost. A positive `varianceQuantity` (counted > theoretical, a surplus)
+   * has no originating lot — a "found" surplus was never purchased, so a NEW adjustment lot is
+   * created at the line's frozen `t0UnitCost` (the best available cost basis; I7 — if that's also
+   * unknown, the lot and movement both carry a null cost rather than guessing) before posting the
+   * `COUNT_ADJUSTMENT` movement against it.
+   */
+  async reconcileCountLineInTx(
+    tx: Tx,
+    input: {
+      storeId: string;
+      productId: string;
+      variantId: string;
+      /** The product's real base unit (I6) — `stock_levels`/`lots` quantities are already stored in this unit; resolved by the caller, never assumed. */
+      unit: Unit;
+      varianceQuantity: string;
+      unitCost: string | null;
+      currency: CurrencyCode;
+      occurredAt: Date;
+      sourceType: string;
+      sourceId?: string;
+      actorUserId?: string;
+    }
+  ) {
+    const variance = Number(input.varianceQuantity);
+    if (variance === 0) return null;
+
+    if (variance < 0) {
+      // Shortfall: draw down existing lots via the exact same FEFO mechanics consumeFefo/logWaste
+      // use, at each lot's own real cost — a stocktake shortfall is real stock that's gone, same
+      // as a sale or waste event, just discovered by counting rather than by a transaction.
+      return this.allocateAndPostInTx(tx, {
+        storeId: input.storeId,
+        productId: input.productId,
+        variantId: input.variantId,
+        requiredQuantity: (-variance).toString(),
+        unit: input.unit,
+        occurredAt: input.occurredAt,
+        sourceType: input.sourceType,
+        movementType: 'COUNT_ADJUSTMENT',
+        ...(input.sourceId !== undefined ? { sourceId: input.sourceId } : {}),
+        ...(input.actorUserId !== undefined ? { actorUserId: input.actorUserId } : {}),
+      });
+    }
+
+    // Surplus: no existing lot to draw from — create one new adjustment lot at the frozen
+    // t0UnitCost. lots.unit_cost is NOT NULL at the database layer, and a guessed cost would
+    // misreport a surplus as genuinely free stock (I7) — confirmed with the user: an unknown cost
+    // blocks approval entirely rather than defaulting to $0.00.
+    if (input.unitCost === null) {
+      throw new UnknownCostSurplusError(input.productId);
+    }
+
+    const newLotId = generateId();
+    await tx.insert(lots).values({
+      id: newLotId,
+      organizationId: this.organizationId,
+      storeId: input.storeId,
+      productId: input.productId,
+      variantId: input.variantId,
+      receivedAt: input.occurredAt,
+      initialQuantity: variance.toString(),
+      remainingQuantity: variance.toString(),
+      unitCost: input.unitCost,
+      currency: input.currency,
+      status: 'ACTIVE',
+    });
+
+    const posted = await this.postMovementInTx(tx, {
+      storeId: input.storeId,
+      productId: input.productId,
+      variantId: input.variantId,
+      lotId: newLotId,
+      movementType: 'COUNT_ADJUSTMENT',
+      quantity: variance.toString(),
+      unitCost: input.unitCost,
+      currency: input.currency,
+      occurredAt: input.occurredAt,
+      sourceType: input.sourceType,
+      ...(input.sourceId !== undefined ? { sourceId: input.sourceId } : {}),
+      ...(input.actorUserId !== undefined ? { actorUserId: input.actorUserId } : {}),
+    });
+
+    return { movements: [posted.movement], lotId: newLotId };
   }
 }
