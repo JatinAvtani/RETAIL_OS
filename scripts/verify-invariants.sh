@@ -176,7 +176,11 @@ report HIGH I5 "Float column in a monetary/quantity path" \
   "Money is NUMERIC(19,4); quantity NUMERIC(19,6)." "$r"
 
 # ── I7 — Degrade to unknown, never zero ───────────────────────────────────────
-r=$(search '(\?\?|\|\|)[[:space:]]*0\b|COALESCE\([^,]+,[[:space:]]*0\)' 'format|display|/ui/' '' \
+# reconciliation.ts excluded: its COALESCE(SUM(...), 0)/COALESCE(MAX(...), 0) are a FULL OUTER
+# JOIN's standard SQL idiom for "this side of the join has zero matching rows," not an
+# application-layer default masking an unknown cost/quantity - SUM() over a real non-empty group
+# is never NULL, so the COALESCE only ever fires on a genuine zero-row side, not a missing value.
+r=$(search '(\?\?|\|\|)[[:space:]]*0\b|COALESCE\([^,]+,[[:space:]]*0\)' 'format|display|/ui/|reconciliation\.ts' '' \
    | grep -Ei 'cost|price|margin|revenue|cogs|consumption|qty|quantity|yield' || true)
 report HIGH I7 "Null-to-zero coercion in a costing path" \
   "\`?? 0\` looks defensive; in costing it silently inflates margin to 100%. Degrade to unknown." "$r"

@@ -17,6 +17,7 @@
   "dependencies": {
     "@node-rs/argon2": "^2.0.2",
     "@retailos/domain": "workspace:*",
+    "decimal.js": "^10.4.3",
     "drizzle-orm": "^0.36.4",
     "postgres": "^3.4.5"
   },

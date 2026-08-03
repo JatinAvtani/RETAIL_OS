@@ -16,3 +16,5 @@ export * from './supplier-prices';
 export * from './recipes';
 export * from './stock-movements';
 export * from './lots';
+export * from './stock-levels';
+export * from './outbox-events';

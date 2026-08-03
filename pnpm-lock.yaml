@@ -175,6 +175,9 @@ importers:
       '@retailos/domain':
         specifier: workspace:*
         version: link:../domain
+      decimal.js:
+        specifier: ^10.4.3
+        version: 10.6.0
       drizzle-orm:
         specifier: ^0.36.4
         version: 0.36.4(@types/react@19.2.18)(postgres@3.4.9)(react@19.2.8)
