@@ -67,3 +67,18 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS "storage_locations_store_idx" ON "storag
 -- A location name is unique within its store (not globally, not per-org) — two different stores
 -- in the same org can each have their own "Walk-in".
 CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "storage_locations_store_name_unique" ON "storage_locations" ("store_id", "name") WHERE "deleted_at" IS NULL;
+
+-- stock_movements' indexes are NOT here — Postgres refuses CREATE INDEX CONCURRENTLY directly on
+-- a partitioned parent table (no way to build one global concurrent index across partitions).
+-- They're created transactionally on the parent in 0014_stock_movements.sql instead, which
+-- Postgres propagates as a real (non-concurrent) index build on each existing partition — safe
+-- here since every partition is empty at migration time.
+
+-- Added for 0015_lots.sql. The workhorse index (plan.md, spec 08 SS8.6): serves BOTH FEFO
+-- allocation (earliest expiry_date first, among ACTIVE lots with stock left) and the expiry
+-- queue (005-15). Partial on the exact predicate every real query against this table filters by —
+-- a lot that's DEPLETED or EXPIRED, or has zero remaining_quantity, is never a FEFO candidate.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "lots_fefo_idx" ON "lots" ("organization_id", "store_id", "product_id", "expiry_date") WHERE "status" = 'ACTIVE' AND "remaining_quantity" > 0;
+-- Tenant-first lookup for anything not going through the FEFO path directly (e.g. a lot detail
+-- view, or the repository's own findById).
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "lots_org_idx" ON "lots" ("organization_id");

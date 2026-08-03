@@ -14,3 +14,5 @@ export * from './suppliers';
 export * from './supplier-products';
 export * from './supplier-prices';
 export * from './recipes';
+export * from './stock-movements';
+export * from './lots';
