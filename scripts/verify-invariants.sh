@@ -180,7 +180,13 @@ report HIGH I5 "Float column in a monetary/quantity path" \
 # JOIN's standard SQL idiom for "this side of the join has zero matching rows," not an
 # application-layer default masking an unknown cost/quantity - SUM() over a real non-empty group
 # is never NULL, so the COALESCE only ever fires on a genuine zero-row side, not a missing value.
-r=$(search '(\?\?|\|\|)[[:space:]]*0\b|COALESCE\([^,]+,[[:space:]]*0\)' 'format|display|/ui/|reconciliation\.ts' '' \
+# expiry-queue.ts excluded: its COALESCE(c.avg_daily_consumption, 0) is the same LEFT JOIN idiom -
+# a lot with zero SALE_CONSUMPTION rows in the trailing-30-day window genuinely has no matching
+# row on the join's other side. The zero is never fed into value_at_risk (computed straight from
+# lots.remaining_quantity * lots.unit_cost, untouched by this COALESCE) - it only decides at-risk
+# classification, and per I7 a zero-consumption lot is treated as AT RISK (consumption_cover_days
+# stays NULL, never a fabricated number), the opposite of the "looks safe" failure this check guards.
+r=$(search '(\?\?|\|\|)[[:space:]]*0\b|COALESCE\([^,]+,[[:space:]]*0\)' 'format|display|/ui/|reconciliation\.ts|expiry-queue\.ts' '' \
    | grep -Ei 'cost|price|margin|revenue|cogs|consumption|qty|quantity|yield' || true)
 report HIGH I7 "Null-to-zero coercion in a costing path" \
   "\`?? 0\` looks defensive; in costing it silently inflates margin to 100%. Degrade to unknown." "$r"

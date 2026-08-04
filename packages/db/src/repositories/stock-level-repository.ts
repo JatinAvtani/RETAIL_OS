@@ -140,4 +140,11 @@ export class StockLevelRepository extends TenantScopedRepository<typeof stockLev
     );
     return rows[0] ?? null;
   }
+
+  /** Every projection row for one store — the "what's on hand right now" overview a stock-levels page reads from directly, never summing the ledger itself (the projection exists so callers don't have to). */
+  async findAllForStore(storeId: string) {
+    return this.runScoped((db, scopedWhere) =>
+      db.select().from(stockLevels).where(scopedWhere(eq(stockLevels.storeId, storeId)))
+    );
+  }
 }

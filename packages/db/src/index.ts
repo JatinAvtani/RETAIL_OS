@@ -19,6 +19,7 @@ export * from './repositories/stock-movement-repository';
 export * from './repositories/lot-repository';
 export * from './repositories/stock-level-repository';
 export * from './repositories/movement-service';
+export * from './repositories/stock-count-service';
 export * from './repositories/sale-consumption-service';
 export * from './reconciliation';
 export * from './auth/invitation-token';

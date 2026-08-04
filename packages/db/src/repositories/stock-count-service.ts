@@ -1,7 +1,7 @@
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import * as schema from '../schema/index';
-import { productVariants, products, stockCountLines, stockCounts, stockLevels, units } from '../schema/index';
+import { productVariants, products, stockCountLines, stockCounts, stockLevels, storageLocations, units } from '../schema/index';
 import { withTenantContext } from '../tenant-context';
 import { generateId, type CurrencyCode, type Unit } from '@retailos/domain';
 import { MovementService, UnknownCostSurplusError } from './movement-service';
@@ -253,6 +253,21 @@ export class StockCountService {
     );
   }
 
+  /** Sets a line's free-text `reasonCode` (spec 05 §5.1.4: "large variances require a reason code," never a fixed vocabulary — unlike waste's enum) — the only way `approveCount`'s large-variance check can ever be satisfied for a real count. */
+  async setLineReason(stockCountLineId: string, reasonCode: string) {
+    return this.db.transaction((tx) =>
+      withTenantContext(tx, this.organizationId, async () => {
+        const rows = await tx
+          .update(stockCountLines)
+          .set({ reasonCode, updatedAt: new Date() })
+          .where(and(eq(stockCountLines.id, stockCountLineId), eq(stockCountLines.organizationId, this.organizationId)))
+          .returning();
+        if (!rows[0]) throw new Error(`Stock count line '${stockCountLineId}' not found.`);
+        return rows[0];
+      })
+    );
+  }
+
   /** IN_PROGRESS → SUBMITTED: computes variance = counted − theoretical_t0 (spec 05 §5.1.4's exact formula), valued at t0UnitCost, for every line. A line never counted yet blocks submission — never silently treated as a zero variance (I7). */
   async submitCount(stockCountId: string, submittedByUserId?: string) {
     return this.db.transaction((tx) =>
@@ -445,6 +460,31 @@ export class StockCountService {
     return this.db.transaction((tx) =>
       withTenantContext(tx, this.organizationId, () =>
         tx.select().from(stockCountLines).where(and(eq(stockCountLines.stockCountId, stockCountId), eq(stockCountLines.organizationId, this.organizationId)))
+      )
+    );
+  }
+
+  /**
+   * plan.md Phase 7: "stocktake sheets ordered by physical storage location, not alphabetically —
+   * the person counting walks the room." A product with no `storageLocationId` set sorts last
+   * (nulls last), same convention as `LotRepository.findFefoCandidates`' expiry ordering — an
+   * unlocated product isn't a sort error, it just can't be placed in a walking order yet.
+   */
+  async findLinesOrderedByStorageLocation(stockCountId: string) {
+    return this.db.transaction((tx) =>
+      withTenantContext(tx, this.organizationId, () =>
+        tx
+          .select({
+            line: stockCountLines,
+            productName: products.name,
+            productSku: products.sku,
+            storageLocationName: storageLocations.name,
+          })
+          .from(stockCountLines)
+          .innerJoin(products, eq(products.id, stockCountLines.productId))
+          .leftJoin(storageLocations, eq(storageLocations.id, products.storageLocationId))
+          .where(and(eq(stockCountLines.stockCountId, stockCountId), eq(stockCountLines.organizationId, this.organizationId)))
+          .orderBy(sql`${storageLocations.name} ASC NULLS LAST`, asc(products.name))
       )
     );
   }

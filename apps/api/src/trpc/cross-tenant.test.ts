@@ -1,15 +1,23 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import {
+  auditLogs,
   createDb,
   categories,
   hashPassword,
+  lots,
   memberships,
   organizations,
+  outboxEvents,
   productVariants,
   products,
   recipeComponents,
   recipes,
+  stockCountLines,
+  stockCounts,
+  stockLevels,
+  stockMovements,
+  storageLocations,
   stores,
   users,
 } from '@retailos/db';
@@ -49,6 +57,42 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
   });
 
   afterEach(async () => {
+    // Full dependency-ordered teardown, deepest dependents first. Every table below was added as
+    // 005-16's registry entries surfaced it via a real FK violation, one at a time, each fix
+    // cascading into the next until the actual full dependency graph was worked out explicitly
+    // (rather than continuing to patch reactively) — recorded here so it doesn't need
+    // re-discovering:
+    //   stock_count_lines -> stock_counts, products
+    //   stock_counts -> stores, users (createdBy/submittedBy/approvedByUserId)
+    //   stock_movements -> stores, products, product_variants, lots, users (actorUserId)
+    //   stock_levels -> stores, products, product_variants
+    //   lots -> stores, products, product_variants
+    //   audit_logs -> organizations, users (actorUserId)
+    //   outbox_events -> organizations
+    //   recipe_components -> recipes, products
+    //   recipes -> organizations
+    //   product_variants -> products
+    //   products -> categories, units, storage_locations
+    //   storage_locations -> stores
+    //   categories -> organizations
+    //   stores -> organizations
+    // Every row referencing a user (stock_counts' three *ByUserId columns, stock_movements'/
+    // audit_logs' actorUserId) must be gone BEFORE the createdUserIds loop deletes those users —
+    // a first version of this cleanup deleted users first (matching the position of every
+    // pre-005-16 seeded-resource cleanup, none of which reference users), which genuinely failed
+    // with a real FK violation and — because afterEach itself threw — silently corrupted every
+    // subsequent test's isolation in the same run, cascading into failures on entries this
+    // session never touched (stores.get, products.get, ...).
+    for (const orgId of createdOrgIds) {
+      const orgCounts = await db.select({ id: stockCounts.id }).from(stockCounts).where(eq(stockCounts.organizationId, orgId));
+      for (const c of orgCounts) {
+        await db.delete(stockCountLines).where(eq(stockCountLines.stockCountId, c.id));
+      }
+      await db.delete(stockCounts).where(eq(stockCounts.organizationId, orgId));
+      await db.delete(stockMovements).where(eq(stockMovements.organizationId, orgId));
+      await db.delete(auditLogs).where(eq(auditLogs.organizationId, orgId));
+    }
+
     for (const userId of createdUserIds) {
       const tokens = await redis.smembers(`user-sessions:${userId}`);
       if (tokens.length > 0) {
@@ -58,15 +102,10 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
       await db.delete(users).where(eq(users.id, userId));
     }
     for (const orgId of createdOrgIds) {
-      await db.delete(stores).where(eq(stores.organizationId, orgId));
-      // products.requestImageUpload/confirmImageUpload/products.create's registry entries seed
-      // real products — products.create specifically calls the REAL create endpoint, which always
-      // inserts a default product_variants row too (ProductRepository.create's own invariant), so
-      // variants must go before products, which must go before categories (products.create's
-      // categoryId FK), which must go before the org, in strict FK order.
-      // recipes.get/cost/create's registry entries seed real recipes+components — components
-      // reference products via a real FK, so they must go before products; recipes reference the
-      // org directly, so they must go before the org too.
+      await db.delete(stockLevels).where(eq(stockLevels.organizationId, orgId));
+      await db.delete(lots).where(eq(lots.organizationId, orgId));
+      await db.delete(outboxEvents).where(eq(outboxEvents.organizationId, orgId));
+
       const orgRecipes = await db.select({ id: recipes.id }).from(recipes).where(eq(recipes.organizationId, orgId));
       for (const r of orgRecipes) {
         await db.delete(recipeComponents).where(eq(recipeComponents.recipeId, r.id));
@@ -78,6 +117,8 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
         await db.delete(productVariants).where(eq(productVariants.productId, p.id));
       }
       await db.delete(products).where(eq(products.organizationId, orgId));
+      await db.delete(storageLocations).where(eq(storageLocations.organizationId, orgId));
+      await db.delete(stores).where(eq(stores.organizationId, orgId));
       await db.delete(categories).where(eq(categories.organizationId, orgId));
       await db.delete(organizations).where(eq(organizations.id, orgId));
     }

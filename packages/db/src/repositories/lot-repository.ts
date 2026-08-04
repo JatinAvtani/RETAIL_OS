@@ -98,6 +98,17 @@ export class LotRepository extends TenantScopedRepository<typeof lots> {
     return rows[0] ?? null;
   }
 
+  /** Every lot for one product at this store, regardless of status — the lot-detail drill-down's listing, unlike `findFefoCandidates` which deliberately only surfaces ACTIVE, in-stock lots for allocation. */
+  async findAllForProduct(storeId: string, productId: string) {
+    return this.runScoped((db, scopedWhere) =>
+      db
+        .select()
+        .from(lots)
+        .where(scopedWhere(and(eq(lots.storeId, storeId), eq(lots.productId, productId))))
+        .orderBy(sql`${lots.expiryDate} ASC NULLS LAST`, asc(lots.receivedAt))
+    );
+  }
+
   /**
    * Draws `quantity` from one lot — the primitive the movement service (005-06) calls once per
    * lot per allocation. Never allows `remainingQuantity` to go negative or below 0 at the
