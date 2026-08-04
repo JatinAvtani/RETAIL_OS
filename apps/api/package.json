@@ -18,6 +18,7 @@
     "@retailos/db": "workspace:*",
     "@retailos/domain": "workspace:*",
     "@retailos/metrics": "workspace:*",
+    "@retailos/pos": "workspace:*",
     "@retailos/session": "workspace:*",
     "@retailos/storage": "workspace:*",
     "@trpc/server": "^11.18.0",

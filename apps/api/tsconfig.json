@@ -11,6 +11,7 @@
     { "path": "../../packages/metrics" },
     { "path": "../../packages/authz" },
     { "path": "../../packages/session" },
-    { "path": "../../packages/storage" }
+    { "path": "../../packages/storage" },
+    { "path": "../../packages/pos" }
   ]
 }

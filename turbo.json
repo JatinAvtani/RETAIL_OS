@@ -27,7 +27,12 @@
         "S3_SECRET_KEY",
         "GOOGLE_CLIENT_ID",
         "GOOGLE_CLIENT_SECRET",
-        "GOOGLE_REDIRECT_URI"
+        "GOOGLE_REDIRECT_URI",
+        "SQUARE_APPLICATION_ID",
+        "SQUARE_APPLICATION_SECRET",
+        "SQUARE_REDIRECT_URI",
+        "SQUARE_ENVIRONMENT",
+        "POS_TOKEN_ENCRYPTION_KEY"
       ]
     },
     "dev": {

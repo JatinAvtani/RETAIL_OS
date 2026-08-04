@@ -19,6 +19,7 @@ const WORKSPACES = [
   'packages/session',
   'packages/authz',
   'packages/storage',
+  'packages/pos',
   'packages/metrics',
   'packages/ai',
   'packages/ui',

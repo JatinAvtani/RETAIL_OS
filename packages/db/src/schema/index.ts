@@ -22,3 +22,5 @@ export * from './unmapped-sales';
 export * from './stock-par-levels';
 export * from './stock-counts';
 export * from './stock-transfers';
+export * from './sales';
+export * from './pos-connections';

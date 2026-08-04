@@ -5,6 +5,7 @@ import { fastifyTRPCPlugin } from '@trpc/server/adapters/fastify';
 import { appRouter } from './trpc/router';
 import { createContext } from './trpc/context';
 import { registerGoogleOAuthRoutes } from './oauth/routes';
+import { registerSquareOAuthRoutes } from './oauth/square-routes';
 
 const WEB_ORIGIN = process.env.WEB_ORIGIN ?? 'http://localhost:3000';
 
@@ -31,6 +32,7 @@ export const buildServer = (options: { logger?: boolean } = {}) => {
 
   // Plain routes, not tRPC — OAuth's browser-redirect flow has no clean tRPC representation.
   registerGoogleOAuthRoutes(app);
+  registerSquareOAuthRoutes(app);
 
   return app;
 };

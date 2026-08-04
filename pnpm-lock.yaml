@@ -50,6 +50,9 @@ importers:
       '@retailos/metrics':
         specifier: workspace:*
         version: link:../../packages/metrics
+      '@retailos/pos':
+        specifier: workspace:*
+        version: link:../../packages/pos
       '@retailos/session':
         specifier: workspace:*
         version: link:../../packages/session
@@ -232,6 +235,22 @@ importers:
       fast-check:
         specifier: ^3.23.2
         version: 3.23.2
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)
+
+  packages/pos:
+    dependencies:
+      '@retailos/domain':
+        specifier: workspace:*
+        version: link:../domain
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.1
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
