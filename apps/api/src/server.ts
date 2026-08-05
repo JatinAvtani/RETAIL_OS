@@ -6,6 +6,7 @@ import { appRouter } from './trpc/router';
 import { createContext } from './trpc/context';
 import { registerGoogleOAuthRoutes } from './oauth/routes';
 import { registerSquareOAuthRoutes } from './oauth/square-routes';
+import { registerSquareWebhookRoute } from './webhooks/square-webhook-route';
 
 const WEB_ORIGIN = process.env.WEB_ORIGIN ?? 'http://localhost:3000';
 
@@ -33,6 +34,11 @@ export const buildServer = (options: { logger?: boolean } = {}) => {
   // Plain routes, not tRPC — OAuth's browser-redirect flow has no clean tRPC representation.
   registerGoogleOAuthRoutes(app);
   registerSquareOAuthRoutes(app);
+
+  // Registered via app.register (not called directly like the OAuth routes above) so its
+  // route-scoped addContentTypeParser is encapsulated to this plugin only, per Fastify's own
+  // plugin-boundary model — the global JSON parser every tRPC procedure relies on is untouched.
+  app.register(registerSquareWebhookRoute);
 
   return app;
 };

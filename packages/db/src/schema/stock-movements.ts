@@ -14,6 +14,13 @@ export const movementTypeEnum = pgEnum('movement_type', [
   'PRODUCTION_INPUT',
   'PRODUCTION_OUTPUT',
   'RETURN_TO_SUPPLIER',
+  /**
+   * 006-08: a refund reverses the consumption a sale posted — the ingredients notionally came
+   * back into stock. A distinct value from `RETURN_TO_SUPPLIER` (a genuinely different real-world
+   * event: inventory physically leaving to go back to a vendor) and from `WASTE` (which means
+   * product was actually discarded, not that a sale was undone).
+   */
+  'SALE_REVERSAL',
 ]);
 
 /**

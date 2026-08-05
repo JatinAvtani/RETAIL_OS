@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, lt } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import * as schema from '../schema/index';
 import { posItems, type salesSourceEnum } from '../schema/index';
@@ -57,6 +57,9 @@ export class PosItemRepository extends TenantScopedRepository<typeof posItems> {
             ...(input.currency !== undefined ? { currency: input.currency } : {}),
             ...(input.category !== undefined ? { category: input.category } : {}),
             lastSeenAt: new Date(),
+            // A fresh sighting relists an item a prior sync had marked delisted — Square's own
+            // is_deleted flag can flip back to false (e.g. a merchant restores an archived item).
+            delistedAt: null,
             updatedAt: new Date(),
           },
         })
@@ -79,6 +82,17 @@ export class PosItemRepository extends TenantScopedRepository<typeof posItems> {
     return rows[0] ?? null;
   }
 
+  /** The 006-05 orders-sync read path: resolves a line's vendor `catalog_object_id` back to its own `pos_items.id`, so `sales_transaction_lines.posItemId` references the SKU that was actually sold. */
+  async findByExternalId(storeId: string, source: SalesSource, externalId: string) {
+    const rows = await this.runScoped((db, scopedWhere) =>
+      db
+        .select()
+        .from(posItems)
+        .where(scopedWhere(and(eq(posItems.storeId, storeId), eq(posItems.source, source), eq(posItems.externalId, externalId))))
+    );
+    return rows[0] ?? null;
+  }
+
   /** The 006-11 mapping-UI read path: unmapped items, most-sold first is a later join this method doesn't attempt yet — plain oldest-first for now. */
   async findUnmapped(storeId?: string) {
     return this.runScoped((db, scopedWhere) =>
@@ -93,6 +107,32 @@ export class PosItemRepository extends TenantScopedRepository<typeof posItems> {
           )
         )
         .orderBy(posItems.lastSeenAt)
+    );
+  }
+
+  /**
+   * 006-04 (plan.md Phase 2): "deleted upstream items are marked, not deleted." Called once, after
+   * a full catalog sync has upserted every item Square returned — any row for this store+source
+   * whose `lastSeenAt` is still older than `syncStartedAt` was NOT touched by that sync, meaning
+   * Square no longer lists it. Never deletes the row (`sales_transaction_lines.posItemId` still
+   * references it for historical sales) and is itself idempotent: re-running finds nothing new to
+   * mark once every stale row already has a `delistedAt`.
+   */
+  async markNotSeenSinceAsDelisted(storeId: string, source: SalesSource, syncStartedAt: Date) {
+    return this.runScoped((db, scopedWhere) =>
+      db
+        .update(posItems)
+        .set({ delistedAt: new Date(), updatedAt: new Date() })
+        .where(
+          scopedWhere(
+            and(
+              eq(posItems.storeId, storeId),
+              eq(posItems.source, source),
+              lt(posItems.lastSeenAt, syncStartedAt)
+            )
+          )
+        )
+        .returning()
     );
   }
 

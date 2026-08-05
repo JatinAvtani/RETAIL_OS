@@ -17,6 +17,7 @@ import {
   users,
 } from '../schema/index';
 import { createScopedDb } from '../tenant-repository';
+import { withTenantContext } from '../tenant-context';
 import { MovementService, IdempotentReplayError, InsufficientStockError } from './movement-service';
 import { LotRepository } from './lot-repository';
 import { ProductRepository } from './product-repository';
@@ -410,6 +411,194 @@ describe('MovementService', () => {
         .where(eq(stockMovements.organizationId, organizationId));
       const ledgerSum = ledgerRows.reduce((sum, r) => sum + Number(r.quantity), 0);
       expect(ledgerSum).toBe(12);
+    });
+  });
+
+  describe('reverseSaleConsumption', () => {
+    it('a full reversal (fraction 1) returns the entire consumed quantity to the exact lot it was drawn from, reviving it to ACTIVE if it was DEPLETED', async () => {
+      const lotRepo = new LotRepository(createScopedDb(client), organizationId);
+      const lot = await lotRepo.receive({
+        id: generateId(),
+        storeId,
+        productId,
+        variantId,
+        receivedAt: new Date('2026-08-01T00:00:00Z'),
+        initialQuantity: '5.000000', // exactly enough to be fully depleted by the sale below
+        unitCost: '2.0000',
+        currency: 'USD',
+      });
+
+      const scopedDb = createScopedDb(client);
+      const service = new MovementService(scopedDb, organizationId);
+      const saleTransactionId = generateId();
+      const consumeResult = await service.consumeFefo({
+        storeId,
+        productId,
+        variantId,
+        requiredQuantity: '5.000000',
+        unit: 'g',
+        occurredAt: new Date(),
+        sourceType: 'pos-sync',
+        sourceId: saleTransactionId,
+      });
+      expect(consumeResult.movements[0]?.quantity).toBe('-5.000000');
+
+      const depletedLot = await lotRepo.findById(lot.id);
+      expect(depletedLot?.status).toBe('DEPLETED');
+      expect(depletedLot?.remainingQuantity).toBe('0.000000');
+
+      const reversals = await scopedDb.transaction((tx) =>
+        withTenantContext(tx, organizationId, () =>
+          service.reverseSaleConsumption(tx, {
+            originalSourceId: saleTransactionId,
+            fraction: '1',
+            occurredAt: new Date(),
+            sourceType: 'pos-sync-refund',
+            sourceId: saleTransactionId,
+          })
+        )
+      );
+
+      expect(reversals).toHaveLength(1);
+      expect(reversals[0]?.movementType).toBe('SALE_REVERSAL');
+      expect(reversals[0]?.quantity).toBe('5.000000'); // positive — stock coming back
+      expect(reversals[0]?.lotId).toBe(lot.id);
+
+      const revivedLot = await lotRepo.findById(lot.id);
+      expect(revivedLot?.status).toBe('ACTIVE');
+      expect(revivedLot?.remainingQuantity).toBe('5.000000');
+    });
+
+    it('a partial reversal (fraction 0.5) returns exactly half the consumed quantity', async () => {
+      const lotRepo = new LotRepository(createScopedDb(client), organizationId);
+      await lotRepo.receive({
+        id: generateId(),
+        storeId,
+        productId,
+        variantId,
+        receivedAt: new Date('2026-08-01T00:00:00Z'),
+        initialQuantity: '20.000000',
+        unitCost: '1.0000',
+        currency: 'USD',
+      });
+
+      const scopedDb = createScopedDb(client);
+      const service = new MovementService(scopedDb, organizationId);
+      // lotRepo.receive only creates the lot row — the stock_levels PROJECTION needs its own real
+      // RECEIPT movement too (same precedent consumeFefo's own "ledger-projection consistency" test
+      // establishes above), or stockLevels.quantity starts at 0, not the lot's initialQuantity.
+      await service.postMovement({
+        storeId,
+        productId,
+        variantId,
+        movementType: 'RECEIPT',
+        quantity: '20.000000',
+        unitCost: '1.0000',
+        currency: 'USD',
+        occurredAt: new Date('2026-08-01T00:00:00Z'),
+        sourceType: 'manual',
+      });
+      const saleTransactionId = generateId();
+      await service.consumeFefo({
+        storeId,
+        productId,
+        variantId,
+        requiredQuantity: '10.000000',
+        unit: 'g',
+        occurredAt: new Date(),
+        sourceType: 'pos-sync',
+        sourceId: saleTransactionId,
+      });
+
+      const reversals = await scopedDb.transaction((tx) =>
+        withTenantContext(tx, organizationId, () =>
+          service.reverseSaleConsumption(tx, {
+            originalSourceId: saleTransactionId,
+            fraction: '0.5',
+            occurredAt: new Date(),
+            sourceType: 'pos-sync-refund',
+          })
+        )
+      );
+
+      expect(reversals[0]?.quantity).toBe('5.000000'); // 50% of the original 10 consumed
+
+      const levelRepo = new StockLevelRepository(createScopedDb(client), organizationId);
+      const level = await levelRepo.find(storeId, productId, variantId);
+      expect(level?.quantity).toBe('15.000000'); // 20 received - 10 consumed + 5 returned = 15
+    });
+
+    it('a sourceId with no matching SALE_CONSUMPTION rows reverses nothing — no error, no movement', async () => {
+      const scopedDb = createScopedDb(client);
+      const service = new MovementService(scopedDb, organizationId);
+      const reversals = await scopedDb.transaction((tx) =>
+        withTenantContext(tx, organizationId, () =>
+          service.reverseSaleConsumption(tx, {
+            originalSourceId: generateId(),
+            fraction: '1',
+            occurredAt: new Date(),
+            sourceType: 'pos-sync-refund',
+          })
+        )
+      );
+      expect(reversals).toHaveLength(0);
+    });
+
+    it('reversing twice at fraction 1 against the same consumption is rejected by the real lots_remaining_within_initial CHECK constraint — a genuine database backstop, not just application discipline', async () => {
+      // reverseSaleConsumption is a pure "apply this fraction against what was consumed" primitive
+      // with no memory of prior reversals — the caller (006-08's processRefundIfNew) is what
+      // computes the INCREMENTAL fraction so a second sync of the same refund doesn't double-
+      // reverse. This test proves what happens if a caller ever got that wrong anyway: the database
+      // itself refuses to let a lot's remainingQuantity exceed its initialQuantity, so a genuine
+      // double-reversal fails loudly with a real Postgres error rather than silently over-crediting
+      // stock that was never actually returned.
+      const lotRepo = new LotRepository(createScopedDb(client), organizationId);
+      await lotRepo.receive({
+        id: generateId(),
+        storeId,
+        productId,
+        variantId,
+        receivedAt: new Date('2026-08-01T00:00:00Z'),
+        initialQuantity: '20.000000',
+        unitCost: '1.0000',
+        currency: 'USD',
+      });
+
+      const scopedDb = createScopedDb(client);
+      const service = new MovementService(scopedDb, organizationId);
+      const saleTransactionId = generateId();
+      await service.consumeFefo({
+        storeId,
+        productId,
+        variantId,
+        requiredQuantity: '10.000000',
+        unit: 'g',
+        occurredAt: new Date(),
+        sourceType: 'pos-sync',
+        sourceId: saleTransactionId,
+      });
+
+      const reverseOnce = () =>
+        scopedDb.transaction((tx) =>
+          withTenantContext(tx, organizationId, () =>
+            service.reverseSaleConsumption(tx, {
+              originalSourceId: saleTransactionId,
+              fraction: '1',
+              occurredAt: new Date(),
+              sourceType: 'pos-sync-refund',
+            })
+          )
+        );
+
+      // First reversal brings remainingQuantity back to exactly 20 (the lot's own initialQuantity)
+      // — the maximum genuinely valid value.
+      await reverseOnce();
+      const afterFirst = await lotRepo.findFefoCandidates(storeId, productId);
+      expect(afterFirst[0]?.remainingQuantity).toBe('20.000000');
+
+      // A second reversal of the SAME consumption would push remainingQuantity to 30, exceeding
+      // initialQuantity — the real CHECK constraint rejects this outright.
+      await expect(reverseOnce()).rejects.toThrow(/lots_remaining_within_initial/);
     });
   });
 

@@ -247,6 +247,9 @@ importers:
       '@retailos/domain':
         specifier: workspace:*
         version: link:../domain
+      decimal.js:
+        specifier: ^10.4.3
+        version: 10.6.0
     devDependencies:
       '@types/node':
         specifier: ^22.10.2

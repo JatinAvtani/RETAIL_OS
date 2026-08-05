@@ -129,6 +129,81 @@ describe('PosItemRepository', () => {
     expect(stillUnmapped.some((r) => r.id === item.id)).toBe(false);
   });
 
+  describe('markNotSeenSinceAsDelisted', () => {
+    it('marks an item not re-upserted since the sync started, leaves a freshly-seen item alone', async () => {
+      const repo = new PosItemRepository(createScopedDb(client), organizationId);
+      const stale = await repo.upsert({
+        id: generateId(),
+        storeId,
+        source: 'square',
+        externalId: 'SQ-DELIST-STALE',
+        name: 'Discontinued Muffin',
+      });
+
+      const syncStartedAt = new Date();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const fresh = await repo.upsert({
+        id: generateId(),
+        storeId,
+        source: 'square',
+        externalId: 'SQ-DELIST-FRESH',
+        name: 'Still-Sold Muffin',
+      });
+
+      const delisted = await repo.markNotSeenSinceAsDelisted(storeId, 'square', syncStartedAt);
+      expect(delisted.map((r) => r.id)).toContain(stale.id);
+      expect(delisted.map((r) => r.id)).not.toContain(fresh.id);
+
+      const staleRow = await repo.findById(stale.id);
+      const freshRow = await repo.findById(fresh.id);
+      expect(staleRow?.delistedAt).not.toBeNull();
+      expect(freshRow?.delistedAt).toBeNull();
+    });
+
+    it('re-upserting a previously-delisted item clears delistedAt back to null', async () => {
+      const repo = new PosItemRepository(createScopedDb(client), organizationId);
+      const item = await repo.upsert({
+        id: generateId(),
+        storeId,
+        source: 'square',
+        externalId: 'SQ-RELIST',
+        name: 'Seasonal Item',
+      });
+
+      await repo.markNotSeenSinceAsDelisted(storeId, 'square', new Date(Date.now() + 1000));
+      const delistedRow = await repo.findById(item.id);
+      expect(delistedRow?.delistedAt).not.toBeNull();
+
+      await repo.upsert({
+        id: generateId(),
+        storeId,
+        source: 'square',
+        externalId: 'SQ-RELIST',
+        name: 'Seasonal Item (back in stock)',
+      });
+
+      const relistedRow = await repo.findById(item.id);
+      expect(relistedRow?.delistedAt).toBeNull();
+    });
+
+    it('does not touch items from a different source, even in the same store', async () => {
+      const repo = new PosItemRepository(createScopedDb(client), organizationId);
+      const csvItem = await repo.upsert({
+        id: generateId(),
+        storeId,
+        source: 'csv',
+        externalId: 'CSV-UNRELATED',
+        name: 'CSV Item',
+      });
+
+      await repo.markNotSeenSinceAsDelisted(storeId, 'square', new Date(Date.now() + 1000));
+
+      const row = await repo.findById(csvItem.id);
+      expect(row?.delistedAt).toBeNull();
+    });
+  });
+
   describe('cross-tenant', () => {
     let fixture: TwoTenantFixture;
 

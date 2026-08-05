@@ -24,3 +24,4 @@ export * from './stock-counts';
 export * from './stock-transfers';
 export * from './sales';
 export * from './pos-connections';
+export * from './webhook-events';

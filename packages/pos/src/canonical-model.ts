@@ -125,6 +125,16 @@ export type ExternalTransactionStatus = 'completed' | 'refunded' | 'voided';
  * sub-objects on the same order; Toast: a check-level refund/void state) rather than a wholly
  * separate transaction with no back-reference — the adapter's job is to surface that link, not
  * invent a synthetic one.
+ *
+ * `refundedAmount` (006-08): the TOTAL amount refunded against this order so far — Square's own
+ * `refunds[]` array can hold several entries (a merchant partially refunding in stages), so this is
+ * always the adapter's own SUM of every refund entry's amount, not one entry's amount. Undefined
+ * when nothing has been refunded, never `0.00` (I7 — the absence of this field is itself the "no
+ * refund" signal; a caller comparing it against the order's total to compute a reversal fraction
+ * must not default a missing value to zero in a way that could silently mask a real refund this
+ * adapter failed to parse). `status: 'refunded'` mirrors a FULL refund (fraction === 1); a partial
+ * refund keeps `status: 'completed'` with `refundedAmount` set below the order's own total — the
+ * caller computes the fraction from the two, this type just carries the raw fact.
  */
 export type ExternalTransaction = {
   externalId: string;
@@ -133,6 +143,7 @@ export type ExternalTransaction = {
   channel?: string;
   status: ExternalTransactionStatus;
   refundOfExternalId?: string;
+  refundedAmount?: ExternalMoney;
   checks: ExternalCheck[];
 };
 

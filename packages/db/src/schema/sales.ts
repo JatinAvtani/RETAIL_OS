@@ -51,6 +51,16 @@ export const posItems = pgTable(
     menuItemId: uuid('menu_item_id').references(() => menuItems.id),
     mappingStatus: posItemMappingStatusEnum('mapping_status').notNull().default('UNMAPPED'),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+    /**
+     * 006-04 (plan.md Phase 2): "deleted upstream items are marked, not deleted — historical sales
+     * still reference them." NULL means still present in the vendor's catalog as of the last sync;
+     * non-null is the moment a full catalog sync completed without seeing this item's external id
+     * again (Square's own `is_deleted` flag, or simply absent from a full sync's result set). Kept
+     * separate from `mappingStatus` deliberately — "no longer sold" and "not yet mapped to a menu
+     * item" are two independent facts about the same row, and conflating them into one enum would
+     * lose whichever one isn't currently active.
+     */
+    delistedAt: timestamp('delisted_at', { withTimezone: true }),
     ...timestamps,
   },
   (table) => [uniqueIndex('pos_items_store_source_external_id_idx').on(table.storeId, table.source, table.externalId)]

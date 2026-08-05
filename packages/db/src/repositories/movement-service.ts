@@ -1,5 +1,6 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
+import { Decimal } from 'decimal.js';
 import * as schema from '../schema/index';
 import { auditLogs, lots, outboxEvents, stockLevels, stockMovements, wasteReasonCodeEnum } from '../schema/index';
 import { withTenantContext, type Tx } from '../tenant-context';
@@ -479,6 +480,94 @@ export class MovementService {
     }
 
     return { movements, allocations: result.allocations, totalCost: result.totalCost };
+  }
+
+  /**
+   * 006-08 (plan.md's own named "subtle part"): reverses the `SALE_CONSUMPTION` movements a
+   * refunded sale posted — "the ingredients came back, or at minimum shouldn't count as sold."
+   * Finds every `SALE_CONSUMPTION` row whose `sourceId` matches the ORIGINAL sale (never the
+   * refund's own id — this method looks BACKWARD at what was actually consumed, it doesn't
+   * recompute from the recipe, since the recipe may have changed since the sale and the reversal
+   * must undo exactly what really happened), and for each one adds `fraction * |quantity|` back to
+   * the EXACT lot it drew from — reviving a `DEPLETED` lot to `ACTIVE` if its `remainingQuantity`
+   * goes back above zero, never creating a new lot (unlike a stocktake surplus, this stock has a
+   * real, known origin lot to return to).
+   *
+   * `fraction` is `refundedAmount / originalTotal` (1 for a full refund, plan.md's own "partial
+   * refunds reverse proportionally" acceptance criterion) — the caller (006-08's refund handler)
+   * computes it from the two `sales_transactions` totals; this method only applies it.
+   *
+   * Posted as `SALE_REVERSAL`, a positive quantity, NOT `RETURN_TO_SUPPLIER` (a different real-world
+   * event — inventory physically leaving to a vendor) and NOT `WASTE` (which means product was
+   * actually discarded). Never added to `INCREASING_MOVEMENT_TYPES` — a reversal restores known-cost
+   * stock to its origin lot, it isn't a new receipt at a new price, so `avgUnitCost` is intentionally
+   * left unrecomputed by this movement (matching every other decreasing/restoring movement type).
+   *
+   * A `SALE_CONSUMPTION` row with no `lotId` (can happen if `totalCost` was `'unknown'` at
+   * consumption time — I7, see `SaleConsumptionService`) is skipped, not guessed at: there is no
+   * real lot to return the stock to, and inventing one would fabricate a cost basis this codebase
+   * never actually observed.
+   */
+  async reverseSaleConsumption(
+    tx: Tx,
+    input: {
+      originalSourceId: string;
+      fraction: string;
+      occurredAt: Date;
+      sourceType: string;
+      sourceId?: string;
+      actorUserId?: string;
+    }
+  ) {
+    const consumptionRows = await tx
+      .select()
+      .from(stockMovements)
+      .where(
+        and(
+          eq(stockMovements.organizationId, this.organizationId),
+          eq(stockMovements.movementType, 'SALE_CONSUMPTION'),
+          eq(stockMovements.sourceId, input.originalSourceId)
+        )
+      );
+
+    const fraction = new Decimal(input.fraction);
+    const reversals = [];
+
+    for (const row of consumptionRows) {
+      if (!row.lotId) continue; // no known lot to return stock to (I7) — nothing to reverse, not a guess
+
+      const reverseQuantity = new Decimal(row.quantity).abs().times(fraction);
+      if (reverseQuantity.isZero()) continue;
+
+      const lotRows = await tx
+        .update(lots)
+        .set({
+          remainingQuantity: sql`${lots.remainingQuantity} + ${reverseQuantity.toString()}`,
+          status: sql`CASE WHEN ${lots.remainingQuantity} + ${reverseQuantity.toString()} > 0 THEN 'ACTIVE'::lot_status ELSE ${lots.status} END`,
+        })
+        .where(and(eq(lots.id, row.lotId), eq(lots.organizationId, this.organizationId)))
+        .returning();
+      const lotRow = lotRows[0];
+      if (!lotRow) continue; // the lot itself no longer exists — nothing left to return stock to
+
+      const posted = await this.postMovementInTx(tx, {
+        storeId: row.storeId,
+        productId: row.productId,
+        variantId: row.variantId,
+        lotId: row.lotId,
+        movementType: 'SALE_REVERSAL',
+        quantity: reverseQuantity.toString(),
+        currency: row.currency,
+        occurredAt: input.occurredAt,
+        sourceType: input.sourceType,
+        ...(row.unitCost !== null ? { unitCost: row.unitCost } : {}),
+        ...(input.sourceId !== undefined ? { sourceId: input.sourceId } : {}),
+        ...(input.actorUserId !== undefined ? { actorUserId: input.actorUserId } : {}),
+      });
+      reversals.push(posted.movement);
+    }
+
+    return reversals;
   }
 
   /**

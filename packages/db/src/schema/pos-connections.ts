@@ -58,6 +58,24 @@ export const posConnections = pgTable(
     tokenExpiresAt: timestamp('token_expires_at', { withTimezone: true }),
     status: posConnectionStatusEnum('status').notNull().default('CONNECTED'),
     lastSuccessfulSyncAt: timestamp('last_successful_sync_at', { withTimezone: true }),
+    /**
+     * 006-05: Square's own opaque `orders/search` pagination cursor — advanced ONLY in the SAME
+     * transaction as the order/line writes it gates (plan.md's own named top risk: "cursor advances
+     * past failed write -> permanent data gap, and nothing errors"). NULL means either no sync has
+     * run yet, or the last sync's final page returned no cursor (fully caught up as of
+     * `ordersSyncWatermark`) — the two cases are distinguished by `ordersSyncWatermark` being set.
+     */
+    ordersSyncCursor: text('orders_sync_cursor'),
+    /**
+     * The `updated_at` value passed to the NEXT sync's `date_time_filter.updated_at.start_at` —
+     * deliberately `updated_at`, not `created_at`, since Square surfaces a later refund by bumping
+     * the same order's `updated_at` (researched directly against Square's Orders API reference, not
+     * guessed): filtering on `created_at` would silently miss refunds recorded after the sale.
+     * Advances to "now" at the START of a sync run (not the last order's own `updated_at`) so an
+     * order updated mid-sync by a concurrent webhook is still caught by the NEXT sync's window,
+     * rather than falling just before a too-precise watermark.
+     */
+    ordersSyncWatermark: timestamp('orders_sync_watermark', { withTimezone: true }),
     lastError: text('last_error'),
     connectedByUserId: uuid('connected_by_user_id').references(() => users.id),
     disconnectedAt: timestamp('disconnected_at', { withTimezone: true }),

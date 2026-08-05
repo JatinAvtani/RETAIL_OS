@@ -11,7 +11,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@retailos/domain": "workspace:*"
+    "@retailos/domain": "workspace:*",
+    "decimal.js": "^10.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

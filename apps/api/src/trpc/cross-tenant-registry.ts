@@ -2,6 +2,7 @@ import {
   createDb,
   categories,
   lots,
+  posConnections,
   products,
   productVariants,
   recipeComponents,
@@ -13,6 +14,7 @@ import {
 } from '@retailos/db';
 import { eq } from 'drizzle-orm';
 import { generateId } from '@retailos/domain';
+import { encryptToken } from '@retailos/pos';
 import { buildProductImageKey, createPresignedUploadUrl, ensureBucketExists } from '@retailos/storage';
 import { PRODUCT_IMAGES_BUCKET, storageClient } from './context';
 
@@ -223,6 +225,67 @@ const seedRecipe = async (db: Db, organizationId: string): Promise<string> => {
     unitId: eachUnit.id,
   });
   return recipeGroupId;
+};
+
+/**
+ * `integrations.syncSquareCatalog` requires `SQUARE_APPLICATION_ID`/`SQUARE_APPLICATION_SECRET`/
+ * `SQUARE_REDIRECT_URI` (else the router itself returns 503 before ever reaching the connection
+ * lookup) and `POS_TOKEN_ENCRYPTION_KEY` (else decrypting the seeded connection's token throws) —
+ * neither is set anywhere in this suite's real env, same gap `square-routes.test.ts` already solved
+ * for OAuth by setting test values in its own `beforeAll`. Set once here, only if genuinely unset,
+ * so a real local `.env.local` value (if the user ever configures one) always wins.
+ */
+if (!process.env.SQUARE_APPLICATION_ID) process.env.SQUARE_APPLICATION_ID = 'cross-tenant-test-square-app-id';
+if (!process.env.SQUARE_APPLICATION_SECRET) process.env.SQUARE_APPLICATION_SECRET = 'cross-tenant-test-square-app-secret';
+if (!process.env.SQUARE_REDIRECT_URI) process.env.SQUARE_REDIRECT_URI = 'http://localhost:3001/integrations/square/callback';
+if (!process.env.POS_TOKEN_ENCRYPTION_KEY) process.env.POS_TOKEN_ENCRYPTION_KEY = 'cross-tenant-registry-test-key';
+
+/**
+ * `integrations.syncSquareCatalog`/`syncSquareOrders` call Square's real Catalog/Orders APIs — no
+ * live Square sandbox app exists in this codebase yet (006-03/006-04/006-05's standing limitation),
+ * so their "own resource succeeds with a genuine 200" case cannot go over the real network the way
+ * `square-routes.test.ts` accepts for OAuth's error-path tests. Unlike those, THIS suite's second
+ * `it.each` genuinely asserts 200, which a real, unreachable Square sandbox cannot produce — so
+ * `global.fetch` is patched narrowly (Square's own host only; every other request, including
+ * `products.confirmImageUpload`'s real MinIO PUT earlier in this same file, passes through
+ * untouched) to return one realistic, minimal empty-page response per endpoint. This proves each
+ * router's own auth/store/connection-lookup logic — the actual cross-tenant surface this suite
+ * exists to test — without needing to fake Square's business data, which
+ * `packages/pos/src/square.catalog.test.ts`/`square.orders.test.ts` are responsible for instead.
+ */
+let squareFetchPatched = false;
+const patchFetchForSquare = (): void => {
+  if (squareFetchPatched) return;
+  squareFetchPatched = true;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.includes('/v2/orders/search') && (url.includes('squareupsandbox.com') || url.includes('squareup.com'))) {
+      return new Response(JSON.stringify({ orders: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    if (url.includes('squareupsandbox.com') || url.includes('squareup.com')) {
+      return new Response(JSON.stringify({ objects: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return realFetch(input, init);
+  }) as typeof fetch;
+};
+
+/** Seeds a real, CONNECTED Square pos_connections row for a store, with a real externalLocationId — what syncSquareCatalog's/syncSquareOrders' own auth/store/connection-lookup checks need to reach the (patched) Square API call at all. */
+const seedPosConnection = async (db: Db, organizationId: string): Promise<string> => {
+  patchFetchForSquare();
+  const storeId = await seedStore(db, organizationId);
+  await db.insert(posConnections).values({
+    id: generateId(),
+    organizationId,
+    storeId,
+    vendor: 'square',
+    externalAccountId: `cross-tenant-probe-merchant-${storeId}`,
+    externalLocationId: `cross-tenant-probe-location-${storeId}`,
+    accessTokenCiphertext: encryptToken('probe-access-token', process.env.POS_TOKEN_ENCRYPTION_KEY),
+    refreshTokenCiphertext: encryptToken('probe-refresh-token', process.env.POS_TOKEN_ENCRYPTION_KEY),
+    status: 'CONNECTED',
+  });
+  return storeId;
 };
 
 export const resourceScopedProcedures: ResourceScopedProcedure[] = [
@@ -546,5 +609,24 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     type: 'mutation',
     seedResource: seedStockCountLine,
     buildInput: (resourceId) => ({ stockCountLineId: resourceId, reasonCode: 'Cross-tenant probe' }),
+  },
+  {
+    // Same shape as inventory.levels: attacks with tenant A's storeId, the FIRST check
+    // syncSquareCatalog's router runs (assertStoreAccess-equivalent) before ever looking at
+    // pos_connections. global.fetch is patched (Square host only) so the "own resource" case can
+    // reach a genuine 200 without a real Square sandbox app.
+    path: 'integrations.syncSquareCatalog',
+    type: 'mutation',
+    seedResource: seedPosConnection,
+    buildInput: (resourceId) => ({ storeId: resourceId }),
+  },
+  {
+    // Same cross-tenant surface and same real-vendor-network problem as syncSquareCatalog —
+    // seedPosConnection already seeds a real externalLocationId, which syncSquareOrders requires
+    // before it will even attempt the (patched) orders/search call.
+    path: 'integrations.syncSquareOrders',
+    type: 'mutation',
+    seedResource: seedPosConnection,
+    buildInput: (resourceId) => ({ storeId: resourceId }),
   },
 ];

@@ -9,6 +9,7 @@ import {
   memberships,
   organizations,
   outboxEvents,
+  posConnections,
   productVariants,
   products,
   recipeComponents,
@@ -118,6 +119,7 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
       }
       await db.delete(products).where(eq(products.organizationId, orgId));
       await db.delete(storageLocations).where(eq(storageLocations.organizationId, orgId));
+      await db.delete(posConnections).where(eq(posConnections.organizationId, orgId));
       await db.delete(stores).where(eq(stores.organizationId, orgId));
       await db.delete(categories).where(eq(categories.organizationId, orgId));
       await db.delete(organizations).where(eq(organizations.id, orgId));

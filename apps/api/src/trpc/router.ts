@@ -8,6 +8,7 @@ import { unitsRouter } from './routers/units';
 import { recipesRouter } from './routers/recipes';
 import { inventoryRouter } from './routers/inventory';
 import { stocktakeRouter } from './routers/stocktake';
+import { integrationsRouter } from './routers/integrations';
 
 export const appRouter = router({
   auth: authRouter,
@@ -19,6 +20,7 @@ export const appRouter = router({
   recipes: recipesRouter,
   inventory: inventoryRouter,
   stocktake: stocktakeRouter,
+  integrations: integrationsRouter,
 });
 
 export type AppRouter = typeof appRouter;
