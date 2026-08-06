@@ -4,8 +4,40 @@ import { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { trpc } from '@/lib/trpc';
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  ErrorNotice,
+  LoadingState,
+  PageHeader,
+  Select,
+  Table,
+  Td,
+  Th,
+  Tr,
+  Value,
+  type BadgeTone,
+} from '@/components/ui';
 
 type Movement = Awaited<ReturnType<typeof trpc.inventory.movements.query>>[number];
+
+/** Stock-increasing movements read positive, stock-reducing read as a loss — the tone makes a
+ *  ledger scannable at a glance without having to parse the sign of every quantity. */
+const MOVEMENT_TONES: Record<string, BadgeTone> = {
+  RECEIPT: 'positive',
+  TRANSFER_IN: 'positive',
+  PRODUCTION_OUTPUT: 'positive',
+  SALE_CONSUMPTION: 'neutral',
+  PRODUCTION_INPUT: 'neutral',
+  COUNT_ADJUSTMENT: 'warning',
+  WASTE: 'danger',
+  TRANSFER_OUT: 'neutral',
+  RETURN_TO_SUPPLIER: 'warning',
+};
+
+const humanize = (value: string) => value.toLowerCase().replace(/_/g, ' ');
 
 const MOVEMENT_TYPES = [
   'RECEIPT',
@@ -48,63 +80,97 @@ function MovementsContent() {
   const filtered = typeFilter ? movements.filter((m) => m.movementType === typeFilter) : movements;
 
   return (
-    <main>
-      <h1>Movement history</h1>
-      <nav>
-        <Link href="/inventory">Back to stock levels</Link>
-      </nav>
+    <>
+      <PageHeader
+        title="Movement history"
+        description="The append-only ledger for this product. Corrections are new rows, never edits — every past number stays reproducible."
+        actions={
+          <div className="flex items-center gap-2">
+            {!error && (
+              <Select
+                value={typeFilter}
+                onChange={(event) => setTypeFilter(event.target.value)}
+                className="w-auto"
+              >
+                <option value="">All types</option>
+                {MOVEMENT_TYPES.map((type) => (
+                  <option key={type} value={type}>
+                    {humanize(type)}
+                  </option>
+                ))}
+              </Select>
+            )}
+            <Link href="/inventory">
+              <Button variant="ghost">Back</Button>
+            </Link>
+          </div>
+        }
+      />
 
-      {error && <p role="alert">{error}</p>}
+      {error && <ErrorNotice>{error}</ErrorNotice>}
 
       {!error && (
-        <label>
-          Filter by type:{' '}
-          <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
-            <option value="">All types</option>
-            {MOVEMENT_TYPES.map((type) => (
-              <option key={type} value={type}>
-                {type}
-              </option>
-            ))}
-          </select>
-        </label>
+        <Card>
+          {loading && <LoadingState />}
+          {!loading && filtered.length === 0 && (
+            <EmptyState
+              title="No movements match this filter"
+              {...(typeFilter ? { hint: 'Try selecting all types.' } : {})}
+            />
+          )}
+          {!loading && filtered.length > 0 && (
+            <Table>
+              <thead>
+                <tr>
+                  <Th>Occurred</Th>
+                  <Th>Type</Th>
+                  <Th align="right">Quantity</Th>
+                  <Th align="right">Unit cost</Th>
+                  <Th>Reason</Th>
+                  <Th>Source</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((movement) => (
+                  <Tr key={movement.id}>
+                    <Td className="whitespace-nowrap text-content-muted">
+                      {new Date(movement.occurredAt).toLocaleString()}
+                    </Td>
+                    <Td>
+                      <Badge tone={MOVEMENT_TONES[movement.movementType] ?? 'neutral'}>
+                        {humanize(movement.movementType)}
+                      </Badge>
+                    </Td>
+                    <Td align="right">
+                      <span
+                        className={
+                          Number(movement.quantity) < 0 ? 'tabular text-danger' : 'tabular text-positive'
+                        }
+                      >
+                        {movement.quantity}
+                      </span>
+                    </Td>
+                    <Td align="right">
+                      <Value value={movement.unitCost} />
+                    </Td>
+                    <Td className="text-content-muted">
+                      {movement.reasonCode ? humanize(movement.reasonCode) : <span className="text-content-subtle">—</span>}
+                    </Td>
+                    <Td className="text-content-muted">{humanize(movement.sourceType)}</Td>
+                  </Tr>
+                ))}
+              </tbody>
+            </Table>
+          )}
+        </Card>
       )}
-
-      {loading && <p>Loading...</p>}
-      {!loading && !error && filtered.length === 0 && <p>No movements match this filter.</p>}
-      {!loading && !error && filtered.length > 0 && (
-        <table>
-          <thead>
-            <tr>
-              <th>Occurred</th>
-              <th>Type</th>
-              <th>Quantity</th>
-              <th>Unit cost</th>
-              <th>Reason</th>
-              <th>Source</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((movement) => (
-              <tr key={movement.id}>
-                <td>{new Date(movement.occurredAt).toLocaleString()}</td>
-                <td>{movement.movementType}</td>
-                <td>{movement.quantity}</td>
-                <td>{movement.unitCost ?? 'Unknown'}</td>
-                <td>{movement.reasonCode ?? '—'}</td>
-                <td>{movement.sourceType}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </main>
+    </>
   );
 }
 
 export default function MovementsPage() {
   return (
-    <Suspense fallback={<p>Loading...</p>}>
+    <Suspense fallback={<LoadingState />}>
       <MovementsContent />
     </Suspense>
   );

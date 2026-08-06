@@ -1,9 +1,22 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
 import { useStores } from '@/lib/use-stores';
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  ErrorNotice,
+  LoadingState,
+  PageHeader,
+  Select,
+  Table,
+  Td,
+  Th,
+  Tr,
+} from '@/components/ui';
 
 type UnmappedItem = Awaited<ReturnType<typeof trpc.posItems.listUnmapped.query>>[number];
 
@@ -19,6 +32,9 @@ export default function PosItemsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pendingItemId, setPendingItemId] = useState<string | null>(null);
+  /** Which menu item the human has selected per row — defaults to the top suggestion, but the
+   *  selection is always explicit state, never read back out of the DOM at submit time. */
+  const [choices, setChoices] = useState<Record<string, string>>({});
 
   const load = useCallback(() => {
     if (!selectedStoreId) return;
@@ -26,7 +42,16 @@ export default function PosItemsPage() {
     setError(null);
     trpc.posItems.listUnmapped
       .query({ storeId: selectedStoreId })
-      .then(setItems)
+      .then((result) => {
+        setItems(result);
+        setChoices(
+          Object.fromEntries(
+            result
+              .filter((item) => item.suggestions.length > 0)
+              .map((item) => [item.id, item.suggestions[0]!.menuItemId])
+          )
+        );
+      })
       .catch(() => setError('Could not load unmapped POS items.'))
       .finally(() => setLoading(false));
   }, [selectedStoreId]);
@@ -62,94 +87,121 @@ export default function PosItemsPage() {
   };
 
   return (
-    <main>
-      <h1>Map POS items</h1>
-      <nav>
-        <Link href="/products">Products</Link> · <Link href="/recipes">Recipes</Link>
-      </nav>
-      <p>
-        Every item your POS has sold that isn&apos;t linked to a menu item yet, ranked by revenue —
-        mapping the top few usually covers most of your sales. Confirm a suggested match, pick a
-        different one, or mark an item as not a menu item at all (a gift card, a tip line).
-      </p>
+    <>
+      <PageHeader
+        title="Map POS items"
+        description="Everything your POS has sold that isn't linked to a menu item yet, ranked by revenue — mapping the top few usually covers most of your sales. You confirm every match; nothing is mapped automatically."
+        actions={
+          !storesLoading && stores.length > 0 ? (
+            <Select
+              value={selectedStoreId}
+              onChange={(event) => setSelectedStoreId(event.target.value)}
+              className="w-auto"
+            >
+              {stores.map((store) => (
+                <option key={store.id} value={store.id}>
+                  {store.name}
+                </option>
+              ))}
+            </Select>
+          ) : null
+        }
+      />
 
-      {storesLoading && <p>Loading stores...</p>}
-      {!storesLoading && stores.length === 0 && <p>No stores available.</p>}
-      {!storesLoading && stores.length > 0 && (
-        <label>
-          Store:{' '}
-          <select value={selectedStoreId} onChange={(event) => setSelectedStoreId(event.target.value)}>
-            {stores.map((store) => (
-              <option key={store.id} value={store.id}>
-                {store.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
+      {error && <ErrorNotice>{error}</ErrorNotice>}
 
-      {loading && <p>Loading...</p>}
-      {error && <p role="alert">{error}</p>}
-      {!loading && !error && items.length === 0 && <p>Nothing left to map at this store.</p>}
-      {!loading && !error && items.length > 0 && (
-        <table>
-          <thead>
-            <tr>
-              <th>POS item</th>
-              <th>Revenue (trailing)</th>
-              <th>Suggested menu item</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((item) => {
-              const bestSuggestion = item.suggestions[0];
-              const isPending = pendingItemId === item.id;
-              return (
-                <tr key={item.id}>
-                  <td>{item.name}</td>
-                  <td>{item.totalRevenue}</td>
-                  <td>
-                    {item.suggestions.length === 0 && <em>No close match found</em>}
-                    {item.suggestions.length > 0 && (
-                      <select
-                        defaultValue={bestSuggestion?.menuItemId}
-                        id={`suggestion-${item.id}`}
-                        disabled={isPending}
-                      >
-                        {item.suggestions.map((suggestion) => (
-                          <option key={suggestion.menuItemId} value={suggestion.menuItemId}>
-                            {suggestion.name} ({Math.round(suggestion.score * 100)}% match)
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                  </td>
-                  <td>
-                    {item.suggestions.length > 0 && (
-                      <button
-                        type="button"
-                        disabled={isPending}
-                        onClick={() => {
-                          const select = document.getElementById(`suggestion-${item.id}`) as HTMLSelectElement | null;
-                          const menuItemId = select?.value ?? bestSuggestion?.menuItemId;
-                          if (menuItemId) void handleMap(item.id, menuItemId);
-                        }}
-                      >
-                        Confirm
-                      </button>
-                    )}
-                    {' '}
-                    <button type="button" disabled={isPending} onClick={() => void handleIgnore(item.id)}>
-                      Not a menu item
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      )}
-    </main>
+      <Card>
+        {(loading || storesLoading) && <LoadingState />}
+        {!storesLoading && stores.length === 0 && <EmptyState title="No stores available." />}
+        {!loading && !error && stores.length > 0 && items.length === 0 && (
+          <EmptyState
+            title="Everything's mapped"
+            hint="Every POS item at this store is either linked to a menu item or marked as not a menu item."
+          />
+        )}
+        {!loading && !error && items.length > 0 && (
+          <Table>
+            <thead>
+              <tr>
+                <Th>POS item</Th>
+                <Th align="right">Revenue</Th>
+                <Th>Suggested menu item</Th>
+                <Th />
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((item) => {
+                const isPending = pendingItemId === item.id;
+                const topScore = item.suggestions[0]?.score;
+                return (
+                  <Tr key={item.id}>
+                    <Td className="font-medium">{item.name}</Td>
+                    <Td align="right" className="tabular text-content-muted">
+                      {item.totalRevenue === '0' ? (
+                        <span className="text-content-subtle">—</span>
+                      ) : (
+                        item.totalRevenue
+                      )}
+                    </Td>
+                    <Td>
+                      {item.suggestions.length === 0 ? (
+                        <span className="text-sm text-content-subtle italic">No close match</span>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <Select
+                            value={choices[item.id] ?? item.suggestions[0]!.menuItemId}
+                            onChange={(e) =>
+                              setChoices((prev) => ({ ...prev, [item.id]: e.target.value }))
+                            }
+                            disabled={isPending}
+                            className="w-auto min-w-44"
+                          >
+                            {item.suggestions.map((suggestion) => (
+                              <option key={suggestion.menuItemId} value={suggestion.menuItemId}>
+                                {suggestion.name}
+                              </option>
+                            ))}
+                          </Select>
+                          {topScore !== undefined && (
+                            <Badge tone={topScore >= 0.9 ? 'positive' : 'warning'}>
+                              {Math.round(topScore * 100)}%
+                            </Badge>
+                          )}
+                        </div>
+                      )}
+                    </Td>
+                    <Td align="right">
+                      <div className="flex justify-end gap-2">
+                        {item.suggestions.length > 0 && (
+                          <Button
+                            type="button"
+                            variant="primary"
+                            disabled={isPending}
+                            onClick={() => {
+                              const menuItemId = choices[item.id] ?? item.suggestions[0]!.menuItemId;
+                              void handleMap(item.id, menuItemId);
+                            }}
+                          >
+                            Confirm
+                          </Button>
+                        )}
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          disabled={isPending}
+                          onClick={() => void handleIgnore(item.id)}
+                        >
+                          Not a menu item
+                        </Button>
+                      </div>
+                    </Td>
+                  </Tr>
+                );
+              })}
+            </tbody>
+          </Table>
+        )}
+      </Card>
+    </>
   );
 }

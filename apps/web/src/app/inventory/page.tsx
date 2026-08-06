@@ -4,6 +4,20 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
 import { useStores } from '@/lib/use-stores';
+import {
+  Button,
+  Card,
+  EmptyState,
+  ErrorNotice,
+  LoadingState,
+  PageHeader,
+  Select,
+  Table,
+  Td,
+  Th,
+  Tr,
+  Value,
+} from '@/components/ui';
 
 type StockLevel = Awaited<ReturnType<typeof trpc.inventory.levels.query>>[number];
 type Product = Awaited<ReturnType<typeof trpc.products.list.query>>[number];
@@ -33,63 +47,105 @@ export default function InventoryPage() {
   }, [selectedStoreId]);
 
   return (
-    <main>
-      <h1>Stock levels</h1>
-      <nav>
-        <Link href="/products">Products</Link> · <Link href="/inventory/waste">Log waste</Link> ·{' '}
-        <Link href="/inventory/stocktake">Stocktakes</Link>
-      </nav>
+    <>
+      <PageHeader
+        title="Stock levels"
+        description="What's on hand right now, projected from the movement ledger — every number here traces back to a recorded movement."
+        actions={
+          <div className="flex items-center gap-2">
+            {!storesLoading && stores.length > 0 && (
+              <Select
+                value={selectedStoreId}
+                onChange={(event) => setSelectedStoreId(event.target.value)}
+                className="w-auto"
+              >
+                {stores.map((store) => (
+                  <option key={store.id} value={store.id}>
+                    {store.name}
+                  </option>
+                ))}
+              </Select>
+            )}
+            <Link href="/inventory/waste">
+              <Button>Log waste</Button>
+            </Link>
+            <Link href="/inventory/stocktake">
+              <Button variant="primary">Stocktakes</Button>
+            </Link>
+          </div>
+        }
+      />
 
-      {storesLoading && <p>Loading stores...</p>}
-      {!storesLoading && stores.length === 0 && <p>No stores available.</p>}
-      {!storesLoading && stores.length > 0 && (
-        <label>
-          Store:{' '}
-          <select value={selectedStoreId} onChange={(event) => setSelectedStoreId(event.target.value)}>
-            {stores.map((store) => (
-              <option key={store.id} value={store.id}>
-                {store.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
+      {error && <ErrorNotice>{error}</ErrorNotice>}
 
-      {loading && <p>Loading...</p>}
-      {error && <p role="alert">{error}</p>}
-      {!loading && !error && levels.length === 0 && <p>No stock recorded at this store yet.</p>}
-      {!loading && !error && levels.length > 0 && (
-        <table>
-          <thead>
-            <tr>
-              <th>Product</th>
-              <th>Quantity</th>
-              <th>Avg unit cost</th>
-              <th>Last movement</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {levels.map((level) => (
-              <tr key={`${level.productId}-${level.variantId}`}>
-                <td>{productsById.get(level.productId)?.name ?? level.productId}</td>
-                <td>{level.quantity}</td>
-                <td>{level.avgUnitCost ?? 'Unknown'}</td>
-                <td>{level.lastMovementAt ? new Date(level.lastMovementAt).toLocaleString() : '—'}</td>
-                <td>
-                  <Link
-                    href={`/inventory/movements?storeId=${selectedStoreId}&productId=${level.productId}&variantId=${level.variantId}`}
-                  >
-                    Movements
-                  </Link>
-                  {' · '}
-                  <Link href={`/inventory/lots?storeId=${selectedStoreId}&productId=${level.productId}`}>Lots</Link>
-                </td>
+      <Card>
+        {(loading || storesLoading) && <LoadingState />}
+        {!storesLoading && stores.length === 0 && <EmptyState title="No stores available." />}
+        {!loading && !error && stores.length > 0 && levels.length === 0 && (
+          <EmptyState
+            title="No stock recorded yet"
+            hint="Stock appears here once goods are received or counted."
+          />
+        )}
+        {!loading && !error && levels.length > 0 && (
+          <Table>
+            <thead>
+              <tr>
+                <Th>Product</Th>
+                <Th align="right">On hand</Th>
+                <Th align="right">Avg unit cost</Th>
+                <Th>Last movement</Th>
+                <Th />
               </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </main>
+            </thead>
+            <tbody>
+              {levels.map((level) => {
+                const negative = Number(level.quantity) < 0;
+                return (
+                  <Tr key={`${level.productId}-${level.variantId}`}>
+                    <Td className="font-medium">
+                      {productsById.get(level.productId)?.name ?? (
+                        <span className="text-content-subtle">{level.productId.slice(0, 8)}…</span>
+                      )}
+                    </Td>
+                    <Td align="right">
+                      <span className={negative ? 'tabular font-medium text-danger' : 'tabular'}>
+                        {level.quantity}
+                      </span>
+                    </Td>
+                    <Td align="right">
+                      <Value value={level.avgUnitCost} />
+                    </Td>
+                    <Td className="text-content-muted">
+                      {level.lastMovementAt ? (
+                        new Date(level.lastMovementAt).toLocaleString()
+                      ) : (
+                        <span className="text-content-subtle">—</span>
+                      )}
+                    </Td>
+                    <Td align="right">
+                      <div className="flex justify-end gap-3 text-sm font-medium">
+                        <Link
+                          href={`/inventory/movements?storeId=${selectedStoreId}&productId=${level.productId}&variantId=${level.variantId}`}
+                          className="text-accent hover:underline"
+                        >
+                          Movements
+                        </Link>
+                        <Link
+                          href={`/inventory/lots?storeId=${selectedStoreId}&productId=${level.productId}`}
+                          className="text-accent hover:underline"
+                        >
+                          Lots
+                        </Link>
+                      </div>
+                    </Td>
+                  </Tr>
+                );
+              })}
+            </tbody>
+          </Table>
+        )}
+      </Card>
+    </>
   );
 }

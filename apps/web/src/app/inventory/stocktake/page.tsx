@@ -4,6 +4,15 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
 import { useStores } from '@/lib/use-stores';
+import {
+  Button,
+  Card,
+  ErrorNotice,
+  Field,
+  LoadingState,
+  PageHeader,
+  Select,
+} from '@/components/ui';
 
 export default function StocktakeListPage() {
   const { stores, selectedStoreId, setSelectedStoreId, loading: storesLoading } = useStores();
@@ -40,38 +49,63 @@ export default function StocktakeListPage() {
   }, [selectedStoreId]);
 
   return (
-    <main>
-      <h1>Stocktakes</h1>
-      <nav>
-        <Link href="/inventory">Back to stock levels</Link>
-      </nav>
+    <>
+      <PageHeader
+        title="Stocktakes"
+        description="Starting a count freezes the theoretical balance at that moment, so sales during the count don't show up as phantom variance."
+        actions={
+          <Link href="/inventory">
+            <Button variant="ghost">Back</Button>
+          </Link>
+        }
+      />
 
-      {storesLoading && <p>Loading stores...</p>}
+      {storesLoading && <LoadingState />}
+
       {!storesLoading && stores.length > 0 && (
-        <>
-          <label>
-            Store:{' '}
-            <select value={selectedStoreId} onChange={(event) => setSelectedStoreId(event.target.value)}>
-              {stores.map((store) => (
-                <option key={store.id} value={store.id}>
-                  {store.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <br />
-          <button type="button" onClick={handleCreateFull} disabled={creating}>
-            {creating ? 'Creating...' : 'Start a full count'}
-          </button>
-        </>
-      )}
+        <Card className="max-w-lg p-6">
+          <div className="space-y-5">
+            {error && <ErrorNotice>{error}</ErrorNotice>}
+            {lastCreatedId && (
+              <div
+                role="status"
+                className="flex items-center justify-between gap-3 rounded-card border border-positive/30 bg-positive-soft px-4 py-3 text-sm text-positive"
+              >
+                <span>Count sheet created.</span>
+                <Link
+                  href={`/inventory/stocktake/${lastCreatedId}`}
+                  className="font-medium underline underline-offset-2"
+                >
+                  Open it
+                </Link>
+              </div>
+            )}
 
-      {error && <p role="alert">{error}</p>}
-      {lastCreatedId && (
-        <p role="status">
-          Count created. <Link href={`/inventory/stocktake/${lastCreatedId}`}>Open it</Link>
-        </p>
+            <Field label="Store">
+              <Select
+                value={selectedStoreId}
+                onChange={(event) => setSelectedStoreId(event.target.value)}
+              >
+                {stores.map((store) => (
+                  <option key={store.id} value={store.id}>
+                    {store.name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+
+            <Button
+              type="button"
+              variant="primary"
+              onClick={handleCreateFull}
+              disabled={creating}
+              className="w-full"
+            >
+              {creating ? 'Creating…' : 'Start a full count'}
+            </Button>
+          </div>
+        </Card>
       )}
-    </main>
+    </>
   );
 }

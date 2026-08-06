@@ -793,4 +793,12 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     },
     buildInput: (resourceId) => ({ id: resourceId }),
   },
+  {
+    // Store-scoped, same shape as inventory.levels — the store-ownership check is the first thing
+    // the dashboard runs, before any metric is computed.
+    path: 'dashboard.summary',
+    type: 'query',
+    seedResource: seedStore,
+    buildInput: (resourceId) => ({ storeId: resourceId, days: 30 }),
+  },
 ];

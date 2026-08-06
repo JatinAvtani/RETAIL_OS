@@ -11,8 +11,9 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@retailos/db": "workspace:*",
     "@retailos/domain": "workspace:*",
-    "@retailos/db": "workspace:*"
+    "decimal.js": "^10.6.0"
   },
   "devDependencies": {
     "fast-check": "^3.23.2",

@@ -3,8 +3,29 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  ErrorNotice,
+  Input,
+  LoadingState,
+  PageHeader,
+  Table,
+  Td,
+  Th,
+  Tr,
+  type BadgeTone,
+} from '@/components/ui';
 
 type Product = Awaited<ReturnType<typeof trpc.products.list.query>>[number];
+
+const TYPE_TONES: Record<string, BadgeTone> = {
+  INGREDIENT: 'neutral',
+  SELLABLE: 'accent',
+  BOTH: 'positive',
+};
 
 export default function ProductsPage() {
   const [products, setProducts] = useState<Product[]>([]);
@@ -23,45 +44,70 @@ export default function ProductsPage() {
   }, [search]);
 
   return (
-    <main>
-      <h1>Products</h1>
-      <nav>
-        <Link href="/products/new">New product</Link> · <Link href="/recipes">Recipes</Link> ·{' '}
-        <Link href="/pos-items">Map POS items</Link>
-      </nav>
-      <input
-        type="search"
-        placeholder="Search by name"
-        value={search}
-        onChange={(event) => setSearch(event.target.value)}
+    <>
+      <PageHeader
+        title="Products"
+        description="Everything you buy or make — ingredients, prepared items, and the units they're tracked in."
+        actions={
+          <Link href="/products/new">
+            <Button variant="primary">New product</Button>
+          </Link>
+        }
       />
-      {loading && <p>Loading...</p>}
-      {error && <p role="alert">{error}</p>}
-      {!loading && !error && products.length === 0 && <p>No products found.</p>}
-      {!loading && !error && products.length > 0 && (
-        <table>
-          <thead>
-            <tr>
-              <th>SKU</th>
-              <th>Name</th>
-              <th>Type</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {products.map((product) => (
-              <tr key={product.id}>
-                <td>{product.sku}</td>
-                <td>{product.name}</td>
-                <td>{product.type}</td>
-                <td>
-                  <Link href={`/products/${product.id}/edit`}>Edit</Link>
-                </td>
+
+      {error && <ErrorNotice>{error}</ErrorNotice>}
+
+      <div className="mb-4 max-w-xs">
+        <Input
+          type="search"
+          placeholder="Search by name…"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+        />
+      </div>
+
+      <Card>
+        {loading && <LoadingState />}
+        {!loading && !error && products.length === 0 && (
+          <EmptyState
+            title="No products yet"
+            hint={search ? 'Try a different search term.' : 'Add your first product to get started.'}
+          />
+        )}
+        {!loading && !error && products.length > 0 && (
+          <Table>
+            <thead>
+              <tr>
+                <Th>SKU</Th>
+                <Th>Name</Th>
+                <Th>Type</Th>
+                <Th />
               </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </main>
+            </thead>
+            <tbody>
+              {products.map((product) => (
+                <Tr key={product.id}>
+                  <Td className="tabular text-content-muted">{product.sku}</Td>
+                  <Td className="font-medium">{product.name}</Td>
+                  <Td>
+                    <Badge tone={TYPE_TONES[product.type] ?? 'neutral'}>
+                      {product.type.toLowerCase()}
+                    </Badge>
+                  </Td>
+                  <Td align="right">
+                    <Link
+                      href={`/products/${product.id}/edit`}
+                      className="text-sm font-medium text-accent hover:underline"
+                    >
+                      Edit
+                    </Link>
+                  </Td>
+                </Tr>
+              ))}
+            </tbody>
+          </Table>
+        )}
+      </Card>
+    </>
   );
 }

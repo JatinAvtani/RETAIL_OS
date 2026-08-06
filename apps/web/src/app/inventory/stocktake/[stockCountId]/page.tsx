@@ -4,11 +4,33 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { trpc } from '@/lib/trpc';
+import {
+  Badge,
+  Button,
+  Card,
+  ErrorNotice,
+  Input,
+  LoadingState,
+  PageHeader,
+  Table,
+  Td,
+  Th,
+  Tr,
+  type BadgeTone,
+} from '@/components/ui';
 
 type CountDetail = Awaited<ReturnType<typeof trpc.stocktake.get.query>>;
 type Line = CountDetail['lines'][number];
 
 const LARGE_VARIANCE_HINT_THRESHOLD = 0.1;
+
+const STATUS_TONES: Record<string, BadgeTone> = {
+  DRAFT: 'neutral',
+  IN_PROGRESS: 'accent',
+  SUBMITTED: 'warning',
+  APPROVED: 'positive',
+  REJECTED: 'danger',
+};
 
 /**
  * The actual "stocktake sheet" plan.md Phase 7 describes — lines already arrive ordered by
@@ -71,114 +93,214 @@ export default function StocktakeDetailPage() {
     );
   };
 
-  if (loading) return <p>Loading...</p>;
-  if (error && !detail) return <p role="alert">{error}</p>;
+  if (loading) return <LoadingState />;
+  if (error && !detail) return <ErrorNotice>{error}</ErrorNotice>;
   if (!detail) return null;
 
   const { count, lines } = detail;
 
   return (
-    <main>
-      <h1>Stock count — {count.scope}</h1>
-      <nav>
-        <Link href="/inventory/stocktake">Back to stocktakes</Link>
-      </nav>
-      <p>
-        Status: <strong>{count.status}</strong>
-      </p>
-      {error && <p role="alert">{error}</p>}
+    <>
+      <PageHeader
+        title="Stock count"
+        description="Counted quantities are compared against the balance frozen when the count started, not the live balance."
+        actions={
+          <div className="flex items-center gap-2">
+            <Badge tone={STATUS_TONES[count.status] ?? 'neutral'}>
+              {count.status.toLowerCase().replace(/_/g, ' ')}
+            </Badge>
+            <Link href="/inventory/stocktake">
+              <Button variant="ghost">Back</Button>
+            </Link>
+          </div>
+        }
+      />
 
-      <div>
-        {count.status === 'DRAFT' && (
-          <button type="button" disabled={busy} onClick={() => runAction(() => trpc.stocktake.start.mutate({ stockCountId }), 'Could not start this count.')}>
-            Start count (freezes theoretical quantities)
-          </button>
-        )}
-        {count.status === 'IN_PROGRESS' && (
-          <button type="button" disabled={busy} onClick={() => runAction(() => trpc.stocktake.submit.mutate({ stockCountId }), 'Every line must be counted before submitting.')}>
-            Submit count
-          </button>
-        )}
-        {count.status === 'SUBMITTED' && (
-          <>
-            <button type="button" disabled={busy} onClick={() => runAction(() => trpc.stocktake.approve.mutate({ stockCountId }), 'Could not approve — a large variance may need a reason code, or a surplus line may have no known cost.')}>
-              Approve
-            </button>{' '}
-            <button type="button" disabled={busy} onClick={() => runAction(() => trpc.stocktake.reject.mutate({ stockCountId }), 'Could not reject this count.')}>
-              Reject
-            </button>
-          </>
-        )}
-      </div>
+      {error && <ErrorNotice>{error}</ErrorNotice>}
 
-      <table>
-        <thead>
-          <tr>
-            <th>Storage location</th>
-            <th>Product</th>
-            <th>Theoretical (T0)</th>
-            <th>Counted</th>
-            <th>Variance</th>
-            <th>Reason</th>
-          </tr>
-        </thead>
-        <tbody>
-          {lines.map((line) => {
-            const theoretical = line.line.theoreticalQuantityT0 ? Number(line.line.theoreticalQuantityT0) : null;
-            const varianceValue = line.line.varianceValue ? Number(line.line.varianceValue) : null;
-            const magnitude =
-              theoretical && theoretical !== 0 && line.line.varianceQuantity
-                ? Math.abs(Number(line.line.varianceQuantity)) / Math.abs(theoretical)
-                : 0;
-            const needsReason = magnitude >= LARGE_VARIANCE_HINT_THRESHOLD && !line.line.reasonCode;
+      {count.status !== 'APPROVED' && count.status !== 'REJECTED' && (
+        <Card className="mb-6 flex flex-wrap items-center justify-between gap-3 px-5 py-4">
+          <p className="text-sm text-content-muted">
+            {count.status === 'DRAFT' && 'Starting the count freezes the theoretical balance for every line.'}
+            {count.status === 'IN_PROGRESS' && 'Enter a counted quantity for every line, then submit.'}
+            {count.status === 'SUBMITTED' && 'Approving posts adjustment movements to the ledger.'}
+          </p>
+          <div className="flex gap-2">
+            {count.status === 'DRAFT' && (
+              <Button
+                variant="primary"
+                disabled={busy}
+                onClick={() =>
+                  runAction(
+                    () => trpc.stocktake.start.mutate({ stockCountId }),
+                    'Could not start this count.'
+                  )
+                }
+              >
+                Start count
+              </Button>
+            )}
+            {count.status === 'IN_PROGRESS' && (
+              <Button
+                variant="primary"
+                disabled={busy}
+                onClick={() =>
+                  runAction(
+                    () => trpc.stocktake.submit.mutate({ stockCountId }),
+                    'Every line must be counted before submitting.'
+                  )
+                }
+              >
+                Submit count
+              </Button>
+            )}
+            {count.status === 'SUBMITTED' && (
+              <>
+                <Button
+                  variant="primary"
+                  disabled={busy}
+                  onClick={() =>
+                    runAction(
+                      () => trpc.stocktake.approve.mutate({ stockCountId }),
+                      'Could not approve — a large variance may need a reason code, or a surplus line may have no known cost.'
+                    )
+                  }
+                >
+                  Approve
+                </Button>
+                <Button
+                  variant="danger"
+                  disabled={busy}
+                  onClick={() =>
+                    runAction(
+                      () => trpc.stocktake.reject.mutate({ stockCountId }),
+                      'Could not reject this count.'
+                    )
+                  }
+                >
+                  Reject
+                </Button>
+              </>
+            )}
+          </div>
+        </Card>
+      )}
 
-            return (
-              <tr key={line.line.id}>
-                <td>{line.storageLocationName ?? 'Unassigned'}</td>
-                <td>{line.productName} ({line.productSku})</td>
-                <td>{line.line.theoreticalQuantityT0 ?? 'Not yet started'}</td>
-                <td>
-                  {count.status === 'IN_PROGRESS' ? (
-                    <>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        defaultValue={line.line.countedQuantity ?? ''}
-                        onChange={(event) => setCounted(new Map(counted).set(line.line.id, event.target.value))}
-                      />{' '}
-                      <button type="button" disabled={busy} onClick={() => handleEnterCount(line)}>
-                        Save
-                      </button>
-                    </>
-                  ) : (
-                    (line.line.countedQuantity ?? '—')
-                  )}
-                </td>
-                <td>
-                  {line.line.varianceQuantity ?? '—'}
-                  {varianceValue !== null && ` (${varianceValue.toFixed(2)})`}
-                </td>
-                <td>
-                  {line.line.reasonCode ?? (needsReason ? 'Required' : '—')}
-                  {count.status === 'SUBMITTED' && needsReason && (
-                    <>
-                      {' '}
-                      <input
-                        type="text"
-                        placeholder="Reason"
-                        onChange={(event) => setReasons(new Map(reasons).set(line.line.id, event.target.value))}
-                      />{' '}
-                      <button type="button" disabled={busy} onClick={() => handleSetReason(line)}>
-                        Save reason
-                      </button>
-                    </>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </main>
+      <Card>
+        <Table>
+          <thead>
+            <tr>
+              <Th>Location</Th>
+              <Th>Product</Th>
+              <Th align="right">Theoretical</Th>
+              <Th align="right">Counted</Th>
+              <Th align="right">Variance</Th>
+              <Th>Reason</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {lines.map((line) => {
+              const theoretical = line.line.theoreticalQuantityT0
+                ? Number(line.line.theoreticalQuantityT0)
+                : null;
+              const varianceValue = line.line.varianceValue ? Number(line.line.varianceValue) : null;
+              const varianceQty = line.line.varianceQuantity ? Number(line.line.varianceQuantity) : null;
+              const magnitude =
+                theoretical && theoretical !== 0 && line.line.varianceQuantity
+                  ? Math.abs(Number(line.line.varianceQuantity)) / Math.abs(theoretical)
+                  : 0;
+              const needsReason = magnitude >= LARGE_VARIANCE_HINT_THRESHOLD && !line.line.reasonCode;
+
+              return (
+                <Tr key={line.line.id}>
+                  <Td className="text-content-muted">{line.storageLocationName ?? 'Unassigned'}</Td>
+                  <Td>
+                    <span className="font-medium">{line.productName}</span>
+                    <span className="ml-2 text-xs text-content-subtle">{line.productSku}</span>
+                  </Td>
+                  <Td align="right" className="tabular text-content-muted">
+                    {line.line.theoreticalQuantityT0 ?? (
+                      <span className="text-content-subtle italic">Not started</span>
+                    )}
+                  </Td>
+                  <Td align="right">
+                    {count.status === 'IN_PROGRESS' ? (
+                      <div className="flex items-center justify-end gap-2">
+                        <Input
+                          type="text"
+                          inputMode="decimal"
+                          defaultValue={line.line.countedQuantity ?? ''}
+                          onChange={(event) =>
+                            setCounted(new Map(counted).set(line.line.id, event.target.value))
+                          }
+                          className="w-24 text-right"
+                        />
+                        <Button type="button" disabled={busy} onClick={() => handleEnterCount(line)}>
+                          Save
+                        </Button>
+                      </div>
+                    ) : (
+                      <span className="tabular">
+                        {line.line.countedQuantity ?? <span className="text-content-subtle">—</span>}
+                      </span>
+                    )}
+                  </Td>
+                  <Td align="right">
+                    {varianceQty === null ? (
+                      <span className="text-content-subtle">—</span>
+                    ) : (
+                      <span
+                        className={
+                          varianceQty < 0
+                            ? 'tabular font-medium text-danger'
+                            : varianceQty > 0
+                              ? 'tabular font-medium text-positive'
+                              : 'tabular text-content-muted'
+                        }
+                      >
+                        {varianceQty > 0 ? '+' : ''}
+                        {line.line.varianceQuantity}
+                        {varianceValue !== null && (
+                          <span className="ml-1 text-xs text-content-subtle">
+                            ({varianceValue.toFixed(2)})
+                          </span>
+                        )}
+                      </span>
+                    )}
+                  </Td>
+                  <Td>
+                    {line.line.reasonCode ? (
+                      <span className="text-sm text-content-muted">{line.line.reasonCode}</span>
+                    ) : needsReason ? (
+                      <div className="flex items-center gap-2">
+                        {count.status === 'SUBMITTED' ? (
+                          <>
+                            <Input
+                              type="text"
+                              placeholder="Reason required"
+                              onChange={(event) =>
+                                setReasons(new Map(reasons).set(line.line.id, event.target.value))
+                              }
+                              className="w-36"
+                            />
+                            <Button type="button" disabled={busy} onClick={() => handleSetReason(line)}>
+                              Save
+                            </Button>
+                          </>
+                        ) : (
+                          <Badge tone="warning">Reason required</Badge>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-content-subtle">—</span>
+                    )}
+                  </Td>
+                </Tr>
+              );
+            })}
+          </tbody>
+        </Table>
+      </Card>
+    </>
   );
 }

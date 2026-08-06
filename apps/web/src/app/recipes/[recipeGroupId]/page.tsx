@@ -2,7 +2,21 @@
 
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
+import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  ErrorNotice,
+  LoadingState,
+  PageHeader,
+  Table,
+  Td,
+  Th,
+  Tr,
+} from '@/components/ui';
 
 type RecipeDetail = Awaited<ReturnType<typeof trpc.recipes.get.query>>;
 type RecipeCost = Awaited<ReturnType<typeof trpc.recipes.cost.query>>;
@@ -28,6 +42,7 @@ export default function RecipeDetailPage() {
   const params = useParams<{ recipeGroupId: string }>();
   const [recipe, setRecipe] = useState<RecipeDetail | null>(null);
   const [cost, setCost] = useState<RecipeCost | null>(null);
+  const [productNames, setProductNames] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
   const [costLoading, setCostLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -44,68 +59,119 @@ export default function RecipeDetailPage() {
       .then(setCost)
       .catch(() => setCost(null))
       .finally(() => setCostLoading(false));
+
+    // The cost breakdown returns productIds only; resolve them to real names for display so the
+    // table doesn't show raw UUIDs. Purely presentational — no number is derived here.
+    trpc.products.list
+      .query()
+      .then((products) => setProductNames(new Map(products.map((p) => [p.id, p.name]))))
+      .catch(() => setProductNames(new Map()));
   }, [params.recipeGroupId]);
 
-  if (loading) return <p>Loading...</p>;
-  if (error || !recipe) return <p role="alert">{error ?? 'Recipe not found.'}</p>;
+  if (loading) return <LoadingState />;
+  if (error || !recipe) return <ErrorNotice>{error ?? 'Recipe not found.'}</ErrorNotice>;
+
+  const costKnown = !costLoading && cost && cost.total !== 'unknown';
 
   return (
-    <main>
-      <h1>{recipe.name}</h1>
-      <p>
-        Yield: {recipe.yieldQuantity} ({recipe.yieldUnitId})
-      </p>
+    <>
+      <PageHeader
+        title={recipe.name}
+        description={`Yields ${recipe.yieldQuantity} per batch.`}
+        actions={
+          <Link href="/recipes">
+            <Button variant="ghost">Back to recipes</Button>
+          </Link>
+        }
+      />
 
-      <section>
-        <h2>Cost</h2>
-        {costLoading && <p>Computing...</p>}
-        {!costLoading && (!cost || cost.total === 'unknown') && (
-          <p>Cost unknown — at least one component has no confirmed supplier price.</p>
-        )}
-        {!costLoading && cost && cost.total !== 'unknown' && (
-          <p>
-            {cost.total.currency} {formatMoneyAmount(cost.total.amount)}
-          </p>
-        )}
+      {/* The cost panel is the product's core claim made visible: a real, server-computed number
+          from the metric catalog, or an explicit "unknown" — never a plausible-looking zero. */}
+      <Card className="mb-6 overflow-hidden">
+        <div className="flex flex-wrap items-end justify-between gap-4 bg-surface-sunken/50 px-6 py-5">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-content-subtle">
+              Cost per batch
+            </p>
+            {costLoading && <p className="mt-2 text-sm text-content-muted">Computing…</p>}
+            {!costLoading && !costKnown && (
+              <p className="mt-1.5 text-3xl font-semibold tracking-tight text-content-subtle">Unknown</p>
+            )}
+            {costKnown && (
+              <p className="tabular mt-1.5 text-3xl font-semibold tracking-tight text-content">
+                <span className="mr-1 text-lg font-medium text-content-muted">
+                  {cost!.total !== 'unknown' && cost!.total.currency}
+                </span>
+                {cost!.total !== 'unknown' && formatMoneyAmount(cost!.total.amount)}
+              </p>
+            )}
+          </div>
+          {!costLoading && !costKnown && (
+            <p className="max-w-sm text-sm text-content-muted">
+              At least one ingredient has no confirmed supplier price. We show{' '}
+              <strong className="font-medium text-content">unknown</strong> rather than a zero — a
+              guessed zero would silently overstate your margin.
+            </p>
+          )}
+        </div>
+
         {!costLoading && cost && cost.lines.length > 0 && (
-          <table>
+          <Table>
             <thead>
               <tr>
-                <th>Product</th>
-                <th>Cost</th>
+                <Th>Ingredient</Th>
+                <Th align="right">Cost</Th>
               </tr>
             </thead>
             <tbody>
               {cost.lines.map((line) => (
-                <tr key={line.productId}>
-                  <td>{line.productId}</td>
-                  <td>{line.cost === 'unknown' ? 'Cost unknown' : `${line.cost.currency} ${formatMoneyAmount(line.cost.amount)}`}</td>
-                </tr>
+                <Tr key={line.productId}>
+                  <Td className="font-medium">
+                    {productNames.get(line.productId) ?? (
+                      <span className="text-content-subtle">{line.productId.slice(0, 8)}…</span>
+                    )}
+                  </Td>
+                  <Td align="right">
+                    {line.cost === 'unknown' ? (
+                      <Badge tone="warning">Unknown</Badge>
+                    ) : (
+                      <span className="tabular">
+                        {line.cost.currency} {formatMoneyAmount(line.cost.amount)}
+                      </span>
+                    )}
+                  </Td>
+                </Tr>
               ))}
             </tbody>
-          </table>
+          </Table>
         )}
-      </section>
+      </Card>
 
-      <section>
-        <h2>Components</h2>
-        <table>
+      <Card>
+        <CardHeader title="Components" />
+        <Table>
           <thead>
             <tr>
-              <th>Type</th>
-              <th>Quantity</th>
+              <Th>Type</Th>
+              <Th align="right">Quantity</Th>
             </tr>
           </thead>
           <tbody>
             {recipe.components.map((component) => (
-              <tr key={component.id}>
-                <td>{component.componentType}</td>
-                <td>{component.quantity}</td>
-              </tr>
+              <Tr key={component.id}>
+                <Td>
+                  <Badge tone={component.componentType === 'PRODUCT' ? 'neutral' : 'accent'}>
+                    {component.componentType.toLowerCase().replace('_', ' ')}
+                  </Badge>
+                </Td>
+                <Td align="right" className="tabular">
+                  {component.quantity}
+                </Td>
+              </Tr>
             ))}
           </tbody>
-        </table>
-      </section>
-    </main>
+        </Table>
+      </Card>
+    </>
   );
 }

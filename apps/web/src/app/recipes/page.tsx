@@ -3,6 +3,18 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
+import {
+  Button,
+  Card,
+  EmptyState,
+  ErrorNotice,
+  LoadingState,
+  PageHeader,
+  Table,
+  Td,
+  Th,
+  Tr,
+} from '@/components/ui';
 
 type RecipeSummary = Awaited<ReturnType<typeof trpc.recipes.list.query>>[number];
 
@@ -20,38 +32,54 @@ export default function RecipesPage() {
   }, []);
 
   return (
-    <main>
-      <h1>Recipes</h1>
-      <nav>
-        <Link href="/recipes/new">New recipe</Link> · <Link href="/products">Products</Link>
-      </nav>
-      {loading && <p>Loading...</p>}
-      {error && <p role="alert">{error}</p>}
-      {!loading && !error && recipes.length === 0 && <p>No recipes found.</p>}
-      {!loading && !error && recipes.length > 0 && (
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Yield</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {recipes.map((recipe) => (
-              <tr key={recipe.recipeGroupId}>
-                <td>{recipe.name}</td>
-                <td>
-                  {recipe.yieldQuantity} {recipe.yieldUnitId}
-                </td>
-                <td>
-                  <Link href={`/recipes/${recipe.recipeGroupId}`}>View</Link>
-                </td>
+    <>
+      <PageHeader
+        title="Recipes"
+        description="What each menu item is made of — the link between ingredient cost and what you actually sell."
+        actions={
+          <Link href="/recipes/new">
+            <Button variant="primary">New recipe</Button>
+          </Link>
+        }
+      />
+
+      {error && <ErrorNotice>{error}</ErrorNotice>}
+
+      <Card>
+        {loading && <LoadingState />}
+        {!loading && !error && recipes.length === 0 && (
+          <EmptyState title="No recipes yet" hint="Create a recipe to see its computed cost." />
+        )}
+        {!loading && !error && recipes.length > 0 && (
+          <Table>
+            <thead>
+              <tr>
+                <Th>Name</Th>
+                <Th align="right">Yield</Th>
+                <Th />
               </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </main>
+            </thead>
+            <tbody>
+              {recipes.map((recipe) => (
+                <Tr key={recipe.recipeGroupId}>
+                  <Td className="font-medium">{recipe.name}</Td>
+                  <Td align="right" className="tabular">
+                    {recipe.yieldQuantity}
+                  </Td>
+                  <Td align="right">
+                    <Link
+                      href={`/recipes/${recipe.recipeGroupId}`}
+                      className="text-sm font-medium text-accent hover:underline"
+                    >
+                      View cost
+                    </Link>
+                  </Td>
+                </Tr>
+              ))}
+            </tbody>
+          </Table>
+        )}
+      </Card>
+    </>
   );
 }

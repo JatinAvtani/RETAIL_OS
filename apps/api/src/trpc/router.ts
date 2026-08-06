@@ -11,6 +11,7 @@ import { stocktakeRouter } from './routers/stocktake';
 import { integrationsRouter } from './routers/integrations';
 import { csvImportRouter } from './routers/csv-import';
 import { posItemsRouter } from './routers/pos-items';
+import { dashboardRouter } from './routers/dashboard';
 
 export const appRouter = router({
   auth: authRouter,
@@ -25,6 +26,7 @@ export const appRouter = router({
   integrations: integrationsRouter,
   csvImport: csvImportRouter,
   posItems: posItemsRouter,
+  dashboard: dashboardRouter,
 });
 
 export type AppRouter = typeof appRouter;

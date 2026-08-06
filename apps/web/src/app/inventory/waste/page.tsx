@@ -4,6 +4,16 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
 import { useStores } from '@/lib/use-stores';
+import {
+  Button,
+  Card,
+  ErrorNotice,
+  Field,
+  Input,
+  LoadingState,
+  PageHeader,
+  Select,
+} from '@/components/ui';
 
 type Product = Awaited<ReturnType<typeof trpc.products.list.query>>[number];
 type StockLevel = Awaited<ReturnType<typeof trpc.inventory.levels.query>>[number];
@@ -87,68 +97,93 @@ export default function WastePage() {
   };
 
   return (
-    <main>
-      <h1>Log waste</h1>
-      <nav>
-        <Link href="/inventory">Back to stock levels</Link>
-      </nav>
+    <>
+      <PageHeader
+        title="Log waste"
+        description="Quick entry for spoilage, spillage, and prep errors. Stock is drawn from the earliest-expiring lot automatically."
+        actions={
+          <Link href="/inventory">
+            <Button variant="ghost">Back</Button>
+          </Link>
+        }
+      />
 
-      {storesLoading && <p>Loading stores...</p>}
+      {storesLoading && <LoadingState />}
+
       {!storesLoading && stores.length > 0 && (
-        <form onSubmit={handleSubmit}>
-          <label>
-            Store:{' '}
-            <select value={selectedStoreId} onChange={(event) => setSelectedStoreId(event.target.value)}>
-              {stores.map((store) => (
-                <option key={store.id} value={store.id}>
-                  {store.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <br />
-          <label>
-            Product:{' '}
-            <select value={variantKey} onChange={(event) => setVariantKey(event.target.value)}>
-              {levels.length === 0 && <option value="">No stock at this store</option>}
-              {levels.map((level) => (
-                <option key={`${level.productId}:${level.variantId}`} value={`${level.productId}:${level.variantId}`}>
-                  {products.get(level.productId)?.name ?? level.productId}
-                </option>
-              ))}
-            </select>
-          </label>
-          <br />
-          <label>
-            Reason:{' '}
-            <select value={reasonCode} onChange={(event) => setReasonCode(event.target.value as typeof reasonCode)}>
-              {WASTE_REASONS.map((reason) => (
-                <option key={reason} value={reason}>
-                  {reason}
-                </option>
-              ))}
-            </select>
-          </label>
-          <br />
-          <label>
-            Quantity:{' '}
-            <input
-              type="text"
-              inputMode="decimal"
-              value={quantity}
-              onChange={(event) => setQuantity(event.target.value)}
-              placeholder="e.g. 2.5"
-            />
-          </label>
-          <br />
-          <button type="submit" disabled={submitting}>
-            {submitting ? 'Logging...' : 'Log waste'}
-          </button>
-        </form>
-      )}
+        <Card className="max-w-lg p-6">
+          <form onSubmit={handleSubmit} className="space-y-5">
+            {error && <ErrorNotice>{error}</ErrorNotice>}
+            {result && (
+              <div
+                role="status"
+                className="rounded-card border border-positive/30 bg-positive-soft px-4 py-3 text-sm text-positive"
+              >
+                {result}
+              </div>
+            )}
 
-      {result && <p role="status">{result}</p>}
-      {error && <p role="alert">{error}</p>}
-    </main>
+            <Field label="Store">
+              <Select
+                value={selectedStoreId}
+                onChange={(event) => setSelectedStoreId(event.target.value)}
+              >
+                {stores.map((store) => (
+                  <option key={store.id} value={store.id}>
+                    {store.name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+
+            <Field label="Product" hint="Only products with stock at this store can be wasted.">
+              <Select value={variantKey} onChange={(event) => setVariantKey(event.target.value)}>
+                {levels.length === 0 && <option value="">No stock at this store</option>}
+                {levels.map((level) => (
+                  <option
+                    key={`${level.productId}:${level.variantId}`}
+                    value={`${level.productId}:${level.variantId}`}
+                  >
+                    {products.get(level.productId)?.name ?? level.productId}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+
+            <Field label="Reason">
+              <Select
+                value={reasonCode}
+                onChange={(event) => setReasonCode(event.target.value as typeof reasonCode)}
+              >
+                {WASTE_REASONS.map((reason) => (
+                  <option key={reason} value={reason}>
+                    {reason.toLowerCase().replace(/_/g, ' ')}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+
+            <Field label="Quantity">
+              <Input
+                type="text"
+                inputMode="decimal"
+                value={quantity}
+                onChange={(event) => setQuantity(event.target.value)}
+                placeholder="e.g. 2.5"
+              />
+            </Field>
+
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={submitting || levels.length === 0}
+              className="w-full"
+            >
+              {submitting ? 'Logging…' : 'Log waste'}
+            </Button>
+          </form>
+        </Card>
+      )}
+    </>
   );
 }

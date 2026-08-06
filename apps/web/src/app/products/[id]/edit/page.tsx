@@ -2,8 +2,20 @@
 
 import { useEffect, useState, type FormEvent } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { TRPCClientError } from '@trpc/client';
 import { trpc } from '@/lib/trpc';
+import {
+  Badge,
+  Button,
+  Card,
+  ErrorNotice,
+  Field,
+  Input,
+  LoadingState,
+  PageHeader,
+  Select,
+} from '@/components/ui';
 
 type Category = Awaited<ReturnType<typeof trpc.categories.list.query>>[number];
 
@@ -55,41 +67,72 @@ export default function EditProductPage() {
     }
   };
 
-  if (loading) return <p>Loading...</p>;
+  if (loading) return <LoadingState />;
 
   return (
-    <main>
-      <h1>Edit product</h1>
-      <p>SKU: {sku} (not editable)</p>
-      <form onSubmit={handleSubmit}>
-        <label>
-          Name
-          <input type="text" value={name} onChange={(e) => setName(e.target.value)} required />
-        </label>
-        <label>
-          Category
-          <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
-            <option value="">None</option>
-            {categories.map((category) => (
-              <option key={category.id} value={category.id}>
-                {category.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <input type="checkbox" checked={isPerishable} onChange={(e) => setIsPerishable(e.target.checked)} />
-          Perishable
-        </label>
-        {error && <p role="alert">{error}</p>}
-        {saved && <p>Saved.</p>}
-        <button type="submit" disabled={submitting}>
-          {submitting ? 'Saving...' : 'Save'}
-        </button>
-      </form>
-      <button type="button" onClick={() => router.push('/products')}>
-        Back to products
-      </button>
-    </main>
+    <>
+      <PageHeader
+        title={name || 'Edit product'}
+        description="The SKU and base unit are fixed after creation — changing a unit retroactively would corrupt existing stock quantities."
+        actions={
+          <Link href="/products">
+            <Button variant="ghost">Back to products</Button>
+          </Link>
+        }
+      />
+
+      <Card className="max-w-2xl p-6">
+        <form onSubmit={handleSubmit} className="space-y-5">
+          {error && <ErrorNotice>{error}</ErrorNotice>}
+          {saved && (
+            <div className="rounded-card border border-positive/30 bg-positive-soft px-4 py-3 text-sm text-positive">
+              Changes saved.
+            </div>
+          )}
+
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-content-muted">SKU</span>
+            <Badge>{sku}</Badge>
+            <span className="text-content-subtle">not editable</span>
+          </div>
+
+          <div className="grid gap-5 sm:grid-cols-2">
+            <Field label="Name">
+              <Input type="text" value={name} onChange={(e) => setName(e.target.value)} required />
+            </Field>
+
+            <Field label="Category">
+              <Select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
+                <option value="">None</option>
+                {categories.map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+
+          <label className="flex items-center gap-2.5 text-sm text-content">
+            <input
+              type="checkbox"
+              checked={isPerishable}
+              onChange={(e) => setIsPerishable(e.target.checked)}
+              className="size-4 rounded border-border-strong accent-accent"
+            />
+            Perishable — track expiry dates and use first-expiry-first-out
+          </label>
+
+          <div className="flex items-center gap-2 border-t border-border pt-5">
+            <Button type="submit" variant="primary" disabled={submitting}>
+              {submitting ? 'Saving…' : 'Save changes'}
+            </Button>
+            <Button type="button" variant="ghost" onClick={() => router.push('/products')}>
+              Cancel
+            </Button>
+          </div>
+        </form>
+      </Card>
+    </>
   );
 }

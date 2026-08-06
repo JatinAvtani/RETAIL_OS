@@ -3,6 +3,8 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { trpc } from '@/lib/trpc';
+import { AppShell } from '@/components/app-shell';
+import { LoadingState } from '@/components/ui';
 
 /**
  * The only way this app knows "am I logged in" — the session cookie is httpOnly, so it can't be
@@ -10,6 +12,9 @@ import { trpc } from '@/lib/trpc';
  * signal; anything else is treated as a real failure and still bounces to /login rather than
  * silently rendering a broken authenticated page. Shared by every authenticated section
  * (/products, /recipes, ...) rather than duplicated per section.
+ *
+ * Also wraps children in `AppShell`, so nav/theme/sign-out come with authentication rather than
+ * every section's layout having to remember to add them.
  */
 export const AuthGuard = ({ children }: { children: ReactNode }) => {
   const router = useRouter();
@@ -23,8 +28,8 @@ export const AuthGuard = ({ children }: { children: ReactNode }) => {
   }, [router]);
 
   if (!checked) {
-    return <p>Loading...</p>;
+    return <LoadingState label="Checking your session…" />;
   }
 
-  return <>{children}</>;
+  return <AppShell>{children}</AppShell>;
 };

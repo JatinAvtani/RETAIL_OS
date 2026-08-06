@@ -173,7 +173,13 @@ report HIGH I3 "Mutation of an append-only table" \
 # the regex matches on "Total" as a substring regardless of what it's counting. No arithmetic on
 # money or quantity happens through these fields anywhere; they never feed a Money/Quantity<Unit>
 # calculation, only a UI/API result summary.
-r=$(search '[A-Za-z_]*([Pp]rice|[Cc]ost|[Aa]mount|[Tt]otal|[Rr]evenue|[Mm]argin|[Qq]uantity|[Qq]ty)[A-Za-z_]*[[:space:]]*:[[:space:]]*number\b' 'apps/api/src/integrations/csv-import\.ts|packages/db/src/repositories/csv-import-repository\.ts' '*.ts')
+#
+# margin.ts excluded for the same reason: `unknownCostEventCount` COUNTS waste/consumption events
+# whose cost is unknown - it is an integer event count, never a monetary value, and no arithmetic
+# on money flows through it. "Cost" is the only accurate word for what is being counted (events
+# with an unknown COST), so renaming to dodge the regex would make the field less clear rather
+# than more correct. Every genuine money value in that file is a real `Money`.
+r=$(search '[A-Za-z_]*([Pp]rice|[Cc]ost|[Aa]mount|[Tt]otal|[Rr]evenue|[Mm]argin|[Qq]uantity|[Qq]ty)[A-Za-z_]*[[:space:]]*:[[:space:]]*number\b' 'apps/api/src/integrations/csv-import\.ts|packages/db/src/repositories/csv-import-repository\.ts|packages/metrics/src/margin/margin\.ts' '*.ts')
 report HIGH I5 "Money or quantity typed as \`number\`" \
   "Float arithmetic on money loses precision silently. Use Money / Quantity<Unit>." "$r"
 

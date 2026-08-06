@@ -4,8 +4,29 @@ import { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { trpc } from '@/lib/trpc';
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  ErrorNotice,
+  LoadingState,
+  PageHeader,
+  Table,
+  Td,
+  Th,
+  Tr,
+  type BadgeTone,
+} from '@/components/ui';
 
 type Lot = Awaited<ReturnType<typeof trpc.inventory.lots.query>>[number];
+
+const STATUS_TONES: Record<string, BadgeTone> = {
+  ACTIVE: 'positive',
+  DEPLETED: 'neutral',
+  EXPIRED: 'danger',
+  IN_TRANSIT: 'warning',
+};
 
 const daysUntil = (isoDate: string) => {
   const diffMs = new Date(isoDate).getTime() - Date.now();
@@ -37,62 +58,92 @@ function LotsContent() {
   }, [storeId, productId]);
 
   return (
-    <main>
-      <h1>Lots</h1>
-      <nav>
-        <Link href="/inventory">Back to stock levels</Link>
-      </nav>
+    <>
+      <PageHeader
+        title="Lots"
+        description="Each delivery tracked separately, so stock is drawn first-expiry-first-out and cost follows the lot it actually came from."
+        actions={
+          <Link href="/inventory">
+            <Button variant="ghost">Back</Button>
+          </Link>
+        }
+      />
 
-      {error && <p role="alert">{error}</p>}
-      {loading && <p>Loading...</p>}
-      {!loading && !error && lots.length === 0 && <p>No lots recorded for this product at this store.</p>}
-      {!loading && !error && lots.length > 0 && (
-        <table>
-          <thead>
-            <tr>
-              <th>Lot number</th>
-              <th>Status</th>
-              <th>Remaining</th>
-              <th>Unit cost</th>
-              <th>Received</th>
-              <th>Expiry</th>
-            </tr>
-          </thead>
-          <tbody>
-            {lots.map((lot) => {
-              const daysLeft = lot.expiryDate ? daysUntil(lot.expiryDate) : null;
-              return (
-                <tr key={lot.id}>
-                  <td>{lot.lotNumber ?? lot.id}</td>
-                  <td>{lot.status}</td>
-                  <td>{lot.remainingQuantity}</td>
-                  <td>{lot.unitCost}</td>
-                  <td>{new Date(lot.receivedAt).toLocaleDateString()}</td>
-                  <td>
-                    {lot.expiryDate ? (
-                      <>
-                        {lot.expiryDate}
-                        {daysLeft !== null && daysLeft <= 7 && lot.status === 'ACTIVE' && (
-                          <strong> ({daysLeft <= 0 ? 'expired' : `${daysLeft}d left`})</strong>
-                        )}
-                      </>
-                    ) : (
-                      '—'
-                    )}
-                  </td>
+      {error && <ErrorNotice>{error}</ErrorNotice>}
+
+      {!error && (
+        <Card>
+          {loading && <LoadingState />}
+          {!loading && lots.length === 0 && (
+            <EmptyState title="No lots recorded" hint="Lots appear here once goods are received." />
+          )}
+          {!loading && lots.length > 0 && (
+            <Table>
+              <thead>
+                <tr>
+                  <Th>Lot</Th>
+                  <Th>Status</Th>
+                  <Th align="right">Remaining</Th>
+                  <Th align="right">Unit cost</Th>
+                  <Th>Received</Th>
+                  <Th>Expiry</Th>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
+              </thead>
+              <tbody>
+                {lots.map((lot) => {
+                  const daysLeft = lot.expiryDate ? daysUntil(lot.expiryDate) : null;
+                  const expiringSoon =
+                    daysLeft !== null && daysLeft <= 7 && lot.status === 'ACTIVE';
+                  return (
+                    <Tr key={lot.id}>
+                      <Td className="font-medium">
+                        {lot.lotNumber ?? (
+                          <span className="text-content-subtle">{lot.id.slice(0, 8)}…</span>
+                        )}
+                      </Td>
+                      <Td>
+                        <Badge tone={STATUS_TONES[lot.status] ?? 'neutral'}>
+                          {lot.status.toLowerCase().replace(/_/g, ' ')}
+                        </Badge>
+                      </Td>
+                      <Td align="right" className="tabular">
+                        {lot.remainingQuantity}
+                      </Td>
+                      <Td align="right" className="tabular">
+                        {lot.unitCost}
+                      </Td>
+                      <Td className="text-content-muted">
+                        {new Date(lot.receivedAt).toLocaleDateString()}
+                      </Td>
+                      <Td>
+                        {lot.expiryDate ? (
+                          <span className="flex items-center gap-2">
+                            <span className="tabular text-content-muted">{lot.expiryDate}</span>
+                            {expiringSoon && (
+                              <Badge tone={daysLeft <= 0 ? 'danger' : 'warning'}>
+                                {daysLeft <= 0 ? 'expired' : `${daysLeft}d left`}
+                              </Badge>
+                            )}
+                          </span>
+                        ) : (
+                          <span className="text-content-subtle">—</span>
+                        )}
+                      </Td>
+                    </Tr>
+                  );
+                })}
+              </tbody>
+            </Table>
+          )}
+        </Card>
       )}
-    </main>
+    </>
   );
 }
 
 export default function LotsPage() {
   return (
-    <Suspense fallback={<p>Loading...</p>}>
+    <Suspense fallback={<LoadingState />}>
       <LotsContent />
     </Suspense>
   );

@@ -2,8 +2,20 @@
 
 import { useEffect, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { TRPCClientError } from '@trpc/client';
 import { trpc } from '@/lib/trpc';
+import {
+  Button,
+  Card,
+  CardHeader,
+  EmptyState,
+  ErrorNotice,
+  Field,
+  Input,
+  PageHeader,
+  Select,
+} from '@/components/ui';
 
 type Unit = Awaited<ReturnType<typeof trpc.units.list.query>>[number];
 type Product = Awaited<ReturnType<typeof trpc.products.list.query>>[number];
@@ -73,68 +85,134 @@ export default function NewRecipePage() {
   };
 
   return (
-    <main>
-      <h1>New recipe</h1>
-      <form onSubmit={handleSubmit}>
-        <label>
-          Name
-          <input type="text" value={name} onChange={(e) => setName(e.target.value)} required />
-        </label>
-        <label>
-          Yield quantity
-          <input type="text" value={yieldQuantity} onChange={(e) => setYieldQuantity(e.target.value)} required />
-        </label>
-        <label>
-          Yield unit
-          <select value={yieldUnitId} onChange={(e) => setYieldUnitId(e.target.value)} required>
-            {units.map((unit) => (
-              <option key={unit.id} value={unit.id}>
-                {unit.code}
-              </option>
-            ))}
-          </select>
-        </label>
+    <>
+      <PageHeader
+        title="New recipe"
+        description="Add each ingredient with the quantity used per batch — cost is computed from your confirmed supplier prices."
+      />
 
-        <h2>Components</h2>
-        {components.map((component, index) => (
-          <div key={index}>
-            <select
-              value={component.productId}
-              onChange={(e) => updateComponent(index, { productId: e.target.value })}
-            >
-              {products.map((product) => (
-                <option key={product.id} value={product.id}>
-                  {product.name}
-                </option>
-              ))}
-            </select>
-            <input
-              type="text"
-              value={component.quantity}
-              onChange={(e) => updateComponent(index, { quantity: e.target.value })}
-              placeholder="Quantity"
-            />
-            <select value={component.unitId} onChange={(e) => updateComponent(index, { unitId: e.target.value })}>
-              {units.map((unit) => (
-                <option key={unit.id} value={unit.id}>
-                  {unit.code}
-                </option>
-              ))}
-            </select>
-            <button type="button" onClick={() => removeComponent(index)}>
-              Remove
-            </button>
+      <form onSubmit={handleSubmit} className="max-w-3xl space-y-6">
+        {error && <ErrorNotice>{error}</ErrorNotice>}
+
+        <Card className="p-6">
+          <div className="grid gap-5 sm:grid-cols-3">
+            <div className="sm:col-span-3">
+              <Field label="Recipe name">
+                <Input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  required
+                  placeholder="Sourdough loaf"
+                />
+              </Field>
+            </div>
+
+            <div className="sm:col-span-2">
+              <Field label="Yield quantity" hint="How much one batch produces.">
+                <Input
+                  type="text"
+                  value={yieldQuantity}
+                  onChange={(e) => setYieldQuantity(e.target.value)}
+                  required
+                />
+              </Field>
+            </div>
+
+            <Field label="Yield unit">
+              <Select value={yieldUnitId} onChange={(e) => setYieldUnitId(e.target.value)} required>
+                {units.map((unit) => (
+                  <option key={unit.id} value={unit.id}>
+                    {unit.code}
+                  </option>
+                ))}
+              </Select>
+            </Field>
           </div>
-        ))}
-        <button type="button" onClick={addComponent} disabled={products.length === 0}>
-          Add component
-        </button>
+        </Card>
 
-        {error && <p role="alert">{error}</p>}
-        <button type="submit" disabled={submitting || components.length === 0 || !yieldUnitId}>
-          {submitting ? 'Creating...' : 'Create recipe'}
-        </button>
+        <Card>
+          <CardHeader
+            title="Ingredients"
+            actions={
+              <Button type="button" onClick={addComponent} disabled={products.length === 0}>
+                Add ingredient
+              </Button>
+            }
+          />
+
+          {components.length === 0 && (
+            <EmptyState title="No ingredients yet" hint="Add at least one to create the recipe." />
+          )}
+
+          {components.length > 0 && (
+            <div className="divide-y divide-border">
+              {components.map((component, index) => (
+                <div key={index} className="flex flex-wrap items-end gap-3 px-5 py-4">
+                  <div className="min-w-48 flex-1">
+                    <Field label="Ingredient">
+                      <Select
+                        value={component.productId}
+                        onChange={(e) => updateComponent(index, { productId: e.target.value })}
+                      >
+                        {products.map((product) => (
+                          <option key={product.id} value={product.id}>
+                            {product.name}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                  </div>
+
+                  <div className="w-28">
+                    <Field label="Quantity">
+                      <Input
+                        type="text"
+                        value={component.quantity}
+                        onChange={(e) => updateComponent(index, { quantity: e.target.value })}
+                      />
+                    </Field>
+                  </div>
+
+                  <div className="w-24">
+                    <Field label="Unit">
+                      <Select
+                        value={component.unitId}
+                        onChange={(e) => updateComponent(index, { unitId: e.target.value })}
+                      >
+                        {units.map((unit) => (
+                          <option key={unit.id} value={unit.id}>
+                            {unit.code}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                  </div>
+
+                  <Button type="button" variant="danger" onClick={() => removeComponent(index)}>
+                    Remove
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+
+        <div className="flex items-center gap-2">
+          <Button
+            type="submit"
+            variant="primary"
+            disabled={submitting || components.length === 0 || !yieldUnitId}
+          >
+            {submitting ? 'Creating…' : 'Create recipe'}
+          </Button>
+          <Link href="/recipes">
+            <Button type="button" variant="ghost">
+              Cancel
+            </Button>
+          </Link>
+        </div>
       </form>
-    </main>
+    </>
   );
 }

@@ -23,6 +23,7 @@ export * from './repositories/stock-count-service';
 export * from './repositories/sale-consumption-service';
 export * from './repositories/sales-ingestion-pipeline';
 export * from './repositories/pos-item-repository';
+export * from './repositories/dashboard-repository';
 export * from './repositories/sales-transaction-repository';
 export * from './repositories/pos-connection-repository';
 export * from './repositories/pos-connection-lookup';
