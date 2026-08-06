@@ -6,3 +6,6 @@
  */
 export const buildProductImageKey = (organizationId: string, productId: string, extension: string): string =>
   `org/${organizationId}/products/${productId}/image.${extension}`;
+
+export const buildCsvImportKey = (organizationId: string, importId: string): string =>
+  `org/${organizationId}/sales-csv-imports/${importId}.csv`;

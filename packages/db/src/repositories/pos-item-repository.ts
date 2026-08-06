@@ -1,10 +1,12 @@
-import { and, eq, lt } from 'drizzle-orm';
+import { and, eq, lt, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import * as schema from '../schema/index';
 import { posItems, type salesSourceEnum } from '../schema/index';
 import { TenantScopedRepository } from '../tenant-repository';
 
 export type SalesSource = (typeof salesSourceEnum.enumValues)[number];
+
+export type UnmappedPosItemWithVolume = typeof posItems.$inferSelect & { totalRevenue: string; totalQuantity: string };
 
 /**
  * 006-01's schema-task repository: proves `pos_items` is real, tenant-isolated, and idempotent on
@@ -111,6 +113,78 @@ export class PosItemRepository extends TenantScopedRepository<typeof posItems> {
   }
 
   /**
+   * The real 006-11 mapping-UI read path: unmapped items ranked by trailing sales volume,
+   * highest first — plan.md's own reasoning ("mapping the top 20 items covers ~80% of revenue")
+   * only works if the list is actually sorted that way, unlike the plain `findUnmapped` above.
+   * `LEFT JOIN` against a revenue subquery, not `INNER JOIN` — an unmapped item that has never
+   * actually sold (freshly synced from the catalog, zero transactions) is still a real unmapped
+   * item that needs a decision, so it must still appear, just at the bottom (I7 — the absence of
+   * a sales signal is not evidence the item doesn't need mapping). `totalRevenue`/`totalQuantity`
+   * default to `'0'`/`'0.000000'` only via `COALESCE` on the LEFT JOIN's non-matching side, which
+   * is a real, unambiguous zero (no sales occurred), not a guessed cost or quantity — a different
+   * case from defaulting a missing COST to zero, which is the actual pattern I7 forbids.
+   */
+  async findUnmappedRankedByVolume(storeId?: string): Promise<UnmappedPosItemWithVolume[]> {
+    return this.runScoped(async (db) => {
+      const rows = await db.execute<{
+        id: string;
+        organization_id: string;
+        store_id: string;
+        source: SalesSource;
+        external_id: string;
+        name: string;
+        price: string | null;
+        currency: string | null;
+        category: string | null;
+        menu_item_id: string | null;
+        mapping_status: 'UNMAPPED' | 'MAPPED' | 'IGNORED';
+        last_seen_at: Date;
+        delisted_at: Date | null;
+        created_at: Date;
+        updated_at: Date;
+        total_revenue: string;
+        total_quantity: string;
+      }>(sql`
+        SELECT
+          pi.*,
+          COALESCE(v.total_revenue, '0') AS total_revenue,
+          COALESCE(v.total_quantity, '0.000000') AS total_quantity
+        FROM pos_items pi
+        LEFT JOIN (
+          SELECT stl.pos_item_id, SUM(stl.line_total) AS total_revenue, SUM(stl.quantity) AS total_quantity
+          FROM sales_transaction_lines stl
+          WHERE stl.organization_id = ${this.organizationId}
+          GROUP BY stl.pos_item_id
+        ) v ON v.pos_item_id = pi.id
+        WHERE pi.organization_id = ${this.organizationId}
+          AND pi.mapping_status = 'UNMAPPED'
+          ${storeId ? sql`AND pi.store_id = ${storeId}` : sql``}
+        ORDER BY COALESCE(v.total_revenue, '0') DESC, pi.last_seen_at
+      `);
+
+      return rows.map((row) => ({
+        id: row.id,
+        organizationId: row.organization_id,
+        storeId: row.store_id,
+        source: row.source,
+        externalId: row.external_id,
+        name: row.name,
+        price: row.price,
+        currency: row.currency,
+        category: row.category,
+        menuItemId: row.menu_item_id,
+        mappingStatus: row.mapping_status,
+        lastSeenAt: row.last_seen_at,
+        delistedAt: row.delisted_at,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        totalRevenue: row.total_revenue,
+        totalQuantity: row.total_quantity,
+      }));
+    });
+  }
+
+  /**
    * 006-04 (plan.md Phase 2): "deleted upstream items are marked, not deleted." Called once, after
    * a full catalog sync has upserted every item Square returned — any row for this store+source
    * whose `lastSeenAt` is still older than `syncStartedAt` was NOT touched by that sync, meaning
@@ -142,6 +216,24 @@ export class PosItemRepository extends TenantScopedRepository<typeof posItems> {
       db
         .update(posItems)
         .set({ menuItemId, mappingStatus: 'MAPPED', updatedAt: new Date() })
+        .where(scopedWhere(eq(posItems.id, id)))
+        .returning()
+    );
+    return rows[0] ?? null;
+  }
+
+  /**
+   * Marks a POS item as genuinely never needing a menu-item mapping (a gift card, a service
+   * charge, a tip line) — distinct from `UNMAPPED` ("not yet looked at"), same three-way split
+   * `UnmappedSaleRepository`'s `resolve`/`ignore` pair already established. Never clears
+   * `menuItemId` — this is only ever called on a row that has none, matching `mapToMenuItem`'s
+   * own one-directional convention.
+   */
+  async ignore(id: string) {
+    const rows = await this.runScoped((db, scopedWhere) =>
+      db
+        .update(posItems)
+        .set({ mappingStatus: 'IGNORED', updatedAt: new Date() })
         .where(scopedWhere(eq(posItems.id, id)))
         .returning()
     );

@@ -9,6 +9,8 @@ import { recipesRouter } from './routers/recipes';
 import { inventoryRouter } from './routers/inventory';
 import { stocktakeRouter } from './routers/stocktake';
 import { integrationsRouter } from './routers/integrations';
+import { csvImportRouter } from './routers/csv-import';
+import { posItemsRouter } from './routers/pos-items';
 
 export const appRouter = router({
   auth: authRouter,
@@ -21,6 +23,8 @@ export const appRouter = router({
   inventory: inventoryRouter,
   stocktake: stocktakeRouter,
   integrations: integrationsRouter,
+  csvImport: csvImportRouter,
+  posItems: posItemsRouter,
 });
 
 export type AppRouter = typeof appRouter;

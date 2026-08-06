@@ -25,3 +25,4 @@ export * from './stock-transfers';
 export * from './sales';
 export * from './pos-connections';
 export * from './webhook-events';
+export * from './sales-csv-imports';

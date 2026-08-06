@@ -167,7 +167,13 @@ report HIGH I3 "Mutation of an append-only table" \
   "Corrections are compensating rows, never edits. Destroys auditability and shrinkage math." "$r"
 
 # ── I5 — Money/quantity typing ────────────────────────────────────────────────
-r=$(search '[A-Za-z_]*([Pp]rice|[Cc]ost|[Aa]mount|[Tt]otal|[Rr]evenue|[Mm]argin|[Qq]uantity|[Qq]ty)[A-Za-z_]*[[:space:]]*:[[:space:]]*number\b' '' '*.ts')
+# csv-import.ts (both apps/api/src/integrations and packages/db/src/repositories) excluded:
+# totalRowCount/importedRowCount/quarantinedRowCount/skippedRowCount are ROW COUNTS from a CSV
+# import (how many rows were parsed/written/quarantined/skipped), not a money or quantity value -
+# the regex matches on "Total" as a substring regardless of what it's counting. No arithmetic on
+# money or quantity happens through these fields anywhere; they never feed a Money/Quantity<Unit>
+# calculation, only a UI/API result summary.
+r=$(search '[A-Za-z_]*([Pp]rice|[Cc]ost|[Aa]mount|[Tt]otal|[Rr]evenue|[Mm]argin|[Qq]uantity|[Qq]ty)[A-Za-z_]*[[:space:]]*:[[:space:]]*number\b' 'apps/api/src/integrations/csv-import\.ts|packages/db/src/repositories/csv-import-repository\.ts' '*.ts')
 report HIGH I5 "Money or quantity typed as \`number\`" \
   "Float arithmetic on money loses precision silently. Use Money / Quantity<Unit>." "$r"
 

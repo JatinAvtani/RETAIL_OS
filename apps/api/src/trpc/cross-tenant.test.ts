@@ -7,19 +7,26 @@ import {
   hashPassword,
   lots,
   memberships,
+  menuItems,
   organizations,
   outboxEvents,
   posConnections,
+  posItems,
   productVariants,
   products,
   recipeComponents,
   recipes,
+  salesCsvImports,
+  salesTransactionLines,
+  salesTransactions,
+  savedCsvColumnMappings,
   stockCountLines,
   stockCounts,
   stockLevels,
   stockMovements,
   storageLocations,
   stores,
+  unmappedSales,
   users,
 } from '@retailos/db';
 import { createRedisClient } from '@retailos/session';
@@ -73,6 +80,7 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
     //   recipe_components -> recipes, products
     //   recipes -> organizations
     //   product_variants -> products
+    //   pos_items -> menu_items (menuItemId, 006-11)
     //   products -> categories, units, storage_locations
     //   storage_locations -> stores
     //   categories -> organizations
@@ -120,6 +128,13 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
       await db.delete(products).where(eq(products.organizationId, orgId));
       await db.delete(storageLocations).where(eq(storageLocations.organizationId, orgId));
       await db.delete(posConnections).where(eq(posConnections.organizationId, orgId));
+      await db.delete(salesCsvImports).where(eq(salesCsvImports.organizationId, orgId));
+      await db.delete(savedCsvColumnMappings).where(eq(savedCsvColumnMappings.organizationId, orgId));
+      await db.delete(unmappedSales).where(eq(unmappedSales.organizationId, orgId));
+      await db.delete(salesTransactionLines).where(eq(salesTransactionLines.organizationId, orgId));
+      await db.delete(salesTransactions).where(eq(salesTransactions.organizationId, orgId));
+      await db.delete(posItems).where(eq(posItems.organizationId, orgId));
+      await db.delete(menuItems).where(eq(menuItems.organizationId, orgId));
       await db.delete(stores).where(eq(stores.organizationId, orgId));
       await db.delete(categories).where(eq(categories.organizationId, orgId));
       await db.delete(organizations).where(eq(organizations.id, orgId));

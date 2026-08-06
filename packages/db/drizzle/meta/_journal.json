@@ -197,6 +197,13 @@
       "when": 1787900000000,
       "tag": "0028_sale_reversal_movement_type",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1788000000000,
+      "tag": "0029_sales_csv_imports",
+      "breakpoints": true
     }
   ]
 }

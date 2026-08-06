@@ -4,10 +4,11 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import { eq } from 'drizzle-orm';
 import { generateId } from '@retailos/domain';
 import * as schema from '../schema/index';
-import { menuItems, organizations, posItems, stores } from '../schema/index';
+import { menuItems, organizations, posItems, salesTransactionLines, salesTransactions, stores } from '../schema/index';
 import { createScopedDb } from '../tenant-repository';
 import { PosItemRepository } from './pos-item-repository';
 import { MenuItemRepository } from './menu-item-repository';
+import { SalesTransactionRepository } from './sales-transaction-repository';
 import { setUpTwoTenants, type TwoTenantFixture } from '../test-support/tenant-fixture';
 
 const APP_CONNECTION_STRING =
@@ -46,6 +47,8 @@ describe('PosItemRepository', () => {
 
   afterEach(async () => {
     const adminDb = drizzle(adminClient, { schema });
+    await adminDb.delete(salesTransactionLines).where(eq(salesTransactionLines.organizationId, organizationId));
+    await adminDb.delete(salesTransactions).where(eq(salesTransactions.organizationId, organizationId));
     await adminDb.delete(posItems).where(eq(posItems.organizationId, organizationId));
     await adminDb.delete(menuItems).where(eq(menuItems.organizationId, organizationId));
   });
@@ -204,6 +207,119 @@ describe('PosItemRepository', () => {
     });
   });
 
+  it('ignore flips mappingStatus to IGNORED without touching menuItemId', async () => {
+    const repo = new PosItemRepository(createScopedDb(client), organizationId);
+    const item = await repo.upsert({
+      id: generateId(),
+      storeId,
+      source: 'square',
+      externalId: 'SQ-GIFT-CARD',
+      name: 'Gift Card',
+    });
+
+    const ignored = await repo.ignore(item.id);
+    expect(ignored?.mappingStatus).toBe('IGNORED');
+    expect(ignored?.menuItemId).toBeNull();
+
+    const stillUnmapped = await repo.findUnmapped(storeId);
+    expect(stillUnmapped.some((r) => r.id === item.id)).toBe(false);
+  });
+
+  describe('findUnmappedRankedByVolume', () => {
+    it('ranks unmapped items by trailing revenue, highest first, and includes a never-sold item last', async () => {
+      const posItemRepo = new PosItemRepository(createScopedDb(client), organizationId);
+      const salesRepo = new SalesTransactionRepository(createScopedDb(client), organizationId);
+
+      const highVolume = await posItemRepo.upsert({
+        id: generateId(),
+        storeId,
+        source: 'square',
+        externalId: 'SQ-VOL-HIGH',
+        name: 'Best Seller Latte',
+      });
+      const lowVolume = await posItemRepo.upsert({
+        id: generateId(),
+        storeId,
+        source: 'square',
+        externalId: 'SQ-VOL-LOW',
+        name: 'Occasional Muffin',
+      });
+      const neverSold = await posItemRepo.upsert({
+        id: generateId(),
+        storeId,
+        source: 'square',
+        externalId: 'SQ-VOL-NONE',
+        name: 'Just Synced Croissant',
+      });
+
+      await salesRepo.recordIfNew({
+        storeId,
+        source: 'square',
+        externalId: 'SQ-ORDER-HIGH',
+        occurredAt: new Date(),
+        subtotal: '100.00',
+        discount: '0.00',
+        tax: '0.00',
+        total: '100.00',
+        currency: 'USD',
+        lines: [
+          { posItemId: highVolume.id, quantity: '10.000000', unitPrice: '10.0000', discount: '0.0000', lineTotal: '100.0000' },
+        ],
+      });
+      await salesRepo.recordIfNew({
+        storeId,
+        source: 'square',
+        externalId: 'SQ-ORDER-LOW',
+        occurredAt: new Date(),
+        subtotal: '5.00',
+        discount: '0.00',
+        tax: '0.00',
+        total: '5.00',
+        currency: 'USD',
+        lines: [
+          { posItemId: lowVolume.id, quantity: '1.000000', unitPrice: '5.0000', discount: '0.0000', lineTotal: '5.0000' },
+        ],
+      });
+
+      const ranked = await posItemRepo.findUnmappedRankedByVolume(storeId);
+      const ids = ranked.map((r) => r.id);
+      // Only assert relative order among these three, since other tests in this file may leave
+      // their own unmapped rows behind within the same afterEach cycle.
+      const relevantIds = ids.filter((id) => [highVolume.id, lowVolume.id, neverSold.id].includes(id));
+      expect(relevantIds).toEqual([highVolume.id, lowVolume.id, neverSold.id]);
+
+      const highRow = ranked.find((r) => r.id === highVolume.id);
+      const neverSoldRow = ranked.find((r) => r.id === neverSold.id);
+      expect(highRow?.totalRevenue).toBe('100.0000');
+      expect(neverSoldRow?.totalRevenue).toBe('0');
+      expect(neverSoldRow?.totalQuantity).toBe('0.000000');
+    });
+
+    it('excludes an already-mapped item', async () => {
+      const posItemRepo = new PosItemRepository(createScopedDb(client), organizationId);
+      const menuItemRepo = new MenuItemRepository(createScopedDb(client), organizationId);
+
+      const item = await posItemRepo.upsert({
+        id: generateId(),
+        storeId,
+        source: 'csv',
+        externalId: 'CSV-ALREADY-MAPPED',
+        name: 'Cold Brew',
+      });
+      const menuItem = await menuItemRepo.create({
+        id: generateId(),
+        name: 'Cold Brew',
+        recipeGroupId: generateId(),
+        price: '4.50',
+        priceValidFrom: new Date('2026-01-01T00:00:00Z'),
+      });
+      await posItemRepo.mapToMenuItem(item.id, menuItem.id);
+
+      const ranked = await posItemRepo.findUnmappedRankedByVolume(storeId);
+      expect(ranked.some((r) => r.id === item.id)).toBe(false);
+    });
+  });
+
   describe('cross-tenant', () => {
     let fixture: TwoTenantFixture;
 
@@ -253,6 +369,21 @@ describe('PosItemRepository', () => {
       });
 
       expect(itemA.id).not.toBe(itemB.id);
+    });
+
+    it('findUnmappedRankedByVolume never includes tenant A rows for tenant B', async () => {
+      const repoA = new PosItemRepository(createScopedDb(client), fixture.tenantA.organizationId);
+      await repoA.upsert({
+        id: generateId(),
+        storeId: fixture.tenantA.storeId,
+        source: 'square',
+        externalId: 'CROSS-TENANT-VOLUME-ITEM',
+        name: 'Tenant A Item',
+      });
+
+      const repoB = new PosItemRepository(createScopedDb(client), fixture.tenantB.organizationId);
+      const rankedForB = await repoB.findUnmappedRankedByVolume(fixture.tenantB.storeId);
+      expect(rankedForB.some((r) => r.name === 'Tenant A Item')).toBe(false);
     });
   });
 

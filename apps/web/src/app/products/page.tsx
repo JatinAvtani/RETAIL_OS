@@ -26,7 +26,8 @@ export default function ProductsPage() {
     <main>
       <h1>Products</h1>
       <nav>
-        <Link href="/products/new">New product</Link> · <Link href="/recipes">Recipes</Link>
+        <Link href="/products/new">New product</Link> · <Link href="/recipes">Recipes</Link> ·{' '}
+        <Link href="/pos-items">Map POS items</Link>
       </nav>
       <input
         type="search"

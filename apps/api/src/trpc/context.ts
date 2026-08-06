@@ -6,6 +6,7 @@ import type { CreateFastifyContextOptions } from '@trpc/server/adapters/fastify'
 import { createAuthRateLimiters } from '../auth/rate-limit';
 
 export const PRODUCT_IMAGES_BUCKET = 'retailos-product-images';
+export const SALES_CSV_IMPORTS_BUCKET = 'retailos-sales-csv-imports';
 
 /**
  * One connection pool / Redis client for the process lifetime, not one per request — both

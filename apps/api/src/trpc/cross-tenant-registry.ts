@@ -2,11 +2,14 @@ import {
   createDb,
   categories,
   lots,
+  menuItems,
   posConnections,
+  posItems,
   products,
   productVariants,
   recipeComponents,
   recipes,
+  salesCsvImports,
   storageLocations,
   stores,
   units,
@@ -15,8 +18,8 @@ import {
 import { eq } from 'drizzle-orm';
 import { generateId } from '@retailos/domain';
 import { encryptToken } from '@retailos/pos';
-import { buildProductImageKey, createPresignedUploadUrl, ensureBucketExists } from '@retailos/storage';
-import { PRODUCT_IMAGES_BUCKET, storageClient } from './context';
+import { buildProductImageKey, buildCsvImportKey, createPresignedUploadUrl, ensureBucketExists } from '@retailos/storage';
+import { PRODUCT_IMAGES_BUCKET, SALES_CSV_IMPORTS_BUCKET, storageClient } from './context';
 
 type Db = ReturnType<typeof createDb>['db'];
 
@@ -286,6 +289,70 @@ const seedPosConnection = async (db: Db, organizationId: string): Promise<string
     status: 'CONNECTED',
   });
   return storeId;
+};
+
+const CROSS_TENANT_PROBE_CSV = 'occurred_at,item,qty,price\n2026-08-01,Probe Item,1,1.00\n';
+
+/** Seeds a real, UPLOADED sales_csv_imports row with a genuine CSV object in MinIO at the exact key `storageKey` names — same reasoning as `products.confirmImageUpload`'s real-JPEG upload: the OWN-resource positive case needs a genuine object to read back, not an incidental S3 404. Returns the import id, since every csvImport.* procedure past requestUpload is scoped by importId. */
+const seedCsvImport = async (db: Db, organizationId: string): Promise<string> => {
+  const storeId = await seedStore(db, organizationId);
+  const importId = generateId();
+  await ensureBucketExists(storageClient, SALES_CSV_IMPORTS_BUCKET);
+  const key = buildCsvImportKey(organizationId, importId);
+  const uploadUrl = await createPresignedUploadUrl(storageClient, SALES_CSV_IMPORTS_BUCKET, key, 'text/csv');
+  await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': 'text/csv' }, body: CROSS_TENANT_PROBE_CSV });
+  await db.insert(salesCsvImports).values({
+    id: importId,
+    organizationId,
+    storeId,
+    storageKey: key,
+    status: 'UPLOADED',
+    detectedHeaders: { headers: ['occurred_at', 'item', 'qty', 'price'], sampleRows: [['2026-08-01', 'Probe Item', '1', '1.00']], delimiter: ',' },
+  });
+  return importId;
+};
+
+/** Seeds a real, UNMAPPED pos_items row in a real store — what `posItems.listUnmapped`/`mapToMenuItem`/`ignore`'s own-resource case needs. Returns the store id for `listUnmapped` (store-scoped), and the caller resolves the item id itself for the id-scoped mutations, same shape as `inventory.movements`' product lookup. */
+const seedPosItem = async (db: Db, organizationId: string): Promise<{ storeId: string; posItemId: string }> => {
+  const storeId = await seedStore(db, organizationId);
+  const posItemId = generateId();
+  await db.insert(posItems).values({
+    id: posItemId,
+    organizationId,
+    storeId,
+    source: 'square',
+    externalId: `cross-tenant-probe-${posItemId}`,
+    name: `Cross-tenant probe pos item ${posItemId}`,
+    mappingStatus: 'UNMAPPED',
+  });
+  return { storeId, posItemId };
+};
+
+/** Seeds a real menu item — what `posItems.mapToMenuItem`'s own-resource case needs to reach a genuine 200 (a real menuItemId to map to, not a fake one that would 404 regardless of tenant). */
+const seedMenuItem = async (db: Db, organizationId: string): Promise<string> => {
+  const menuItemId = generateId();
+  await db.insert(menuItems).values({
+    id: menuItemId,
+    organizationId,
+    name: `Cross-tenant probe menu item ${menuItemId}`,
+    recipeGroupId: generateId(),
+    price: '5.0000',
+    priceValidFrom: new Date(),
+  });
+  return menuItemId;
+};
+
+/** Same as `seedCsvImport`, but already `MAPPED` — what `csvImport.commit`'s own-resource case needs to reach a genuine 200. */
+const seedMappedCsvImport = async (db: Db, organizationId: string): Promise<string> => {
+  const importId = await seedCsvImport(db, organizationId);
+  await db
+    .update(salesCsvImports)
+    .set({
+      status: 'MAPPED',
+      columnMapping: { occurredAt: 'occurred_at', posItemName: 'item', quantity: 'qty', unitPrice: 'price' },
+    })
+    .where(eq(salesCsvImports.id, importId));
+  return importId;
 };
 
 export const resourceScopedProcedures: ResourceScopedProcedure[] = [
@@ -628,5 +695,102 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     type: 'mutation',
     seedResource: seedPosConnection,
     buildInput: (resourceId) => ({ storeId: resourceId }),
+  },
+  {
+    // 006-09: same store-scoped mutation shape as syncSquareOrders — assertStoreAccess-equivalent
+    // check runs before pos_connections is ever looked at, same patched-fetch approach.
+    path: 'integrations.reconcileSquareOrders',
+    type: 'mutation',
+    seedResource: seedPosConnection,
+    buildInput: (resourceId) => ({ storeId: resourceId }),
+  },
+  {
+    // 006-10: requestUpload is store-scoped, not importId-scoped (no import row exists yet at this
+    // point in the flow) — same store-ownership check shape as every other store-scoped mutation.
+    path: 'csvImport.requestUpload',
+    type: 'mutation',
+    seedResource: seedStore,
+    buildInput: (resourceId) => ({ storeId: resourceId }),
+  },
+  {
+    // confirmUpload checks BOTH storeId ownership AND that the given key is prefixed with the
+    // caller's own org — attacking with tenant A's storeId (this entry's own resourceId) already
+    // exercises the FIRST, primary check this runner targets. A real CSV object is uploaded at a
+    // key deterministically derived from `resourceId` (the storeId) itself, so `buildInput` — which
+    // only receives `resourceId`, not any extra state from `seedResource` — can reconstruct the
+    // identical key, matching `products.confirmImageUpload`'s own real-JPEG precedent so the
+    // OWN-resource case reaches a genuine 200.
+    path: 'csvImport.confirmUpload',
+    type: 'mutation',
+    seedResource: async (db, organizationId) => {
+      const storeId = await seedStore(db, organizationId);
+      await ensureBucketExists(storageClient, SALES_CSV_IMPORTS_BUCKET);
+      // Not seedCsvImport here — confirmUpload is the procedure that INSERTS the row; a real
+      // pre-existing row would collide. Only the object storage side needs to exist ahead of time,
+      // at a key this entry's own buildInput can deterministically reconstruct from storeId alone.
+      const key = buildCsvImportKey(organizationId, storeId);
+      const uploadUrl = await createPresignedUploadUrl(storageClient, SALES_CSV_IMPORTS_BUCKET, key, 'text/csv');
+      await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': 'text/csv' }, body: CROSS_TENANT_PROBE_CSV });
+      return storeId;
+    },
+    buildInput: (resourceId, organizationId) => ({
+      storeId: resourceId,
+      key: buildCsvImportKey(organizationId, resourceId),
+    }),
+  },
+  {
+    path: 'csvImport.get',
+    type: 'query',
+    seedResource: seedCsvImport,
+    buildInput: (resourceId) => ({ importId: resourceId }),
+  },
+  {
+    path: 'csvImport.submitColumnMapping',
+    type: 'mutation',
+    seedResource: seedCsvImport,
+    buildInput: (resourceId) => ({
+      importId: resourceId,
+      columnMapping: { occurredAt: 'occurred_at', posItemName: 'item', quantity: 'qty', unitPrice: 'price' },
+    }),
+  },
+  {
+    path: 'csvImport.commit',
+    type: 'mutation',
+    seedResource: seedMappedCsvImport,
+    buildInput: (resourceId) => ({ importId: resourceId }),
+  },
+  {
+    // Store-scoped, same shape as inventory.levels/csvImport.requestUpload — attacks with tenant
+    // A's storeId, the FIRST check listUnmapped's router runs.
+    path: 'posItems.listUnmapped',
+    type: 'query',
+    seedResource: async (db, organizationId) => {
+      const { storeId } = await seedPosItem(db, organizationId);
+      return storeId;
+    },
+    buildInput: (resourceId) => ({ storeId: resourceId }),
+  },
+  {
+    // Id-scoped, not store-scoped — the risk is tenant B mapping tenant A's real pos_items row.
+    // Own-resource case needs a real menuItemId too, so buildInput seeds one fresh via `db`.
+    path: 'posItems.mapToMenuItem',
+    type: 'mutation',
+    seedResource: async (db, organizationId) => {
+      const { posItemId } = await seedPosItem(db, organizationId);
+      return posItemId;
+    },
+    buildInput: async (resourceId, organizationId, db) => {
+      const menuItemId = await seedMenuItem(db, organizationId);
+      return { id: resourceId, menuItemId };
+    },
+  },
+  {
+    path: 'posItems.ignore',
+    type: 'mutation',
+    seedResource: async (db, organizationId) => {
+      const { posItemId } = await seedPosItem(db, organizationId);
+      return posItemId;
+    },
+    buildInput: (resourceId) => ({ id: resourceId }),
   },
 ];
