@@ -31,6 +31,8 @@ export * from './repositories/webhook-event-repository';
 export * from './repositories/csv-import-repository';
 export * from './repositories/saved-csv-mapping-repository';
 export * from './repositories/unmapped-sale-repository';
+export * from './repositories/document-repository';
+export * from './repositories/document-email-intake-repository';
 export * from './tenant-context';
 export * from './reconciliation';
 export * from './auth/invitation-token';

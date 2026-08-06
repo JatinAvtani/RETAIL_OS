@@ -1,5 +1,5 @@
 {
-  "name": "@retailos/ai",
+  "name": "@retailos/email",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -10,11 +10,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
-  "dependencies": {
-    "@retailos/domain": "workspace:*",
-    "@google/genai": "^2.15.0"
-  },
+  "dependencies": {},
   "devDependencies": {
+    "@types/node": "^22.10.2",
     "typescript": "^5.7.0",
     "vitest": "^2.1.8"
   }

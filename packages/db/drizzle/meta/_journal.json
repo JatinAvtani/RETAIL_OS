@@ -204,6 +204,20 @@
       "when": 1788000000000,
       "tag": "0029_sales_csv_imports",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1788100000000,
+      "tag": "0030_documents",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1788200000000,
+      "tag": "0031_document_email_intake",
+      "breakpoints": true
     }
   ]
 }

@@ -4,6 +4,7 @@ import {
   auditLogs,
   createDb,
   categories,
+  documents,
   hashPassword,
   lots,
   memberships,
@@ -85,13 +86,17 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
     //   storage_locations -> stores
     //   categories -> organizations
     //   stores -> organizations
+    //   documents -> stores, users (uploadedByUserId, 007-02) — must be gone before BOTH the
+    //     createdUserIds loop below AND the stores delete further down; found the same way as
+    //     every entry above it, a real FK violation surfacing once documents.confirmUpload's
+    //     registry entry became the first to genuinely write a documents row in this shared file.
     // Every row referencing a user (stock_counts' three *ByUserId columns, stock_movements'/
-    // audit_logs' actorUserId) must be gone BEFORE the createdUserIds loop deletes those users —
-    // a first version of this cleanup deleted users first (matching the position of every
-    // pre-005-16 seeded-resource cleanup, none of which reference users), which genuinely failed
-    // with a real FK violation and — because afterEach itself threw — silently corrupted every
-    // subsequent test's isolation in the same run, cascading into failures on entries this
-    // session never touched (stores.get, products.get, ...).
+    // audit_logs' actorUserId, documents' uploadedByUserId) must be gone BEFORE the createdUserIds
+    // loop deletes those users — a first version of this cleanup deleted users first (matching the
+    // position of every pre-005-16 seeded-resource cleanup, none of which reference users), which
+    // genuinely failed with a real FK violation and — because afterEach itself threw — silently
+    // corrupted every subsequent test's isolation in the same run, cascading into failures on
+    // entries this session never touched (stores.get, products.get, ...).
     for (const orgId of createdOrgIds) {
       const orgCounts = await db.select({ id: stockCounts.id }).from(stockCounts).where(eq(stockCounts.organizationId, orgId));
       for (const c of orgCounts) {
@@ -100,6 +105,7 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
       await db.delete(stockCounts).where(eq(stockCounts.organizationId, orgId));
       await db.delete(stockMovements).where(eq(stockMovements.organizationId, orgId));
       await db.delete(auditLogs).where(eq(auditLogs.organizationId, orgId));
+      await db.delete(documents).where(eq(documents.organizationId, orgId));
     }
 
     for (const userId of createdUserIds) {

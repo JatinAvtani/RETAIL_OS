@@ -14,9 +14,11 @@
   "dependencies": {
     "@fastify/cookie": "^11.1.2",
     "@fastify/cors": "^10.0.1",
+    "@retailos/ai": "workspace:*",
     "@retailos/authz": "workspace:*",
     "@retailos/db": "workspace:*",
     "@retailos/domain": "workspace:*",
+    "@retailos/email": "workspace:*",
     "@retailos/metrics": "workspace:*",
     "@retailos/pos": "workspace:*",
     "@retailos/session": "workspace:*",

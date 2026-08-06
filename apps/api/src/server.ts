@@ -7,6 +7,7 @@ import { createContext } from './trpc/context';
 import { registerGoogleOAuthRoutes } from './oauth/routes';
 import { registerSquareOAuthRoutes } from './oauth/square-routes';
 import { registerSquareWebhookRoute } from './webhooks/square-webhook-route';
+import { registerDocumentEmailWebhookRoute } from './webhooks/document-email-webhook-route';
 
 const WEB_ORIGIN = process.env.WEB_ORIGIN ?? 'http://localhost:3000';
 
@@ -39,6 +40,7 @@ export const buildServer = (options: { logger?: boolean } = {}) => {
   // route-scoped addContentTypeParser is encapsulated to this plugin only, per Fastify's own
   // plugin-boundary model — the global JSON parser every tRPC procedure relies on is untouched.
   app.register(registerSquareWebhookRoute);
+  app.register(registerDocumentEmailWebhookRoute);
 
   return app;
 };

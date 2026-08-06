@@ -12,6 +12,8 @@
     { "path": "../../packages/authz" },
     { "path": "../../packages/session" },
     { "path": "../../packages/storage" },
-    { "path": "../../packages/pos" }
+    { "path": "../../packages/pos" },
+    { "path": "../../packages/ai" },
+    { "path": "../../packages/email" }
   ]
 }

@@ -1,6 +1,7 @@
 import {
   createDb,
   categories,
+  documents,
   lots,
   menuItems,
   posConnections,
@@ -16,10 +17,11 @@ import {
   StockCountService,
 } from '@retailos/db';
 import { eq } from 'drizzle-orm';
+import { createHash } from 'node:crypto';
 import { generateId } from '@retailos/domain';
 import { encryptToken } from '@retailos/pos';
-import { buildProductImageKey, buildCsvImportKey, createPresignedUploadUrl, ensureBucketExists } from '@retailos/storage';
-import { PRODUCT_IMAGES_BUCKET, SALES_CSV_IMPORTS_BUCKET, storageClient } from './context';
+import { buildProductImageKey, buildCsvImportKey, buildDocumentKey, createPresignedUploadUrl, ensureBucketExists } from '@retailos/storage';
+import { PRODUCT_IMAGES_BUCKET, SALES_CSV_IMPORTS_BUCKET, DOCUMENTS_BUCKET, storageClient } from './context';
 
 type Db = ReturnType<typeof createDb>['db'];
 
@@ -244,6 +246,16 @@ if (!process.env.SQUARE_REDIRECT_URI) process.env.SQUARE_REDIRECT_URI = 'http://
 if (!process.env.POS_TOKEN_ENCRYPTION_KEY) process.env.POS_TOKEN_ENCRYPTION_KEY = 'cross-tenant-registry-test-key';
 
 /**
+ * 007-04: `documents.confirmUpload`'s own-resource-succeeds case below runs the REAL router
+ * mutation, which now classifies via a real Gemini call if `GEMINI_API_KEY` is set — same
+ * "avoid a real, unreliable external call in the merge-gate suite" reasoning as
+ * `patchFetchForSquare` below, opposite direction (there's nothing to fake a response WITH here,
+ * since the SDK isn't a plain `fetch` call, so this suite instead forces the documented
+ * "classification not attempted" path deterministically, same fix as `documents.test.ts`).
+ */
+delete process.env.GEMINI_API_KEY;
+
+/**
  * `integrations.syncSquareCatalog`/`syncSquareOrders` call Square's real Catalog/Orders APIs — no
  * live Square sandbox app exists in this codebase yet (006-03/006-04/006-05's standing limitation),
  * so their "own resource succeeds with a genuine 200" case cannot go over the real network the way
@@ -293,6 +305,10 @@ const seedPosConnection = async (db: Db, organizationId: string): Promise<string
 
 const CROSS_TENANT_PROBE_CSV = 'occurred_at,item,qty,price\n2026-08-01,Probe Item,1,1.00\n';
 
+// Only the magic-byte prefix matters to detectDocumentFormat (the first 5 bytes, "%PDF-") — not a
+// structurally valid PDF, just enough to pass upload-time format verification for these probes.
+const CROSS_TENANT_PROBE_PDF = Buffer.from('%PDF-1.4\n%%EOF');
+
 /** Seeds a real, UPLOADED sales_csv_imports row with a genuine CSV object in MinIO at the exact key `storageKey` names — same reasoning as `products.confirmImageUpload`'s real-JPEG upload: the OWN-resource positive case needs a genuine object to read back, not an incidental S3 404. Returns the import id, since every csvImport.* procedure past requestUpload is scoped by importId. */
 const seedCsvImport = async (db: Db, organizationId: string): Promise<string> => {
   const storeId = await seedStore(db, organizationId);
@@ -310,6 +326,29 @@ const seedCsvImport = async (db: Db, organizationId: string): Promise<string> =>
     detectedHeaders: { headers: ['occurred_at', 'item', 'qty', 'price'], sampleRows: [['2026-08-01', 'Probe Item', '1', '1.00']], delimiter: ',' },
   });
   return importId;
+};
+
+/** Seeds a real, UPLOADED documents row with a genuine (magic-byte-valid) PDF object in MinIO at the exact key `storageKey` names — same reasoning as `seedCsvImport`. Returns `{ storeId, documentId }`: `storeId` for `documents.list` (store-scoped), `documentId` for `documents.get`. */
+const seedDocument = async (db: Db, organizationId: string): Promise<{ storeId: string; documentId: string }> => {
+  const storeId = await seedStore(db, organizationId);
+  const documentId = generateId();
+  await ensureBucketExists(storageClient, DOCUMENTS_BUCKET);
+  const key = buildDocumentKey(organizationId, documentId, 'pdf');
+  const uploadUrl = await createPresignedUploadUrl(storageClient, DOCUMENTS_BUCKET, key, 'application/pdf');
+  await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': 'application/pdf' }, body: CROSS_TENANT_PROBE_PDF });
+  await db.insert(documents).values({
+    id: documentId,
+    organizationId,
+    storeId,
+    type: 'OTHER',
+    source: 'UPLOAD',
+    status: 'UPLOADED',
+    storageKey: key,
+    contentHash: createHash('sha256').update(CROSS_TENANT_PROBE_PDF).digest('hex'),
+    mimeType: 'application/pdf',
+    sizeBytes: CROSS_TENANT_PROBE_PDF.length,
+  });
+  return { storeId, documentId };
 };
 
 /** Seeds a real, UNMAPPED pos_items row in a real store — what `posItems.listUnmapped`/`mapToMenuItem`/`ignore`'s own-resource case needs. Returns the store id for `listUnmapped` (store-scoped), and the caller resolves the item id itself for the id-scoped mutations, same shape as `inventory.movements`' product lookup. */
@@ -800,5 +839,53 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     type: 'query',
     seedResource: seedStore,
     buildInput: (resourceId) => ({ storeId: resourceId, days: 30 }),
+  },
+  {
+    // requestUpload is store-scoped, not documentId-scoped (no document row exists yet at this
+    // point in the flow) — same shape as csvImport.requestUpload.
+    path: 'documents.requestUpload',
+    type: 'mutation',
+    seedResource: seedStore,
+    buildInput: (resourceId) => ({ storeId: resourceId }),
+  },
+  {
+    // Store-scoped confirmUpload attack, same shape as csvImport.confirmUpload — the FIRST check
+    // the procedure runs is store ownership, before the key-prefix check even matters.
+    path: 'documents.confirmUpload',
+    type: 'mutation',
+    seedResource: async (db, organizationId) => {
+      const storeId = await seedStore(db, organizationId);
+      await ensureBucketExists(storageClient, DOCUMENTS_BUCKET);
+      // Not seedDocument here — confirmUpload is the procedure that INSERTS the row; a real
+      // pre-existing row would collide. Only the object storage side needs to exist ahead of time,
+      // at a key this entry's own buildInput can deterministically reconstruct from storeId alone.
+      const key = buildDocumentKey(organizationId, storeId, 'pdf');
+      const uploadUrl = await createPresignedUploadUrl(storageClient, DOCUMENTS_BUCKET, key, 'application/pdf');
+      await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': 'application/pdf' }, body: CROSS_TENANT_PROBE_PDF });
+      return storeId;
+    },
+    buildInput: (resourceId, organizationId) => ({
+      storeId: resourceId,
+      key: buildDocumentKey(organizationId, resourceId, 'pdf'),
+    }),
+  },
+  {
+    path: 'documents.get',
+    type: 'query',
+    seedResource: async (db, organizationId) => {
+      const { documentId } = await seedDocument(db, organizationId);
+      return documentId;
+    },
+    buildInput: (resourceId) => ({ documentId: resourceId }),
+  },
+  {
+    // Store-scoped, same shape as dashboard.summary/inventory.levels.
+    path: 'documents.list',
+    type: 'query',
+    seedResource: async (db, organizationId) => {
+      const { storeId } = await seedDocument(db, organizationId);
+      return storeId;
+    },
+    buildInput: (resourceId) => ({ storeId: resourceId }),
   },
 ];

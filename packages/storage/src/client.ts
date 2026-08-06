@@ -76,6 +76,18 @@ export const createPresignedDownloadUrl = async (
   return getSignedUrl(client, command, { expiresIn: expiresInSeconds });
 };
 
+/**
+ * Direct server-side write — unlike every other upload path in this project (presigned URL, bytes
+ * travel browser-to-S3 directly, spec 14 §14.3's "never proxy large files through the API"), an
+ * inbound email webhook's attachment bytes arrive to the API itself as part of the verified webhook
+ * payload (007-03) — there is no browser in this flow to hand a presigned URL to. The size/type
+ * constraints this project applies elsewhere (magic-byte verification, size caps) are still enforced
+ * by the CALLER before this is invoked; this function only performs the write.
+ */
+export const putObjectBytes = async (client: S3Client, bucket: string, key: string, bytes: Buffer, contentType: string): Promise<void> => {
+  await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: bytes, ContentType: contentType }));
+};
+
 /** Fetches the object's actual bytes for server-side verification (magic bytes, size). */
 export const getObjectBytes = async (client: S3Client, bucket: string, key: string): Promise<Buffer> => {
   const result = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));

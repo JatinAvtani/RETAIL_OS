@@ -12,6 +12,7 @@ const NAV = [
   { href: '/products', label: 'Products' },
   { href: '/recipes', label: 'Recipes' },
   { href: '/inventory', label: 'Inventory' },
+  { href: '/documents', label: 'Documents' },
   { href: '/pos-items', label: 'POS mapping' },
 ];
 

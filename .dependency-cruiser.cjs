@@ -22,6 +22,7 @@ const WORKSPACES = [
   'packages/pos',
   'packages/metrics',
   'packages/ai',
+  'packages/email',
   'packages/ui',
 ];
 
