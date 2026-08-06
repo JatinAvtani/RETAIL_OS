@@ -1,0 +1,22 @@
+{
+  "name": "@retailos/queue",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "bullmq": "6.0.8",
+    "ioredis": "^5.11.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.8"
+  }
+}

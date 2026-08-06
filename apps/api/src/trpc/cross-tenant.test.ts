@@ -35,6 +35,7 @@ import { generateId } from '@retailos/domain';
 import { buildServer } from '../server';
 import { appRouter } from './router';
 import { resourceScopedProcedures } from './cross-tenant-registry';
+import { extractionQueue } from './context';
 import type { FastifyInstance } from 'fastify';
 
 /**
@@ -105,6 +106,14 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
       await db.delete(stockCounts).where(eq(stockCounts.organizationId, orgId));
       await db.delete(stockMovements).where(eq(stockMovements.organizationId, orgId));
       await db.delete(auditLogs).where(eq(auditLogs.organizationId, orgId));
+      // 007-05: documents.confirmUpload's registry entry now enqueues a real BullMQ job
+      // (jobId === documentId) — cleaned up before the row itself is deleted, same reasoning as
+      // documents.test.ts's own afterEach, so this shared suite doesn't leave real jobs behind in
+      // Redis on every run.
+      const orgDocuments = await db.select({ id: documents.id }).from(documents).where(eq(documents.organizationId, orgId));
+      for (const doc of orgDocuments) {
+        await (await extractionQueue.getJob(doc.id))?.remove();
+      }
       await db.delete(documents).where(eq(documents.organizationId, orgId));
     }
 

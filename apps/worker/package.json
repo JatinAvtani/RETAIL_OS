@@ -3,16 +3,28 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "main": "./src/worker.ts",
+  "types": "./src/worker.ts",
   "scripts": {
     "build": "tsc --build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "dev": "tsx watch src/start.ts",
+    "test": "vitest run"
   },
   "dependencies": {
     "@retailos/domain": "workspace:*",
     "@retailos/db": "workspace:*",
-    "@retailos/ai": "workspace:*"
+    "@retailos/ai": "workspace:*",
+    "@retailos/queue": "workspace:*",
+    "@retailos/storage": "workspace:*",
+    "bullmq": "6.0.8"
   },
   "devDependencies": {
-    "typescript": "^5.7.0"
+    "@aws-sdk/client-s3": "^3.700.0",
+    "@types/node": "^22.10.2",
+    "drizzle-orm": "^0.36.4",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.8"
   }
 }

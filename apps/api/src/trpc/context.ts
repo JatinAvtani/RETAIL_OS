@@ -1,6 +1,9 @@
 import { createDb } from '@retailos/db';
 import { createRedisClient, SessionStore } from '@retailos/session';
 import { createStorageClient } from '@retailos/storage';
+import { createExtractionQueue, createQueueRedisConnection } from '@retailos/queue';
+import type { Queue } from 'bullmq';
+import type { ExtractionJobData } from '@retailos/queue';
 import type { S3Client } from '@aws-sdk/client-s3';
 import type { CreateFastifyContextOptions } from '@trpc/server/adapters/fastify';
 import { createAuthRateLimiters } from '../auth/rate-limit';
@@ -42,6 +45,16 @@ export const storageClient: S3Client = createStorageClient({
   secretAccessKey: process.env.S3_SECRET_KEY ?? 'minioadmin',
   bucket: PRODUCT_IMAGES_BUCKET,
 });
+
+/**
+ * 007-05: a dedicated Redis connection for BullMQ, separate from `redis` above (`packages/session`'s
+ * client, used for sessions/rate-limiting) — BullMQ's own documented connection requirements
+ * (`maxRetriesPerRequest: null`) are specific to its own use and shouldn't be forced onto the
+ * session store's unrelated fast-fail expectations.
+ */
+export const extractionQueue: Queue<ExtractionJobData> = createExtractionQueue(
+  createQueueRedisConnection(process.env.REDIS_URL ?? 'redis://localhost:6379')
+);
 
 /**
  * `req`/`res` are exposed so a procedure can read the session cookie or set/clear one — signup and

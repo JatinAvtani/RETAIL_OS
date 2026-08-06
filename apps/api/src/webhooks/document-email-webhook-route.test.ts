@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { createDb, documentEmailIntake, documentEmailIntakeAttachments, documents, organizations, stores, suppliers } from '@retailos/db';
 import { generateId } from '@retailos/domain';
 import { buildServer } from '../server';
+import { extractionQueue } from '../trpc/context';
 import type { FastifyInstance } from 'fastify';
 
 // Same reasoning as documents.test.ts (007-04): a real GEMINI_API_KEY in .env.local would make the
@@ -53,6 +54,12 @@ describe('POST /webhooks/inbound-email', () => {
         await db.delete(documentEmailIntakeAttachments).where(eq(documentEmailIntakeAttachments.intakeId, row.id));
       }
       await db.delete(documentEmailIntake).where(eq(documentEmailIntake.organizationId, orgId));
+      // 007-05: an accepted-sender email enqueues a real extraction job per attachment document —
+      // cleaned up before the row itself is deleted, same reasoning as documents.test.ts.
+      const orgDocuments = await db.select({ id: documents.id }).from(documents).where(eq(documents.organizationId, orgId));
+      for (const doc of orgDocuments) {
+        await (await extractionQueue.getJob(doc.id))?.remove();
+      }
       await db.delete(documents).where(eq(documents.organizationId, orgId));
       await db.delete(suppliers).where(eq(suppliers.organizationId, orgId));
       await db.delete(stores).where(eq(stores.organizationId, orgId));

@@ -2,12 +2,15 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "./dist",
-    "rootDir": "./src"
+    "rootDir": "./src",
+    "types": ["node"]
   },
   "include": ["src"],
   "references": [
     { "path": "../../packages/domain" },
     { "path": "../../packages/db" },
-    { "path": "../../packages/ai" }
+    { "path": "../../packages/ai" },
+    { "path": "../../packages/queue" },
+    { "path": "../../packages/storage" }
   ]
 }

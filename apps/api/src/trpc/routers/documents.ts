@@ -4,6 +4,7 @@ import { TRPCError } from '@trpc/server';
 import { DocumentRepository, StoreRepository } from '@retailos/db';
 import { canAccessStore } from '@retailos/authz';
 import { classifyDocument } from '@retailos/ai';
+import { enqueueExtractionJob } from '@retailos/queue';
 import {
   buildDocumentKey,
   createPresignedUploadUrl,
@@ -13,7 +14,7 @@ import {
   validateDocumentUpload,
 } from '@retailos/storage';
 import { protectedProcedure, router } from '../trpc';
-import { storageClient, DOCUMENTS_BUCKET } from '../context';
+import { storageClient, DOCUMENTS_BUCKET, extractionQueue } from '../context';
 
 const requestUploadInput = z.object({ storeId: z.string().uuid() });
 const confirmUploadInput = z.object({ storeId: z.string().uuid(), key: z.string() });
@@ -122,6 +123,17 @@ export const documentsRouter = router({
     if (classification) {
       await documentRepository.updateClassification(created.id, classification.type, classification.confidence);
     }
+
+    // 007-05: enqueue extraction — real, async (BullMQ), never synchronous like classification,
+    // since the spike measured 20-220s Gemini latency for a full extraction call. `jobId:
+    // documentId` (set inside enqueueExtractionJob) makes a retried confirmUpload call idempotent
+    // rather than double-enqueuing the same document.
+    await enqueueExtractionJob(extractionQueue, {
+      documentId: created.id,
+      organizationId: ctx.session.organizationId,
+      storageKey: input.key,
+      mimeType,
+    });
 
     return { documentId: created.id, format: validation.format, type: classification?.type ?? 'OTHER' };
   }),

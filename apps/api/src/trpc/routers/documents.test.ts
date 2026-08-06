@@ -5,6 +5,7 @@ import { createRedisClient } from '@retailos/session';
 import { generateId } from '@retailos/domain';
 import { buildDocumentKey } from '@retailos/storage';
 import { buildServer } from '../../server';
+import { extractionQueue } from '../context';
 import type { FastifyInstance } from 'fastify';
 
 type TrpcSuccess = { result: { data: Record<string, unknown> } };
@@ -64,6 +65,14 @@ describe('documents router — upload', () => {
     // repeatedly (see project memory: a describe block's own inserted rows must be deleted before
     // a shared fixture's cleanup deletes a parent row they reference).
     for (const orgId of createdOrgIds) {
+      // 007-05: every confirmUpload in this file enqueues a REAL BullMQ job (jobId === documentId)
+      // against the real extractionQueue — cleaned up here, before the row itself is deleted,
+      // since the job lookup needs the documentId. Left-behind test jobs would otherwise
+      // accumulate in Redis indefinitely (no worker runs during this suite to drain them).
+      const orgDocuments = await db.select({ id: documents.id }).from(documents).where(eq(documents.organizationId, orgId));
+      for (const doc of orgDocuments) {
+        await (await extractionQueue.getJob(doc.id))?.remove();
+      }
       await db.delete(documents).where(eq(documents.organizationId, orgId));
     }
     for (const userId of createdUserIds) {
@@ -177,6 +186,15 @@ describe('documents router — upload', () => {
     expect(row?.source).toBe('UPLOAD');
     expect(row?.mimeType).toBe('application/pdf');
     expect(row?.contentHash).toBeTruthy();
+
+    // 007-05: confirmUpload enqueues a real extraction job (jobId === documentId) — checked
+    // directly against the real queue, not mocked, matching this project's "no mock queue" rule
+    // for BullMQ (packages/queue/extraction-queue.test.ts proves the underlying mechanics
+    // separately; this proves the ROUTE actually calls enqueueExtractionJob).
+    const job = await extractionQueue.getJob(confirmed.documentId);
+    expect(job).toBeTruthy();
+    expect(job?.data).toMatchObject({ documentId: confirmed.documentId, storageKey: key, mimeType: 'application/pdf' });
+    await job?.remove();
   });
 
   it('confirmUpload rejects an object whose real bytes are not a valid document, regardless of the declared content-type', async () => {

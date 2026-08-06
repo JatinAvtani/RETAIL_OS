@@ -4,8 +4,9 @@ import { DocumentEmailIntakeRepository, DocumentRepository, StoreRepository, Sup
 import { extractOrganizationSlugFromRecipient, parsePostmarkInboundPayload, PostmarkParseError, verifyPostmarkBasicAuth } from '@retailos/email';
 import { buildEmailQuarantineAttachmentKey, documentFormatToMimeType, ensureBucketExists, putObjectBytes, validateDocumentUpload } from '@retailos/storage';
 import { classifyDocument } from '@retailos/ai';
+import { enqueueExtractionJob } from '@retailos/queue';
 import { db } from '../trpc/context';
-import { storageClient, DOCUMENTS_BUCKET } from '../trpc/context';
+import { storageClient, DOCUMENTS_BUCKET, extractionQueue } from '../trpc/context';
 
 const EMAIL_QUARANTINE_BUCKET = 'retailos-email-quarantine';
 
@@ -200,6 +201,15 @@ export const registerDocumentEmailWebhookRoute: FastifyPluginCallback = (app: Fa
           const classification = await classifyDocument(apiKey, bytes, mimeType);
           await documentRepository.updateClassification(created.id, classification.type, classification.confidence.toFixed(4));
         }
+
+        // 007-05: same enqueue as the manual-upload path (documents.confirmUpload) — an email-in
+        // document goes through the identical async extraction pipeline as an uploaded one.
+        await enqueueExtractionJob(extractionQueue, {
+          documentId: created.id,
+          organizationId: organization.id,
+          storageKey,
+          mimeType,
+        });
       }
     }
 

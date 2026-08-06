@@ -21,9 +21,11 @@
     "@retailos/email": "workspace:*",
     "@retailos/metrics": "workspace:*",
     "@retailos/pos": "workspace:*",
+    "@retailos/queue": "workspace:*",
     "@retailos/session": "workspace:*",
     "@retailos/storage": "workspace:*",
     "@trpc/server": "^11.18.0",
+    "bullmq": "6.0.8",
     "decimal.js": "^10.4.3",
     "fastify": "^5.11.0",
     "zod": "^4.4.3"
