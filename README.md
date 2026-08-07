@@ -157,6 +157,8 @@ and the adjacent accepted case — before any code depends on them.
 ## Running it
 
 ```bash
+cp .env.local.example .env.local   # fill in GEMINI_API_KEY to exercise the invoice pipeline
+
 docker compose up -d          # Postgres, Redis, MinIO
 pnpm install
 pnpm --filter @retailos/db db:migrate
