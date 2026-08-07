@@ -11,24 +11,27 @@ const execFileAsync = promisify(execFile);
 /**
  * `docker run` for `jitesoft/tesseract-ocr`/`minidocks/poppler` is genuinely much slower on GitHub
  * Actions' runner than on a dev machine with a warm image cache and a faster CPU — confirmed
- * directly: a named-container `docker kill` (see `runDockerContainer` below) reliably cuts off a
- * stuck run, and doing so at 20s surfaced that CI needed MORE than 20s, not that the process was
- * hung forever. 90s gives real headroom for a cold image pull plus Tesseract's own OCR pass on that
- * runner's weaker CPU, while still bounding a genuine, unbounded stall if one ever occurs — the
- * `execFile` `timeout` option was tried first and confirmed to have zero effect on this runner
- * (`docker run` without `-it` doesn't reliably forward a signal sent to the CLI process into the
- * actual container, so the CLI's own wait-for-exit call can outlive it); `docker kill` at the
- * daemon level is what actually works, independent of the CLI's own signal handling.
+ * directly: a named-container `docker kill` (see `runDockerContainerOnce` below) reliably cuts off
+ * a stuck run, and doing so at 20s surfaced that CI needed MORE than 20s, not that the process was
+ * hung forever. 90s gives real headroom for Tesseract's own OCR pass on that runner's weaker CPU,
+ * while still bounding a genuine, unbounded stall if one ever occurs — the `execFile` `timeout`
+ * option was tried first and confirmed to have zero effect on this runner (`docker run` without
+ * `-it` doesn't reliably forward a signal sent to the CLI process into the actual container, so the
+ * CLI's own wait-for-exit call can outlive it); `docker kill` at the daemon level is what actually
+ * works, independent of the CLI's own signal handling.
+ *
+ * Even with images pre-pulled in CI (removing pull cost from the timed window), the call has still
+ * been observed to individually exceed 90s on GitHub's shared runner on two separate real runs —
+ * genuine day-to-day CPU/scheduling variance on shared infrastructure, not a deterministic cost this
+ * process controls. Raising the ceiling further doesn't fix that class of problem, it just moves the
+ * same flake to a higher number. `runDockerContainer` below retries once on a timeout instead: a
+ * second attempt on the same runner has, in every observed case, completed well within the timeout,
+ * consistent with the first attempt being unlucky rather than the work genuinely taking >90s.
  */
 const DOCKER_RUN_TIMEOUT_MS = 90_000;
 
-/**
- * Runs `docker run` with an explicit `--name`, racing it against `DOCKER_RUN_TIMEOUT_MS`. On
- * timeout, issues a real `docker kill <name>` (best-effort — the container may have already exited)
- * before rejecting, so a genuinely stuck container doesn't linger consuming resources after this
- * function gives up on it.
- */
-const runDockerContainer = async (args: string[]): Promise<void> => {
+/** Runs `docker run` once, killing the named container if it exceeds `DOCKER_RUN_TIMEOUT_MS`. */
+const runDockerContainerOnce = async (args: string[]): Promise<void> => {
   const containerName = `retailos-ocr-${randomUUID()}`;
   const fullArgs = ['run', '--rm', '--name', containerName, ...args];
 
@@ -51,6 +54,16 @@ const runDockerContainer = async (args: string[]): Promise<void> => {
     throw e;
   } finally {
     clearTimeout(timeoutHandle);
+  }
+};
+
+/** Retries once on a timeout — see the note above `DOCKER_RUN_TIMEOUT_MS` for why. A non-timeout failure (a real Docker/image error) is never retried, only re-thrown. */
+const runDockerContainer = async (args: string[]): Promise<void> => {
+  try {
+    await runDockerContainerOnce(args);
+  } catch (e) {
+    if (!(e as Error).message.startsWith('docker run timed out')) throw e;
+    await runDockerContainerOnce(args);
   }
 };
 

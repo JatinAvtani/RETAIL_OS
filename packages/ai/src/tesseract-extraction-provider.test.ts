@@ -28,7 +28,7 @@ describe('createTesseractExtractionProvider', () => {
     // field-for-field accuracy, which would be an unrealistic/overfit assertion for this provider.
     expect(result.fields).not.toBeNull();
     expect(result.overallConfidence).toBeNull(); // Tesseract has no semantic confidence — never fabricated.
-  }, 200000); // rasterization + OCR are two real, sequential `docker run` invocations, each bounded at 90s (DOCKER_RUN_TIMEOUT_MS) — confirmed via a real CI run that GitHub Actions' runner genuinely needs more than 20s per call (a cold image pull + a much weaker CPU than this dev machine), not that either call hangs.
+  }, 380000); // rasterization + OCR are two real, sequential `docker run` invocations, each bounded at 90s (DOCKER_RUN_TIMEOUT_MS) and each retried once on a timeout (see the note above DOCKER_RUN_TIMEOUT_MS) — worst case is 4 attempts, so the vitest timeout needs headroom for that, not just one pass per call.
 
   it('degrades to a real error, never throwing, on genuinely unreadable bytes', async () => {
     const provider = createTesseractExtractionProvider();
@@ -47,5 +47,5 @@ describe('createTesseractExtractionProvider', () => {
 
     expect(result.error).toBeNull();
     expect(result.fields).not.toBeNull();
-  }, 100000);
+  }, 190000); // one docker run call, retried once on a timeout — worst case 2 attempts at 90s each.
 });
