@@ -7,6 +7,18 @@ import type { ExtractedField, ExtractedFields, ExtractedLine, ExtractionProvider
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * `docker run` for `jitesoft/tesseract-ocr`/`minidocks/poppler` genuinely hung indefinitely on
+ * GitHub Actions' runner — confirmed via timestamped diagnostic logging showing the call itself
+ * never resolves, neither succeeding nor erroring, unlike every reproduction attempted locally
+ * (which either succeeds in ~1-2s or fails fast with a real Docker error). The exact root cause on
+ * that specific runner environment couldn't be pinned down further; a hard timeout turns an
+ * unexplained silent stall into a normal, fast provider error — exactly the kind of real-world
+ * failure the circuit breaker (`circuit-breaker-extraction-provider.ts`) and this provider's own
+ * "never throw, return `error` instead" contract already exist to handle.
+ */
+const DOCKER_RUN_TIMEOUT_MS = 20_000;
+
 const NULL_FIELD: ExtractedField = { value: null, confidence: null };
 /** Tesseract gives no semantic confidence — every non-null field gets a null confidence rather than a fabricated number, so it never reads as "the model was uncertain" when really it's "this OCR engine has no concept of confidence at all" (I7's reasoning applied to metadata, not just values). */
 const field = (value: string | null): ExtractedField => (value === null ? NULL_FIELD : { value, confidence: null });
@@ -44,7 +56,7 @@ const ocrImage = async (imagePath: string): Promise<string> => {
   await execFileAsync(
     'docker',
     ['run', '--rm', '--entrypoint', 'tesseract', '-v', `${dockerMountPath}:/data`, 'jitesoft/tesseract-ocr', `/data/${path.basename(imagePath)}`, `/data/${outBase}`, '--psm', '6'],
-    { env: { ...process.env, MSYS_NO_PATHCONV: '1' } }
+    { env: { ...process.env, MSYS_NO_PATHCONV: '1' }, timeout: DOCKER_RUN_TIMEOUT_MS }
   );
 
   const text = await readFile(path.join(dir, `${outBase}.txt`), 'utf-8');
@@ -59,6 +71,7 @@ const rasterizePdfToImages = async (pdfPath: string, outDir: string): Promise<st
 
   await execFileAsync('docker', ['run', '--rm', '-v', `${dockerMountPath}:/data`, 'minidocks/poppler', 'pdftoppm', '-png', `/data/${pdfBase}`, '/data/page'], {
     env: { ...process.env, MSYS_NO_PATHCONV: '1' },
+    timeout: DOCKER_RUN_TIMEOUT_MS,
   });
 
   const files = await readdir(outDir);
