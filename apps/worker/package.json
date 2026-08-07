@@ -17,7 +17,8 @@
     "@retailos/ai": "workspace:*",
     "@retailos/queue": "workspace:*",
     "@retailos/storage": "workspace:*",
-    "bullmq": "6.0.8"
+    "bullmq": "6.0.8",
+    "decimal.js": "^10.4.3"
   },
   "devDependencies": {
     "@aws-sdk/client-s3": "^3.700.0",

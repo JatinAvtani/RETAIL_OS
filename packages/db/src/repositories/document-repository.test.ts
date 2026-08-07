@@ -232,6 +232,83 @@ describe('DocumentRepository', () => {
     expect(links).toHaveLength(1);
   });
 
+  it('findBySupplierAndDocumentNumber finds another document sharing the same extracted supplier + documentNumber, case-insensitively', async () => {
+    const repo = new DocumentRepository(createScopedDb(client), organizationId);
+    const first = await repo.create({
+      storeId,
+      type: 'INVOICE',
+      source: 'UPLOAD',
+      storageKey: `${organizationId}/dup-number-1.pdf`,
+      contentHash: 'hash-dup-number-1',
+      mimeType: 'application/pdf',
+      sizeBytes: 1,
+    });
+    await repo.recordExtraction({
+      documentId: first.id,
+      provider: 'gemini',
+      modelVersion: 'flash-lite-v1',
+      promptVersion: 'v1',
+      fields: { supplier: { value: 'Acme Foods', confidence: 0.9 }, documentNumber: { value: 'INV-999', confidence: 0.9 } },
+      lines: [],
+      validation: { issues: [], canAutoApprove: true },
+    });
+
+    const second = await repo.create({
+      storeId,
+      type: 'INVOICE',
+      source: 'UPLOAD',
+      storageKey: `${organizationId}/dup-number-2.pdf`,
+      contentHash: 'hash-dup-number-2',
+      mimeType: 'application/pdf',
+      sizeBytes: 1,
+    });
+
+    const matches = await repo.findBySupplierAndDocumentNumber(second.id, 'acme foods', 'inv-999');
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.id).toBe(first.id);
+  });
+
+  it('findBySupplierAndDocumentNumber excludes the document itself', async () => {
+    const repo = new DocumentRepository(createScopedDb(client), organizationId);
+    const created = await repo.create({
+      storeId,
+      type: 'INVOICE',
+      source: 'UPLOAD',
+      storageKey: `${organizationId}/self-exclude.pdf`,
+      contentHash: 'hash-self-exclude',
+      mimeType: 'application/pdf',
+      sizeBytes: 1,
+    });
+    await repo.recordExtraction({
+      documentId: created.id,
+      provider: 'gemini',
+      modelVersion: 'flash-lite-v1',
+      promptVersion: 'v1',
+      fields: { supplier: { value: 'Acme Foods', confidence: 0.9 }, documentNumber: { value: 'INV-SELF', confidence: 0.9 } },
+      lines: [],
+      validation: { issues: [], canAutoApprove: true },
+    });
+
+    const matches = await repo.findBySupplierAndDocumentNumber(created.id, 'Acme Foods', 'INV-SELF');
+    expect(matches).toHaveLength(0);
+  });
+
+  it('findBySupplierAndDocumentNumber returns nothing when no other document has a matching pair', async () => {
+    const repo = new DocumentRepository(createScopedDb(client), organizationId);
+    const created = await repo.create({
+      storeId,
+      type: 'INVOICE',
+      source: 'UPLOAD',
+      storageKey: `${organizationId}/no-match.pdf`,
+      contentHash: 'hash-no-match',
+      mimeType: 'application/pdf',
+      sizeBytes: 1,
+    });
+
+    const matches = await repo.findBySupplierAndDocumentNumber(created.id, 'Nobody', 'NONE');
+    expect(matches).toHaveLength(0);
+  });
+
   it('constructor throws without an organizationId', () => {
     expect(() => new DocumentRepository(createScopedDb(client), '')).toThrow();
   });

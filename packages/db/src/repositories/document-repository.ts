@@ -1,4 +1,4 @@
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, ne, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { generateId } from '@retailos/domain';
 import * as schema from '../schema/index';
@@ -86,6 +86,34 @@ export class DocumentRepository extends TenantScopedRepository<typeof documents>
         .from(documents)
         .where(scopedWhere(eq(documents.contentHash, contentHash)))
         .orderBy(desc(documents.createdAt))
+    );
+  }
+
+  /**
+   * 007-07's duplicate gate, second half: a different document (excluded by id) whose LATEST
+   * extraction's `fields.supplier.value`/`fields.documentNumber.value` (case-insensitive, exact
+   * text match — no fuzzy matching, matching this task's confirmed scope) equals this one's.
+   * `documentNumber`/`supplier` are extracted free text, not columns, so this reads
+   * `document_extractions.fields` JSONB directly rather than joining on real columns. A document
+   * with no extraction yet, or an extraction with a null/unparseable supplier or documentNumber,
+   * cannot match anything here — there being no comparable data is a real "unknown," not a
+   * fabricated non-match.
+   */
+  async findBySupplierAndDocumentNumber(excludeDocumentId: string, supplier: string, documentNumber: string) {
+    return this.runScoped((db, scopedWhere) =>
+      db
+        .selectDistinctOn([documents.id], { id: documents.id })
+        .from(documents)
+        .innerJoin(documentExtractions, eq(documentExtractions.documentId, documents.id))
+        .where(
+          scopedWhere(
+            and(
+              ne(documents.id, excludeDocumentId),
+              eq(sql`lower(${documentExtractions.fields}->'supplier'->>'value')`, supplier.trim().toLowerCase()),
+              eq(sql`lower(${documentExtractions.fields}->'documentNumber'->>'value')`, documentNumber.trim().toLowerCase())
+            )
+          )
+        )
     );
   }
 

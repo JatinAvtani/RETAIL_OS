@@ -1,4 +1,4 @@
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import * as schema from '../schema/index';
 import { suppliers } from '../schema/index';
@@ -26,6 +26,23 @@ export class SupplierRepository extends TenantScopedRepository<typeof suppliers>
         .where(scopedWhere(and(eq(suppliers.id, id), isNull(suppliers.deletedAt))))
     );
     return rows[0] ?? null;
+  }
+
+  /**
+   * Case-insensitive EXACT name match — used by 007-07's validation gates to resolve an
+   * extracted supplier name string to a real row without any fuzzy matching (that's 007-10's
+   * job). Returns `null` on no match or more than one match; an ambiguous/ absent match means the
+   * caller has no confirmed supplier to compare trailing prices against, which is a real
+   * "unknown," not an error to guess through.
+   */
+  async findByExactName(name: string) {
+    const rows = await this.runScoped((db, scopedWhere) =>
+      db
+        .select()
+        .from(suppliers)
+        .where(scopedWhere(and(eq(sql`lower(${suppliers.name})`, name.trim().toLowerCase()), isNull(suppliers.deletedAt))))
+    );
+    return rows.length === 1 ? rows[0] : null;
   }
 
   async create(input: {

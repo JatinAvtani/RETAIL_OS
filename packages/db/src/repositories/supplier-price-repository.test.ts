@@ -30,6 +30,7 @@ describe('SupplierPriceRepository', () => {
   let adminClient: ReturnType<typeof postgres>;
   let organizationId: string;
   let supplierProductId: string;
+  let supplierId: string;
 
   beforeAll(async () => {
     client = postgres(APP_CONNECTION_STRING);
@@ -47,6 +48,7 @@ describe('SupplierPriceRepository', () => {
     const db = createScopedDb(client);
     const supplierRepo = new SupplierRepository(db, organizationId);
     const supplier = await supplierRepo.create({ id: generateId(), name: 'Price Test Supplier' });
+    supplierId = supplier.id;
 
     const unitRepo = new UnitRepository(drizzle(client, { schema }));
     const kgId = (await unitRepo.findByCode('kg'))!.id;
@@ -173,6 +175,61 @@ describe('SupplierPriceRepository', () => {
         validFrom: new Date('2026-01-15T00:00:00Z'),
       })
     ).rejects.toThrow(/exclusion constraint/);
+  });
+
+  it('findConfirmedTrailingPricesBySupplierSku returns confirmed prices, newest first', async () => {
+    const supplierProductRepo = new SupplierProductRepository(createScopedDb(client), organizationId);
+    await supplierProductRepo.confirm(supplierProductId);
+
+    const repo = new SupplierPriceRepository(createScopedDb(client), organizationId);
+    await repo.recordNewPrice({ id: generateId(), supplierProductId, unitPrice: '10.0000', currency: 'USD', validFrom: new Date('2026-01-01T00:00:00Z') });
+    await repo.recordNewPrice({ id: generateId(), supplierProductId, unitPrice: '12.0000', currency: 'USD', validFrom: new Date('2026-02-01T00:00:00Z') });
+
+    const trailing = await repo.findConfirmedTrailingPricesBySupplierSku(supplierId, 'FLR-PRICE-TEST');
+    expect(trailing).toHaveLength(2);
+    expect(trailing[0]?.unitPrice).toBe('12.0000');
+    expect(trailing[1]?.unitPrice).toBe('10.0000');
+  });
+
+  it('findConfirmedTrailingPricesBySupplierSku matches the SKU case-insensitively', async () => {
+    const supplierProductRepo = new SupplierProductRepository(createScopedDb(client), organizationId);
+    await supplierProductRepo.confirm(supplierProductId);
+
+    const repo = new SupplierPriceRepository(createScopedDb(client), organizationId);
+    await repo.recordNewPrice({ id: generateId(), supplierProductId, unitPrice: '10.0000', currency: 'USD', validFrom: new Date('2026-01-01T00:00:00Z') });
+
+    const trailing = await repo.findConfirmedTrailingPricesBySupplierSku(supplierId, 'flr-price-test');
+    expect(trailing).toHaveLength(1);
+  });
+
+  it('findConfirmedTrailingPricesBySupplierSku returns nothing for an UNCONFIRMED mapping — an unconfirmed row must never feed a validation gate', async () => {
+    // A dedicated, never-confirmed mapping — `supplierProductId` (the shared fixture) may already
+    // be confirmed by an earlier test in this file, since confirm() is permanent (no unconfirm()).
+    const db = createScopedDb(client);
+    const unitRepo = new UnitRepository(drizzle(client, { schema }));
+    const kgId = (await unitRepo.findByCode('kg'))!.id;
+    const productRepo = new ProductRepository(db, organizationId);
+    const unconfirmedProduct = await productRepo.create({ id: generateId(), sku: 'FLOUR-UNCONFIRMED', name: 'Flour (unconfirmed)', baseUnitId: kgId, type: 'INGREDIENT' });
+    const supplierProductRepo = new SupplierProductRepository(db, organizationId);
+    const unconfirmedMapping = await supplierProductRepo.create({ id: generateId(), supplierId, productId: unconfirmedProduct.id, supplierSku: 'FLR-UNCONFIRMED-SKU' });
+
+    const repo = new SupplierPriceRepository(db, organizationId);
+    await repo.recordNewPrice({ id: generateId(), supplierProductId: unconfirmedMapping.id, unitPrice: '10.0000', currency: 'USD', validFrom: new Date('2026-01-01T00:00:00Z') });
+
+    const trailing = await repo.findConfirmedTrailingPricesBySupplierSku(supplierId, 'FLR-UNCONFIRMED-SKU');
+    expect(trailing).toHaveLength(0);
+
+    const adminDb = drizzle(adminClient, { schema });
+    await adminDb.delete(supplierPrices).where(eq(supplierPrices.supplierProductId, unconfirmedMapping.id));
+    await adminDb.delete(supplierProducts).where(eq(supplierProducts.id, unconfirmedMapping.id));
+    await adminDb.delete(productVariants).where(eq(productVariants.productId, unconfirmedProduct.id));
+    await adminDb.delete(products).where(eq(products.id, unconfirmedProduct.id));
+  });
+
+  it('findConfirmedTrailingPricesBySupplierSku returns nothing for a SKU with no mapping at all', async () => {
+    const repo = new SupplierPriceRepository(createScopedDb(client), organizationId);
+    const trailing = await repo.findConfirmedTrailingPricesBySupplierSku(supplierId, 'NONEXISTENT-SKU');
+    expect(trailing).toHaveLength(0);
   });
 
   it('rejects construction with an empty organizationId', () => {

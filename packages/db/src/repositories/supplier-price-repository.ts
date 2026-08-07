@@ -1,7 +1,7 @@
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import * as schema from '../schema/index';
-import { supplierPrices } from '../schema/index';
+import { supplierPrices, supplierProducts } from '../schema/index';
 import { withTenantContext, type Tx } from '../tenant-context';
 
 type Db = ReturnType<typeof drizzle<typeof schema>>;
@@ -50,6 +50,32 @@ export class SupplierPriceRepository {
         .where(and(eq(supplierPrices.supplierProductId, supplierProductId), isNull(supplierPrices.validTo)))
     );
     return rows[0] ?? null;
+  }
+
+  /**
+   * 007-07's price-anomaly gate input: confirmed trailing unit prices for one exact
+   * (supplierId, supplierSku) pair, most recent `limit` rows. Deliberately joins only through
+   * `supplierProducts` rows with `isConfirmed = true` — an unconfirmed/fuzzy-matched mapping
+   * (007-10) must never silently feed a validation gate that blocks or waves through real
+   * invoices. Returns an empty array (never a fabricated single price) when no confirmed mapping
+   * exists for this exact SKU string.
+   */
+  async findConfirmedTrailingPricesBySupplierSku(supplierId: string, supplierSku: string, limit = 5) {
+    return this.runScoped((tx) =>
+      tx
+        .select({ unitPrice: supplierPrices.unitPrice, validFrom: supplierPrices.validFrom })
+        .from(supplierPrices)
+        .innerJoin(supplierProducts, eq(supplierProducts.id, supplierPrices.supplierProductId))
+        .where(
+          and(
+            eq(supplierProducts.supplierId, supplierId),
+            eq(sql`lower(${supplierProducts.supplierSku})`, supplierSku.trim().toLowerCase()),
+            eq(supplierProducts.isConfirmed, true)
+          )
+        )
+        .orderBy(desc(supplierPrices.validFrom))
+        .limit(limit)
+    );
   }
 
   /**

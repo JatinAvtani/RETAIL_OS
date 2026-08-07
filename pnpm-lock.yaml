@@ -172,6 +172,9 @@ importers:
       bullmq:
         specifier: 6.0.8
         version: 6.0.8(ioredis@5.11.1)
+      decimal.js:
+        specifier: ^10.4.3
+        version: 10.6.0
     devDependencies:
       '@aws-sdk/client-s3':
         specifier: ^3.700.0

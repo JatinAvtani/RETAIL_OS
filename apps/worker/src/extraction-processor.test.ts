@@ -2,7 +2,20 @@ import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, afterEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { generateId } from '@retailos/domain';
-import { createDb, documentExtractions, documents, organizations, stores } from '@retailos/db';
+import {
+  createDb,
+  documentExtractions,
+  documents,
+  organizations,
+  products,
+  stores,
+  suppliers,
+  supplierProducts,
+  supplierPrices,
+  units,
+  SupplierProductRepository,
+  SupplierPriceRepository,
+} from '@retailos/db';
 import type { ExtractionProvider, ExtractionResult } from '@retailos/ai';
 import { createStorageClient, ensureBucketExists, putObjectBytes } from '@retailos/storage';
 import type { Job } from 'bullmq';
@@ -31,7 +44,19 @@ const fakeSuccessfulProvider: ExtractionProvider = {
         discount: { value: null, confidence: null },
         total: { value: '11.00', confidence: 0.9 },
       },
-      lines: [],
+      // Internally consistent with the fields above (10.00 line total + 1.00 tax = 11.00 total) so
+      // this fixture reads as a genuinely clean extraction now that 007-07's real gates run against
+      // it — a self-contradicting fixture would otherwise silently produce a real TOTAL_MISMATCH.
+      lines: [
+        {
+          sku: { value: 'SKU-1', confidence: 0.9 },
+          description: { value: 'Widget', confidence: 0.9 },
+          quantity: { value: '2', confidence: 0.9 },
+          unit: { value: 'ea', confidence: 0.9 },
+          unitPrice: { value: '5.00', confidence: 0.9 },
+          lineTotal: { value: '10.00', confidence: 0.9 },
+        },
+      ],
       overallConfidence: 0.9,
     };
   },
@@ -178,6 +203,175 @@ describe('extraction processor', () => {
     expect(extraction?.provider).toBe('tesseract'); // real fallback, not gemini — confirms the breaker genuinely routed away from the failing primary.
     expect(extraction?.fields).not.toEqual({}); // Tesseract's real regex parser found at least the header shape on this real invoice.
   }, 30000);
+
+  it('007-07: a content-hash duplicate produces a real DUPLICATE validation issue', async () => {
+    const sharedHash = `shared-hash-${generateId()}`;
+    const priorId = generateId();
+    await adminDb.insert(documents).values({
+      id: priorId,
+      organizationId,
+      storeId,
+      type: 'OTHER',
+      source: 'UPLOAD',
+      status: 'REVIEW_REQUIRED',
+      storageKey: 'test-invoice.pdf',
+      contentHash: sharedHash,
+      mimeType: 'application/pdf',
+      sizeBytes: 15,
+    });
+
+    documentId = generateId();
+    await adminDb.insert(documents).values({
+      id: documentId,
+      organizationId,
+      storeId,
+      type: 'OTHER',
+      source: 'UPLOAD',
+      status: 'UPLOADED',
+      storageKey: 'test-invoice.pdf',
+      contentHash: sharedHash,
+      mimeType: 'application/pdf',
+      sizeBytes: 15,
+    });
+
+    const processor = createExtractionProcessor({
+      databaseUrl: APP_CONNECTION_STRING,
+      geminiApiKey: 'unused-because-provider-is-injected',
+      storage: { endpoint: process.env.S3_ENDPOINT ?? 'http://localhost:9000', accessKeyId: 'minioadmin', secretAccessKey: 'minioadmin', bucket: BUCKET },
+      provider: fakeSuccessfulProvider,
+    });
+    await processor(asJob({ documentId, organizationId, storageKey: 'test-invoice.pdf', mimeType: 'application/pdf' }));
+
+    const [extraction] = await adminDb.select().from(documentExtractions).where(eq(documentExtractions.documentId, documentId));
+    const validation = extraction?.validation as { issues: { code: string }[]; canAutoApprove: boolean };
+    expect(validation.issues.some((issue) => issue.code === 'DUPLICATE')).toBe(true);
+    expect(validation.canAutoApprove).toBe(false);
+
+    await adminDb.delete(documents).where(eq(documents.id, priorId));
+  });
+
+  it('007-07: a document whose lines/tax/discount do not reconcile to its stated total produces a real TOTAL_MISMATCH issue', async () => {
+    documentId = await seedDocument();
+
+    const inconsistentProvider: ExtractionProvider = {
+      name: 'fake-inconsistent',
+      async extract(): Promise<ExtractionResult> {
+        return {
+          provider: 'fake-inconsistent',
+          modelVersion: 'fake-v1',
+          latencyMs: 1,
+          error: null,
+          fields: {
+            supplier: { value: 'Test Supplier', confidence: 0.9 },
+            documentNumber: { value: 'INV-2', confidence: 0.9 },
+            documentDate: { value: '2026-01-01', confidence: 0.9 },
+            currency: { value: 'USD', confidence: 1 },
+            subtotal: { value: '10.00', confidence: 0.9 },
+            tax: { value: '0', confidence: 0.9 },
+            discount: { value: null, confidence: null },
+            total: { value: '999.00', confidence: 0.9 }, // deliberately does not reconcile
+          },
+          lines: [
+            {
+              sku: { value: 'SKU-1', confidence: 0.9 },
+              description: { value: 'Widget', confidence: 0.9 },
+              quantity: { value: '2', confidence: 0.9 },
+              unit: { value: 'ea', confidence: 0.9 },
+              unitPrice: { value: '5.00', confidence: 0.9 },
+              lineTotal: { value: '10.00', confidence: 0.9 },
+            },
+          ],
+          overallConfidence: 0.9,
+        };
+      },
+    };
+
+    const processor = createExtractionProcessor({
+      databaseUrl: APP_CONNECTION_STRING,
+      geminiApiKey: 'unused-because-provider-is-injected',
+      storage: { endpoint: process.env.S3_ENDPOINT ?? 'http://localhost:9000', accessKeyId: 'minioadmin', secretAccessKey: 'minioadmin', bucket: BUCKET },
+      provider: inconsistentProvider,
+    });
+    await processor(asJob({ documentId, organizationId, storageKey: 'test-invoice.pdf', mimeType: 'application/pdf' }));
+
+    const [extraction] = await adminDb.select().from(documentExtractions).where(eq(documentExtractions.documentId, documentId));
+    const validation = extraction?.validation as { issues: { code: string }[]; canAutoApprove: boolean };
+    expect(validation.issues.some((issue) => issue.code === 'TOTAL_MISMATCH')).toBe(true);
+    expect(validation.canAutoApprove).toBe(false);
+  });
+
+  it('007-07: an extracted unit price more than 5x a confirmed trailing median produces a real PRICE_ANOMALY issue', async () => {
+    const supplierId = generateId();
+    await adminDb.insert(suppliers).values({ id: supplierId, organizationId, name: `Price Anomaly Supplier ${supplierId}` });
+
+    const [eachUnit] = await adminDb.select({ id: units.id }).from(units).where(eq(units.code, 'each'));
+    const productId = generateId();
+    await adminDb.insert(products).values({ id: productId, organizationId, sku: `PA-${productId}`, name: 'Anomaly Test Product', baseUnitId: eachUnit!.id, type: 'INGREDIENT' });
+
+    const supplierProductRepository = new SupplierProductRepository(adminDb, organizationId);
+    const supplierProduct = await supplierProductRepository.create({ id: generateId(), supplierId, productId, supplierSku: 'ANOM-SKU-1' });
+    await supplierProductRepository.confirm(supplierProduct.id);
+
+    const supplierPriceRepository = new SupplierPriceRepository(adminDb, organizationId);
+    await supplierPriceRepository.recordNewPrice({ id: generateId(), supplierProductId: supplierProduct.id, unitPrice: '4.50', currency: 'USD', validFrom: new Date('2026-01-01') });
+
+    documentId = await seedDocument();
+    const anomalousProvider: ExtractionProvider = {
+      name: 'fake-anomalous',
+      async extract(): Promise<ExtractionResult> {
+        return {
+          provider: 'fake-anomalous',
+          modelVersion: 'fake-v1',
+          latencyMs: 1,
+          error: null,
+          fields: {
+            supplier: { value: `Price Anomaly Supplier ${supplierId}`, confidence: 0.9 },
+            documentNumber: { value: 'INV-3', confidence: 0.9 },
+            documentDate: { value: '2026-01-01', confidence: 0.9 },
+            currency: { value: 'USD', confidence: 1 },
+            subtotal: { value: '45.00', confidence: 0.9 },
+            tax: { value: '0', confidence: 0.9 },
+            discount: { value: null, confidence: null },
+            total: { value: '45.00', confidence: 0.9 },
+          },
+          lines: [
+            {
+              // Decimal-place OCR slip: $4.50 read as $45.00 — exactly the failure class plan.md
+              // calls out this gate as existing to catch.
+              sku: { value: 'ANOM-SKU-1', confidence: 0.9 },
+              description: { value: 'Anomaly Widget', confidence: 0.9 },
+              quantity: { value: '1', confidence: 0.9 },
+              unit: { value: 'ea', confidence: 0.9 },
+              unitPrice: { value: '45.00', confidence: 0.9 },
+              lineTotal: { value: '45.00', confidence: 0.9 },
+            },
+          ],
+          overallConfidence: 0.9,
+        };
+      },
+    };
+
+    const processor = createExtractionProcessor({
+      databaseUrl: APP_CONNECTION_STRING,
+      geminiApiKey: 'unused-because-provider-is-injected',
+      storage: { endpoint: process.env.S3_ENDPOINT ?? 'http://localhost:9000', accessKeyId: 'minioadmin', secretAccessKey: 'minioadmin', bucket: BUCKET },
+      provider: anomalousProvider,
+    });
+    await processor(asJob({ documentId, organizationId, storageKey: 'test-invoice.pdf', mimeType: 'application/pdf' }));
+
+    const [extraction] = await adminDb.select().from(documentExtractions).where(eq(documentExtractions.documentId, documentId));
+    const validation = extraction?.validation as { issues: { code: string }[]; canAutoApprove: boolean };
+    expect(validation.issues.some((issue) => issue.code === 'PRICE_ANOMALY')).toBe(true);
+    expect(validation.canAutoApprove).toBe(false);
+
+    // FK order: supplier_prices/supplier_products reference products/suppliers, which reference
+    // organizations — must be deleted before their parents, same recurring bug class this project
+    // has hit repeatedly in shared test fixtures.
+    await adminDb.delete(supplierPrices).where(eq(supplierPrices.supplierProductId, supplierProduct.id));
+    await adminDb.delete(supplierProducts).where(eq(supplierProducts.id, supplierProduct.id));
+    await adminDb.delete(products).where(eq(products.id, productId));
+    await adminDb.delete(suppliers).where(eq(suppliers.id, supplierId));
+  });
 
   it('with no provider configured (no API key, no injected provider), the document is left at PROCESSING and no extraction row is created', async () => {
     documentId = await seedDocument();

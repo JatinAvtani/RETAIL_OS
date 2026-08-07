@@ -86,4 +86,26 @@ describe('SupplierRepository', () => {
     const result = await repo.findById(generateId());
     expect(result).toBeNull();
   });
+
+  it('findByExactName matches case-insensitively', async () => {
+    const repo = new SupplierRepository(createScopedDb(client), organizationId);
+    const supplier = await repo.create({ id: generateId(), name: 'Coastal Meats & Poultry' });
+
+    const found = await repo.findByExactName('coastal meats & poultry');
+    expect(found?.id).toBe(supplier.id);
+  });
+
+  it('findByExactName returns null when no supplier matches', async () => {
+    const repo = new SupplierRepository(createScopedDb(client), organizationId);
+    const result = await repo.findByExactName('Nonexistent Supplier');
+    expect(result).toBeNull();
+  });
+
+  it('findByExactName never fuzzy-matches a partial or near name', async () => {
+    const repo = new SupplierRepository(createScopedDb(client), organizationId);
+    await repo.create({ id: generateId(), name: 'Coastal Meats & Poultry' });
+
+    const partial = await repo.findByExactName('Coastal Meats');
+    expect(partial).toBeNull();
+  });
 });
