@@ -4,7 +4,9 @@ import {
   auditLogs,
   createDb,
   categories,
+  documentExtractions,
   documents,
+  extractionCorrections,
   hashPassword,
   lots,
   memberships,
@@ -27,6 +29,8 @@ import {
   stockMovements,
   storageLocations,
   stores,
+  supplierProducts,
+  suppliers,
   unmappedSales,
   users,
 } from '@retailos/db';
@@ -114,6 +118,13 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
       for (const doc of orgDocuments) {
         await (await extractionQueue.getJob(doc.id))?.remove();
       }
+      // 007-09/007-10: documents.getForReview/.approve/.reject/.confirmLineMapping's registry
+      // entries now seed real document_extractions AND extraction_corrections rows
+      // (extraction_corrections.extraction_id -> document_extractions.id, which itself references
+      // documents.id) — both must be deleted before the documents delete below, or the FK blocks it.
+      // Same recurring FK-teardown-order bug class this shared fixture has hit repeatedly.
+      await db.delete(extractionCorrections).where(eq(extractionCorrections.organizationId, orgId));
+      await db.delete(documentExtractions).where(eq(documentExtractions.organizationId, orgId));
       await db.delete(documents).where(eq(documents.organizationId, orgId));
     }
 
@@ -136,11 +147,16 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
       }
       await db.delete(recipes).where(eq(recipes.organizationId, orgId));
 
+      // 007-10: documents.confirmLineMapping's registry entry now seeds real supplier_products
+      // rows (references both products AND suppliers) — must be gone before either parent table's
+      // rows are deleted below.
+      await db.delete(supplierProducts).where(eq(supplierProducts.organizationId, orgId));
       const orgProducts = await db.select({ id: products.id }).from(products).where(eq(products.organizationId, orgId));
       for (const p of orgProducts) {
         await db.delete(productVariants).where(eq(productVariants.productId, p.id));
       }
       await db.delete(products).where(eq(products.organizationId, orgId));
+      await db.delete(suppliers).where(eq(suppliers.organizationId, orgId));
       await db.delete(storageLocations).where(eq(storageLocations.organizationId, orgId));
       await db.delete(posConnections).where(eq(posConnections.organizationId, orgId));
       await db.delete(salesCsvImports).where(eq(salesCsvImports.organizationId, orgId));

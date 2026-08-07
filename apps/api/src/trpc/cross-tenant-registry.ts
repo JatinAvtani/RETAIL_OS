@@ -1,6 +1,7 @@
 import {
   createDb,
   categories,
+  documentExtractions,
   documents,
   lots,
   menuItems,
@@ -13,6 +14,7 @@ import {
   salesCsvImports,
   storageLocations,
   stores,
+  suppliers,
   units,
   StockCountService,
 } from '@retailos/db';
@@ -365,6 +367,66 @@ const seedPosItem = async (db: Db, organizationId: string): Promise<{ storeId: s
     mappingStatus: 'UNMAPPED',
   });
   return { storeId, posItemId };
+};
+
+/** Same as `seedDocument`, but already at `REVIEW_REQUIRED` with a real extraction row — what `documents.getForReview`/`documents.approve`/`documents.reject`'s own-resource cases need to reach a genuine 200/2xx, not a 400 ("not awaiting review") that would mask a real cross-tenant bug behind an unrelated status code. */
+const seedDocumentAwaitingReview = async (db: Db, organizationId: string): Promise<{ storeId: string; documentId: string }> => {
+  const seeded = await seedDocument(db, organizationId);
+  await db.insert(documentExtractions).values({
+    id: generateId(),
+    organizationId,
+    documentId: seeded.documentId,
+    provider: 'gemini',
+    modelVersion: 'flash-lite-v1',
+    promptVersion: '1',
+    fields: { supplier: { value: 'Cross-tenant probe supplier', confidence: 0.9 } },
+    lines: [],
+    validation: { issues: [], canAutoApprove: true },
+    overallConfidence: '0.9000',
+  });
+  await db.update(documents).set({ status: 'REVIEW_REQUIRED' }).where(eq(documents.id, seeded.documentId));
+  return seeded;
+};
+
+/**
+ * 007-10: `documents.confirmLineMapping`'s own-resource case needs MORE than
+ * `seedDocumentAwaitingReview` — a real line item with a real SKU, and a real `suppliers` row whose
+ * name exactly matches the extraction's `fields.supplier.value` (the endpoint's own resolution rule,
+ * matching 007-07's validation-gate precedent), plus a real product to map to. Returns just the
+ * document id (the resource under attack, matching every other entry's shape) — `buildInput` looks
+ * up a real product fresh via `organizationId` (always tenant A's, per the runner's own contract:
+ * `buildInput(resourceId, tenantA.organizationId, db)` regardless of which tenant is calling), since
+ * `productId` must be one of tenant A's real products in BOTH the attack and own-resource cases.
+ */
+const seedDocumentAwaitingReviewWithLine = async (db: Db, organizationId: string): Promise<string> => {
+  const seeded = await seedDocument(db, organizationId);
+  const supplierId = generateId();
+  await db.insert(suppliers).values({ id: supplierId, organizationId, name: `Cross-tenant probe supplier ${supplierId}` });
+  await seedProduct(db, organizationId);
+
+  await db.insert(documentExtractions).values({
+    id: generateId(),
+    organizationId,
+    documentId: seeded.documentId,
+    provider: 'gemini',
+    modelVersion: 'flash-lite-v1',
+    promptVersion: '1',
+    fields: { supplier: { value: `Cross-tenant probe supplier ${supplierId}`, confidence: 0.9 } },
+    lines: [
+      {
+        sku: { value: `cross-tenant-probe-sku-${generateId()}`, confidence: 0.6 },
+        description: { value: 'Cross-tenant probe line', confidence: 0.6 },
+        quantity: { value: '1', confidence: 0.9 },
+        unit: { value: 'ea', confidence: 0.9 },
+        unitPrice: { value: '1.00', confidence: 0.9 },
+        lineTotal: { value: '1.00', confidence: 0.9 },
+      },
+    ],
+    validation: { issues: [], canAutoApprove: true },
+    overallConfidence: '0.7500',
+  });
+  await db.update(documents).set({ status: 'REVIEW_REQUIRED' }).where(eq(documents.id, seeded.documentId));
+  return seeded.documentId;
 };
 
 /** Seeds a real menu item — what `posItems.mapToMenuItem`'s own-resource case needs to reach a genuine 200 (a real menuItemId to map to, not a fake one that would 404 regardless of tenant). */
@@ -887,5 +949,67 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
       return storeId;
     },
     buildInput: (resourceId) => ({ storeId: resourceId }),
+  },
+  {
+    // 007-13, same store-scoped shape as documents.list.
+    path: 'documents.search',
+    type: 'query',
+    seedResource: async (db, organizationId) => {
+      const { storeId } = await seedDocument(db, organizationId);
+      return storeId;
+    },
+    buildInput: (resourceId) => ({ storeId: resourceId }),
+  },
+  {
+    path: 'documents.getForReview',
+    type: 'query',
+    seedResource: async (db, organizationId) => {
+      const { documentId } = await seedDocumentAwaitingReview(db, organizationId);
+      return documentId;
+    },
+    buildInput: (resourceId) => ({ documentId: resourceId }),
+  },
+  {
+    path: 'documents.approve',
+    type: 'mutation',
+    seedResource: async (db, organizationId) => {
+      const { documentId } = await seedDocumentAwaitingReview(db, organizationId);
+      return documentId;
+    },
+    buildInput: (resourceId) => ({ documentId: resourceId }),
+  },
+  {
+    path: 'documents.reject',
+    type: 'mutation',
+    seedResource: async (db, organizationId) => {
+      const { documentId } = await seedDocumentAwaitingReview(db, organizationId);
+      return documentId;
+    },
+    buildInput: (resourceId) => ({ documentId: resourceId }),
+  },
+  {
+    // 007-10. buildInput looks up a real product belonging to `organizationId` fresh — the runner
+    // always passes tenant A's organizationId here (see cross-tenant.test.ts), so this is a real
+    // product to map to in BOTH the attack (tenant B calling with tenant A's documentId) and the
+    // own-resource (tenant A calling with their own documentId) cases.
+    path: 'documents.confirmLineMapping',
+    type: 'mutation',
+    seedResource: seedDocumentAwaitingReviewWithLine,
+    buildInput: async (resourceId, organizationId, db) => {
+      const [product] = await db.select({ id: products.id }).from(products).where(eq(products.organizationId, organizationId));
+      if (!product) {
+        throw new Error('Cross-tenant registry: documents.confirmLineMapping expected a seeded product, found none.');
+      }
+      return { documentId: resourceId, lineIndex: 0, productId: product.id };
+    },
+  },
+  {
+    path: 'documents.getLinks',
+    type: 'query',
+    seedResource: async (db, organizationId) => {
+      const { documentId } = await seedDocumentAwaitingReview(db, organizationId);
+      return documentId;
+    },
+    buildInput: (resourceId) => ({ documentId: resourceId }),
   },
 ];

@@ -13,6 +13,7 @@ export * from './repositories/storage-location-repository';
 export * from './repositories/supplier-repository';
 export * from './repositories/supplier-product-repository';
 export * from './repositories/supplier-price-repository';
+export * from './repositories/posting-service';
 export * from './repositories/recipe-repository';
 export * from './repositories/menu-item-repository';
 export * from './repositories/stock-movement-repository';

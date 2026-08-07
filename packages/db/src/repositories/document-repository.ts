@@ -1,8 +1,8 @@
-import { and, desc, eq, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, ne, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { generateId } from '@retailos/domain';
 import * as schema from '../schema/index';
-import { documentExtractions, documentLinks, documents, extractionCorrections, type documentSourceEnum, type documentStatusEnum, type documentTypeEnum } from '../schema/index';
+import { auditLogs, documentExtractions, documentLinks, documents, extractionCorrections, outboxEvents, type documentSourceEnum, type documentStatusEnum, type documentTypeEnum } from '../schema/index';
 import { TenantScopedRepository } from '../tenant-repository';
 
 export type DocumentType = (typeof documentTypeEnum.enumValues)[number];
@@ -127,7 +127,7 @@ export class DocumentRepository extends TenantScopedRepository<typeof documents>
     );
   }
 
-  /** Every document for one store, most recent first — the upload page's own "recent uploads" list (007-13's fuller search/filter view is a separate, later task). */
+  /** Every document for one store, most recent first — the upload page's own "recent uploads" list. */
   async listForStore(storeId: string) {
     return this.runScoped((db, scopedWhere) =>
       db
@@ -136,6 +136,54 @@ export class DocumentRepository extends TenantScopedRepository<typeof documents>
         .where(scopedWhere(eq(documents.storeId, storeId)))
         .orderBy(desc(documents.createdAt))
     );
+  }
+
+  /**
+   * 007-13: the real list/search/filter view — status and type are real column filters; `query`
+   * matches against the LATEST extraction's `fields.supplier.value`/`fields.documentNumber.value`
+   * (case-insensitive substring), the same JSONB-read pattern 007-07's duplicate gate already
+   * established, since supplier/document-number are extracted free text, not real columns on
+   * `documents`. A document with no extraction yet (still `UPLOADED`/`PROCESSING`) simply can't
+   * match a text query — it's excluded, not a false match, which is the honest behavior (I7: no
+   * data to search is not the same as a match).
+   */
+  async search(
+    storeId: string,
+    filters: { status?: DocumentStatus; type?: DocumentType; query?: string }
+  ) {
+    return this.runScoped((db, scopedWhere) => {
+      const conditions = [eq(documents.storeId, storeId)];
+      if (filters.status) conditions.push(eq(documents.status, filters.status));
+      if (filters.type) conditions.push(eq(documents.type, filters.type));
+
+      if (!filters.query || filters.query.trim().length === 0) {
+        return db
+          .select()
+          .from(documents)
+          .where(scopedWhere(and(...conditions)))
+          .orderBy(desc(documents.createdAt));
+      }
+
+      // A subquery (EXISTS), not a JOIN — a document can have MULTIPLE extraction rows
+      // (re-extraction preserves history, per 007-01's own design), and a join would either
+      // duplicate the document row per matching extraction or require a DISTINCT ON that forces
+      // ordering by documents.id first, breaking "most recent first". EXISTS asks the right
+      // question directly: "does at least one of this document's extractions match?"
+      const needle = `%${filters.query.trim().toLowerCase()}%`;
+      const matchesQuery = sql`EXISTS (
+        SELECT 1 FROM ${documentExtractions}
+        WHERE ${documentExtractions.documentId} = ${documents.id}
+          AND (
+            lower(${documentExtractions.fields}->'supplier'->>'value') LIKE ${needle}
+            OR lower(${documentExtractions.fields}->'documentNumber'->>'value') LIKE ${needle}
+          )
+      )`;
+      return db
+        .select()
+        .from(documents)
+        .where(scopedWhere(and(...conditions, matchesQuery)))
+        .orderBy(desc(documents.createdAt));
+    });
   }
 
   async updateStatus(id: string, status: DocumentStatus) {
@@ -147,6 +195,72 @@ export class DocumentRepository extends TenantScopedRepository<typeof documents>
         .returning()
     );
     return rows[0] ?? null;
+  }
+
+  /**
+   * 007-09 (review UI): a reviewer's decision on a document already at `REVIEW_REQUIRED` (or
+   * `AUTO_APPROVED`, which plan.md §5.6.1 explicitly calls "still reviewable" — a human can override
+   * an auto-approval). Status update, outbox event, and audit log entry all write inside ONE
+   * transaction (I8) — matching `MovementService.postMovementInTx`'s established pattern, since
+   * composing `updateStatus` with separate outbox/audit inserts from outside would run as multiple
+   * transactions, not one atomic unit (the same lesson this codebase has hit repeatedly). Returns
+   * `null` (never throws) when the document doesn't exist or isn't in a reviewable state — the
+   * caller decides how to surface that, matching every other `returning()`-based method's
+   * `rows[0] ?? null` convention in this class.
+   */
+  async approve(id: string, reviewedByUserId: string) {
+    return this.reviewDecision(id, reviewedByUserId, 'APPROVED', 'document.approved');
+  }
+
+  /** Same shape as `approve` — a rejected document never posts (007-11's posting engine only ever reads `APPROVED` documents). */
+  async reject(id: string, reviewedByUserId: string, reason?: string) {
+    return this.reviewDecision(id, reviewedByUserId, 'REJECTED', 'document.rejected', reason);
+  }
+
+  private async reviewDecision(
+    id: string,
+    reviewedByUserId: string,
+    status: 'APPROVED' | 'REJECTED',
+    eventType: 'document.approved' | 'document.rejected',
+    reason?: string
+  ) {
+    return this.runScoped(async (db, scopedWhere) => {
+      const existingRows = await db.select().from(documents).where(scopedWhere(eq(documents.id, id)));
+      const existing = existingRows[0];
+      if (!existing || (existing.status !== 'REVIEW_REQUIRED' && existing.status !== 'AUTO_APPROVED')) {
+        return null;
+      }
+
+      const updatedRows = await db
+        .update(documents)
+        .set({ status, updatedAt: new Date() })
+        .where(scopedWhere(eq(documents.id, id)))
+        .returning();
+      const updated = updatedRows[0];
+      if (!updated) return null;
+
+      await db.insert(outboxEvents).values({
+        id: generateId(),
+        organizationId: this.organizationId,
+        aggregateType: 'document',
+        aggregateId: id,
+        eventType,
+        payload: { documentId: id, previousStatus: existing.status, ...(reason !== undefined ? { reason } : {}) },
+      });
+
+      await db.insert(auditLogs).values({
+        id: generateId(),
+        organizationId: this.organizationId,
+        actorUserId: reviewedByUserId,
+        actorType: 'USER',
+        action: status === 'APPROVED' ? 'document.approved' : 'document.rejected',
+        entityType: 'document',
+        entityId: id,
+        metadata: { previousStatus: existing.status, ...(reason !== undefined ? { reason } : {}) },
+      });
+
+      return updated;
+    });
   }
 
   /**
@@ -211,6 +325,23 @@ export class DocumentRepository extends TenantScopedRepository<typeof documents>
         .limit(1)
     );
     return rows[0] ?? null;
+  }
+
+  /**
+   * 007-14: every extraction across the whole organization since `since` — org-wide, not
+   * store-scoped, matching `integrations.health`'s own precedent (006-13) that accuracy telemetry
+   * is a tenant-level view, not a per-store one. Feeds `computeExtractionAutoApprovalRate`/
+   * `computeValidationIssueFrequency` (packages/metrics) — this method only fetches raw rows, never
+   * computes the rate itself (I2).
+   */
+  async listExtractionsSince(since: Date) {
+    return this.runScoped((db) =>
+      db
+        .select()
+        .from(documentExtractions)
+        .where(and(eq(documentExtractions.organizationId, this.organizationId), gte(documentExtractions.extractedAt, since)))
+        .orderBy(desc(documentExtractions.extractedAt))
+    );
   }
 
   async recordCorrection(input: {

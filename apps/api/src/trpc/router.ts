@@ -13,6 +13,7 @@ import { csvImportRouter } from './routers/csv-import';
 import { posItemsRouter } from './routers/pos-items';
 import { dashboardRouter } from './routers/dashboard';
 import { documentsRouter } from './routers/documents';
+import { suppliersRouter } from './routers/suppliers';
 
 export const appRouter = router({
   auth: authRouter,
@@ -29,6 +30,7 @@ export const appRouter = router({
   posItems: posItemsRouter,
   dashboard: dashboardRouter,
   documents: documentsRouter,
+  suppliers: suppliersRouter,
 });
 
 export type AppRouter = typeof appRouter;

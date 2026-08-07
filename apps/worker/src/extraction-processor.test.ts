@@ -131,7 +131,62 @@ describe('extraction processor', () => {
     return id;
   };
 
-  it('a successful extraction records a document_extractions row and moves the document to REVIEW_REQUIRED', async () => {
+  it('007-08: a fully-scored, internally-consistent, high-confidence extraction (every field >= 0.85, no gate issues) moves the document to AUTO_APPROVED', async () => {
+    documentId = await seedDocument();
+
+    const fullyConfidentProvider: ExtractionProvider = {
+      name: 'fake-fully-confident',
+      async extract(): Promise<ExtractionResult> {
+        return {
+          provider: 'fake-fully-confident',
+          modelVersion: 'fake-v1',
+          latencyMs: 1,
+          error: null,
+          fields: {
+            supplier: { value: 'Test Supplier', confidence: 0.9 },
+            documentNumber: { value: 'INV-1', confidence: 0.9 },
+            documentDate: { value: '2026-01-01', confidence: 0.9 },
+            currency: { value: 'USD', confidence: 1 },
+            subtotal: { value: '10.00', confidence: 0.9 },
+            tax: { value: '0', confidence: 0.9 },
+            // Every field genuinely scored (unlike `fakeSuccessfulProvider`'s deliberately
+            // unextracted `discount`) — a `0` value, not absent, so it can carry a real confidence.
+            discount: { value: '0', confidence: 0.9 },
+            total: { value: '10.00', confidence: 0.9 },
+          },
+          lines: [
+            {
+              sku: { value: 'SKU-1', confidence: 0.9 },
+              description: { value: 'Widget', confidence: 0.9 },
+              quantity: { value: '2', confidence: 0.9 },
+              unit: { value: 'ea', confidence: 0.9 },
+              unitPrice: { value: '5.00', confidence: 0.9 },
+              lineTotal: { value: '10.00', confidence: 0.9 },
+            },
+          ],
+          overallConfidence: 0.9,
+        };
+      },
+    };
+
+    const processor = createExtractionProcessor({
+      databaseUrl: APP_CONNECTION_STRING,
+      geminiApiKey: 'unused-because-provider-is-injected',
+      storage: { endpoint: process.env.S3_ENDPOINT ?? 'http://localhost:9000', accessKeyId: 'minioadmin', secretAccessKey: 'minioadmin', bucket: BUCKET },
+      provider: fullyConfidentProvider,
+    });
+
+    await processor(asJob({ documentId, organizationId, storageKey: 'test-invoice.pdf', mimeType: 'application/pdf' }));
+
+    const [doc] = await adminDb.select().from(documents).where(eq(documents.id, documentId));
+    expect(doc?.status).toBe('AUTO_APPROVED');
+
+    const [extraction] = await adminDb.select().from(documentExtractions).where(eq(documentExtractions.documentId, documentId));
+    const validation = extraction?.validation as { canAutoApprove: boolean };
+    expect(validation.canAutoApprove).toBe(true);
+  });
+
+  it('007-08: the shared clean fixture (which has one deliberately-unextracted, null-confidence discount field) still moves the document to REVIEW_REQUIRED, not AUTO_APPROVED — proving the per-field confidence check is load-bearing, not just the overall-confidence check', async () => {
     documentId = await seedDocument();
 
     const processor = createExtractionProcessor({
@@ -150,6 +205,8 @@ describe('extraction processor', () => {
     expect(extraction?.provider).toBe('fake');
     expect((extraction?.fields as { supplier: { value: string } }).supplier.value).toBe('Test Supplier');
     expect(extraction?.overallConfidence).toBe('0.9000');
+    const validation = extraction?.validation as { canAutoApprove: boolean };
+    expect(validation.canAutoApprove).toBe(true); // gates pass; only confidence keeps it out of AUTO_APPROVED
   });
 
   it('a failing provider still records a real document_extractions row (a failed attempt is a data point) and moves the document to REVIEW_REQUIRED', async () => {

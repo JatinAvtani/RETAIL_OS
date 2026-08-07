@@ -2,7 +2,7 @@ import type { Job } from 'bullmq';
 import { Decimal } from 'decimal.js';
 import { DocumentRepository, SupplierPriceRepository, SupplierRepository, createDb } from '@retailos/db';
 import { createCircuitBreakerExtractionProvider, createGeminiExtractionProvider, createTesseractExtractionProvider, type ExtractedFields, type ExtractedLine, type ExtractionProvider } from '@retailos/ai';
-import { validateExtraction, type DuplicateCandidate, type RawFields, type RawLine, type TrailingPrice } from '@retailos/domain';
+import { decideDocumentRouting, validateExtraction, type DuplicateCandidate, type RawFields, type RawLine, type TrailingPrice } from '@retailos/domain';
 import { createStorageClient, getObjectBytes } from '@retailos/storage';
 import type { S3Client } from '@aws-sdk/client-s3';
 import type { ExtractionJobData } from '@retailos/queue';
@@ -25,14 +25,14 @@ const RESET_TIMEOUT_MS = 5 * 60 * 1000;
  * a genuine, useful data point (matching the spike's own "a failed extraction is a data point, not
  * a crash" convention), not something to silently drop.
  *
- * 007-07 (plan.md Phase 3): `validation` is now real gate output from
- * `@retailos/domain`'s `validateExtraction` — arithmetic reconciliation, duplicate detection, date
- * plausibility, and price-anomaly checks, all deterministic (I1: the model is never asked to verify
- * its own numbers). The document still ALWAYS moves to `REVIEW_REQUIRED`, never `AUTO_APPROVED`,
- * regardless of `canAutoApprove` — confidence-based routing is 007-08's separate task (plan.md
- * Phase 4 requires BOTH all gates passing AND high confidence; this task only builds the first
- * half). `validation.canAutoApprove` is stored honestly now so 007-08 has real data to route on,
- * but nothing here acts on it yet.
+ * 007-07 (plan.md Phase 3): `validation` is real gate output from `@retailos/domain`'s
+ * `validateExtraction` — arithmetic reconciliation, duplicate detection, date plausibility, and
+ * price-anomaly checks, all deterministic (I1: the model is never asked to verify its own numbers).
+ *
+ * 007-08 (plan.md Phase 4): the document's final status is `decideDocumentRouting`'s call —
+ * `AUTO_APPROVED` only when every gate passes AND the overall confidence AND every present
+ * per-field/line confidence clears the threshold; everything else (including a failed extraction,
+ * which has no confidence at all) lands at `REVIEW_REQUIRED`.
  */
 export const createExtractionProcessor = (config: {
   databaseUrl: string;
@@ -95,8 +95,20 @@ export const createExtractionProcessor = (config: {
       ...(result.overallConfidence !== null ? { overallConfidence: result.overallConfidence.toFixed(4) } : {}),
     });
 
-    await documentRepository.updateStatus(documentId, 'REVIEW_REQUIRED');
+    const routing = decideDocumentRouting(validation.canAutoApprove, {
+      overallConfidence: result.overallConfidence,
+      fieldConfidences: collectFieldConfidences(result.fields, result.lines),
+    });
+    await documentRepository.updateStatus(documentId, routing);
   };
+};
+
+/** Every scored field across the document header and every line — the full population `decideDocumentRouting` requires to be entirely high-confidence. */
+const collectFieldConfidences = (fields: ExtractedFields | null, lines: ExtractedLine[] | null): (number | null)[] => {
+  if (fields === null) return [];
+  const headerConfidences = Object.values(fields).map((field) => field.confidence);
+  const lineConfidences = (lines ?? []).flatMap((line) => Object.values(line).map((field) => field.confidence));
+  return [...headerConfidences, ...lineConfidences];
 };
 
 /**

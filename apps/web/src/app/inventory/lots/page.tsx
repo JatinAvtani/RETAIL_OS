@@ -87,6 +87,7 @@ function LotsContent() {
                   <Th align="right">Unit cost</Th>
                   <Th>Received</Th>
                   <Th>Expiry</Th>
+                  <Th></Th>
                 </tr>
               </thead>
               <tbody>
@@ -128,6 +129,14 @@ function LotsContent() {
                         ) : (
                           <span className="text-content-subtle">—</span>
                         )}
+                      </Td>
+                      <Td>
+                        {/* 007-12: this cost's real provenance — every lot posted by the invoice pipeline (007-11) carries the source document directly, no document_links lookup needed for this one entity type. A manually-created lot (no source document) shows nothing here, honestly — I7 applied to a link, not a number. */}
+                        {lot.sourceDocumentId ? (
+                          <Link href={`/documents/${lot.sourceDocumentId}`} className="text-sm font-medium text-accent hover:underline">
+                            Source document
+                          </Link>
+                        ) : null}
                       </Td>
                     </Tr>
                   );

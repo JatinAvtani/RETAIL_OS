@@ -30,6 +30,23 @@ export class SupplierProductRepository extends TenantScopedRepository<typeof sup
     return rows[0] ?? null;
   }
 
+  /**
+   * 007-10: looks up an existing mapping (confirmed or not) for one exact (supplier, SKU) pair —
+   * the real DB unique index (`supplier_products_supplier_sku_unique` on
+   * `organization_id, supplier_id, supplier_sku`) guarantees at most one row, so this is a genuine
+   * lookup, not a "pick the first of several" convenience. Used by the correction-capture flow to
+   * decide confirm-existing vs. create-new when a reviewer maps a line's SKU to a product.
+   */
+  async findBySupplierAndSku(supplierId: string, supplierSku: string) {
+    const rows = await this.runScoped((db, scopedWhere) =>
+      db
+        .select()
+        .from(supplierProducts)
+        .where(scopedWhere(and(eq(supplierProducts.supplierId, supplierId), eq(supplierProducts.supplierSku, supplierSku))))
+    );
+    return rows[0] ?? null;
+  }
+
   /** Only confirmed mappings — the one query cost calculation is allowed to read from (I7: an
    * unconfirmed mapping is not "cost $0," it's "no mapping exists yet"). */
   async findConfirmedForProduct(productId: string) {

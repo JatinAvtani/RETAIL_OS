@@ -113,4 +113,19 @@ describe('SupplierProductRepository', () => {
       repo.create({ id: generateId(), supplierId, productId, supplierSku: 'DUP-SKU' })
     ).rejects.toThrow();
   });
+
+  it('findBySupplierAndSku finds an existing mapping (confirmed or not) for the exact pair, 007-10', async () => {
+    const repo = new SupplierProductRepository(createScopedDb(client), organizationId);
+    const created = await repo.create({ id: generateId(), supplierId, productId, supplierSku: 'FIND-ME' });
+
+    const found = await repo.findBySupplierAndSku(supplierId, 'FIND-ME');
+    expect(found?.id).toBe(created.id);
+    expect(found?.isConfirmed).toBe(false);
+  });
+
+  it('findBySupplierAndSku returns null when no mapping exists for that pair', async () => {
+    const repo = new SupplierProductRepository(createScopedDb(client), organizationId);
+    const found = await repo.findBySupplierAndSku(supplierId, 'NEVER-CREATED');
+    expect(found).toBeNull();
+  });
 });

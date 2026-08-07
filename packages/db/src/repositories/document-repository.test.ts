@@ -4,7 +4,7 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import { eq } from 'drizzle-orm';
 import { generateId } from '@retailos/domain';
 import * as schema from '../schema/index';
-import { documentExtractions, documentLinks, documents, extractionCorrections, organizations, stores, users } from '../schema/index';
+import { auditLogs, documentExtractions, documentLinks, documents, extractionCorrections, organizations, outboxEvents, stores, users } from '../schema/index';
 import { createScopedDb } from '../tenant-repository';
 import { DocumentRepository } from './document-repository';
 import { setUpTwoTenants, type TwoTenantFixture } from '../test-support/tenant-fixture';
@@ -45,9 +45,15 @@ describe('DocumentRepository', () => {
   afterEach(async () => {
     const adminDb = drizzle(adminClient, { schema });
     // FK order: extraction_corrections -> document_extractions -> document_links -> documents.
+    // outbox_events/audit_logs reference organizations, not documents directly (aggregateId/entityId
+    // are plain uuids, not real FKs — same polymorphic-reference convention document_links uses), so
+    // order relative to documents doesn't matter, but they must still be cleaned up per test since
+    // 007-09's approve/reject write real rows into both.
     await adminDb.delete(extractionCorrections).where(eq(extractionCorrections.organizationId, organizationId));
     await adminDb.delete(documentExtractions).where(eq(documentExtractions.organizationId, organizationId));
     await adminDb.delete(documentLinks).where(eq(documentLinks.organizationId, organizationId));
+    await adminDb.delete(outboxEvents).where(eq(outboxEvents.organizationId, organizationId));
+    await adminDb.delete(auditLogs).where(eq(auditLogs.organizationId, organizationId));
     await adminDb.delete(documents).where(eq(documents.organizationId, organizationId));
   });
 
@@ -105,6 +111,78 @@ describe('DocumentRepository', () => {
     expect(matches).toHaveLength(2);
   });
 
+  it('search filters by status', async () => {
+    const repo = new DocumentRepository(createScopedDb(client), organizationId);
+    const uploaded = await repo.create({ storeId, type: 'INVOICE', source: 'UPLOAD', storageKey: `${organizationId}/s1.pdf`, contentHash: 'hash-search-1', mimeType: 'application/pdf', sizeBytes: 1 });
+    const reviewing = await repo.create({ storeId, type: 'INVOICE', source: 'UPLOAD', storageKey: `${organizationId}/s2.pdf`, contentHash: 'hash-search-2', mimeType: 'application/pdf', sizeBytes: 1 });
+    await repo.updateStatus(reviewing.id, 'REVIEW_REQUIRED');
+
+    const results = await repo.search(storeId, { status: 'REVIEW_REQUIRED' });
+    expect(results.map((r) => r.id)).toEqual([reviewing.id]);
+    expect(results.some((r) => r.id === uploaded.id)).toBe(false);
+  });
+
+  it('search filters by type', async () => {
+    const repo = new DocumentRepository(createScopedDb(client), organizationId);
+    const invoice = await repo.create({ storeId, type: 'INVOICE', source: 'UPLOAD', storageKey: `${organizationId}/t1.pdf`, contentHash: 'hash-search-type-1', mimeType: 'application/pdf', sizeBytes: 1 });
+    await repo.create({ storeId, type: 'QUOTE', source: 'UPLOAD', storageKey: `${organizationId}/t2.pdf`, contentHash: 'hash-search-type-2', mimeType: 'application/pdf', sizeBytes: 1 });
+
+    const results = await repo.search(storeId, { type: 'INVOICE' });
+    expect(results.map((r) => r.id)).toEqual([invoice.id]);
+  });
+
+  it('search with a text query matches the latest extraction\'s supplier name, case-insensitively', async () => {
+    const repo = new DocumentRepository(createScopedDb(client), organizationId);
+    const matching = await repo.create({ storeId, type: 'INVOICE', source: 'UPLOAD', storageKey: `${organizationId}/q1.pdf`, contentHash: 'hash-search-q1', mimeType: 'application/pdf', sizeBytes: 1 });
+    const nonMatching = await repo.create({ storeId, type: 'INVOICE', source: 'UPLOAD', storageKey: `${organizationId}/q2.pdf`, contentHash: 'hash-search-q2', mimeType: 'application/pdf', sizeBytes: 1 });
+    await repo.recordExtraction({
+      documentId: matching.id,
+      provider: 'gemini',
+      modelVersion: 'v1',
+      promptVersion: '1',
+      fields: { supplier: { value: 'Coastal Meats & Poultry', confidence: 0.9 } },
+      lines: [],
+      validation: { issues: [], canAutoApprove: true },
+    });
+    await repo.recordExtraction({
+      documentId: nonMatching.id,
+      provider: 'gemini',
+      modelVersion: 'v1',
+      promptVersion: '1',
+      fields: { supplier: { value: 'Unrelated Supplier Co', confidence: 0.9 } },
+      lines: [],
+      validation: { issues: [], canAutoApprove: true },
+    });
+
+    const results = await repo.search(storeId, { query: 'coastal' });
+    expect(results.map((r) => r.id)).toEqual([matching.id]);
+  });
+
+  it('search with a text query matches the document number too', async () => {
+    const repo = new DocumentRepository(createScopedDb(client), organizationId);
+    const matching = await repo.create({ storeId, type: 'INVOICE', source: 'UPLOAD', storageKey: `${organizationId}/q3.pdf`, contentHash: 'hash-search-q3', mimeType: 'application/pdf', sizeBytes: 1 });
+    await repo.recordExtraction({
+      documentId: matching.id,
+      provider: 'gemini',
+      modelVersion: 'v1',
+      promptVersion: '1',
+      fields: { supplier: { value: null, confidence: null }, documentNumber: { value: 'INV-99887', confidence: 0.9 } },
+      lines: [],
+      validation: { issues: [], canAutoApprove: true },
+    });
+
+    const results = await repo.search(storeId, { query: '99887' });
+    expect(results.map((r) => r.id)).toEqual([matching.id]);
+  });
+
+  it('search with a text query excludes a document with no extraction at all — no data to search is not a match (I7)', async () => {
+    const repo = new DocumentRepository(createScopedDb(client), organizationId);
+    await repo.create({ storeId, type: 'INVOICE', source: 'UPLOAD', storageKey: `${organizationId}/q4.pdf`, contentHash: 'hash-search-q4', mimeType: 'application/pdf', sizeBytes: 1 });
+
+    const results = await repo.search(storeId, { query: 'anything' });
+    expect(results).toHaveLength(0);
+  });
+
   it('updateStatus moves a document through the pipeline', async () => {
     const repo = new DocumentRepository(createScopedDb(client), organizationId);
     const created = await repo.create({
@@ -122,6 +200,96 @@ describe('DocumentRepository', () => {
 
     const [inReview] = await repo.listByStatus('REVIEW_REQUIRED');
     expect(inReview?.id).toBe(created.id);
+  });
+
+  it('approve moves a REVIEW_REQUIRED document to APPROVED and writes a real outbox event + audit log entry, both inside the same write', async () => {
+    const repo = new DocumentRepository(createScopedDb(client), organizationId);
+    const created = await repo.create({
+      storeId,
+      type: 'INVOICE',
+      source: 'UPLOAD',
+      storageKey: `${organizationId}/approve.pdf`,
+      contentHash: 'hash-approve',
+      mimeType: 'application/pdf',
+      sizeBytes: 1,
+    });
+    await repo.updateStatus(created.id, 'REVIEW_REQUIRED');
+
+    const approved = await repo.approve(created.id, userId);
+    expect(approved?.status).toBe('APPROVED');
+
+    const adminDb = drizzle(adminClient, { schema });
+    const [outboxRow] = await adminDb.select().from(outboxEvents).where(eq(outboxEvents.aggregateId, created.id));
+    expect(outboxRow?.eventType).toBe('document.approved');
+    expect(outboxRow?.payload).toMatchObject({ documentId: created.id, previousStatus: 'REVIEW_REQUIRED' });
+
+    const [auditRow] = await adminDb.select().from(auditLogs).where(eq(auditLogs.entityId, created.id));
+    expect(auditRow?.action).toBe('document.approved');
+    expect(auditRow?.actorUserId).toBe(userId);
+  });
+
+  it('approve also accepts an AUTO_APPROVED document — plan.md: an auto-approval is "still reviewable", a human can override it', async () => {
+    const repo = new DocumentRepository(createScopedDb(client), organizationId);
+    const created = await repo.create({
+      storeId,
+      type: 'INVOICE',
+      source: 'UPLOAD',
+      storageKey: `${organizationId}/auto-approve.pdf`,
+      contentHash: 'hash-auto-approve',
+      mimeType: 'application/pdf',
+      sizeBytes: 1,
+    });
+    await repo.updateStatus(created.id, 'AUTO_APPROVED');
+
+    const approved = await repo.approve(created.id, userId);
+    expect(approved?.status).toBe('APPROVED');
+  });
+
+  it('reject moves a REVIEW_REQUIRED document to REJECTED, records the reason, and never posts (rejected documents stay out of 007-11)', async () => {
+    const repo = new DocumentRepository(createScopedDb(client), organizationId);
+    const created = await repo.create({
+      storeId,
+      type: 'INVOICE',
+      source: 'UPLOAD',
+      storageKey: `${organizationId}/reject.pdf`,
+      contentHash: 'hash-reject',
+      mimeType: 'application/pdf',
+      sizeBytes: 1,
+    });
+    await repo.updateStatus(created.id, 'REVIEW_REQUIRED');
+
+    const rejected = await repo.reject(created.id, userId, 'Wrong document — this is a delivery note, not an invoice.');
+    expect(rejected?.status).toBe('REJECTED');
+
+    const adminDb = drizzle(adminClient, { schema });
+    const [outboxRow] = await adminDb.select().from(outboxEvents).where(eq(outboxEvents.aggregateId, created.id));
+    expect(outboxRow?.eventType).toBe('document.rejected');
+    expect(outboxRow?.payload).toMatchObject({ reason: 'Wrong document — this is a delivery note, not an invoice.' });
+  });
+
+  it('approve returns null (never throws) for a document that is not in a reviewable state, e.g. still UPLOADED', async () => {
+    const repo = new DocumentRepository(createScopedDb(client), organizationId);
+    const created = await repo.create({
+      storeId,
+      type: 'INVOICE',
+      source: 'UPLOAD',
+      storageKey: `${organizationId}/not-reviewable.pdf`,
+      contentHash: 'hash-not-reviewable',
+      mimeType: 'application/pdf',
+      sizeBytes: 1,
+    });
+
+    const result = await repo.approve(created.id, userId);
+    expect(result).toBeNull();
+
+    const stillUploaded = await repo.findById(created.id);
+    expect(stillUploaded?.status).toBe('UPLOADED');
+  });
+
+  it('approve returns null for a document that does not exist', async () => {
+    const repo = new DocumentRepository(createScopedDb(client), organizationId);
+    const result = await repo.approve(generateId(), userId);
+    expect(result).toBeNull();
   });
 
   it('recordExtraction stores a real extraction row, and getLatestExtraction returns the most recent one', async () => {
@@ -370,6 +538,31 @@ describe('DocumentRepository', () => {
       const repoB = new DocumentRepository(createScopedDb(client), fixture.tenantB.organizationId);
       const seenByB = await repoB.getLatestExtraction(created.id);
       expect(seenByB).toBeNull();
+    });
+
+    it('tenant B cannot approve tenant A document — approve returns null, no status change, no outbox/audit rows written', async () => {
+      const repoA = new DocumentRepository(createScopedDb(client), fixture.tenantA.organizationId);
+      const created = await repoA.create({
+        storeId: fixture.tenantA.storeId,
+        type: 'INVOICE',
+        source: 'UPLOAD',
+        storageKey: `${fixture.tenantA.organizationId}/cross-tenant-approve.pdf`,
+        contentHash: 'cross-tenant-approve-hash',
+        mimeType: 'application/pdf',
+        sizeBytes: 1,
+      });
+      await repoA.updateStatus(created.id, 'REVIEW_REQUIRED');
+
+      const repoB = new DocumentRepository(createScopedDb(client), fixture.tenantB.organizationId);
+      const result = await repoB.approve(created.id, fixture.tenantB.userId);
+      expect(result).toBeNull();
+
+      const stillReviewRequired = await repoA.findById(created.id);
+      expect(stillReviewRequired?.status).toBe('REVIEW_REQUIRED');
+
+      const adminDb = drizzle(adminClient, { schema });
+      const outboxRows = await adminDb.select().from(outboxEvents).where(eq(outboxEvents.aggregateId, created.id));
+      expect(outboxRows).toHaveLength(0);
     });
 
     it('raw insert attempting to claim another org id is rejected by RLS, independent of the repository layer', async () => {
