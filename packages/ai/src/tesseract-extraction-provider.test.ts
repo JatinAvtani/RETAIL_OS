@@ -9,10 +9,14 @@ import { createTesseractExtractionProvider } from './tesseract-extraction-provid
  * has real container-startup overhead), matching the project's established "real Redis/Postgres/S3
  * for infrastructure code" precedent applied to a third kind of real infrastructure (a local OCR
  * engine + PDF rasterizer).
+ *
+ * Fixtures live in `src/__fixtures__/` (tracked in git), not `spikes/extraction/corpus/` (gitignored)
+ * — a CI runner's fresh clone never has the spike corpus, which broke this suite in CI despite
+ * passing locally.
  */
 describe('createTesseractExtractionProvider', () => {
   it('extracts real text from a real PDF via rasterization + OCR, never throwing', async () => {
-    const pdfBytes = readFileSync('../../spikes/extraction/corpus/clean/coastal-meats-55210.pdf');
+    const pdfBytes = readFileSync(new URL('./__fixtures__/coastal-meats-55210.pdf', import.meta.url));
     const provider = createTesseractExtractionProvider();
 
     const result = await provider.extract(pdfBytes, 'application/pdf');
@@ -36,7 +40,7 @@ describe('createTesseractExtractionProvider', () => {
   }, 30000);
 
   it('extracts from a real PNG image directly, without needing PDF rasterization', async () => {
-    const pngBytes = readFileSync('../../spikes/extraction/corpus/clean/coastal-meats-55210.png');
+    const pngBytes = readFileSync(new URL('./__fixtures__/coastal-meats-55210.png', import.meta.url));
     const provider = createTesseractExtractionProvider();
 
     const result = await provider.extract(pngBytes, 'image/png');

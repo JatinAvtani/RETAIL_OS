@@ -94,8 +94,11 @@ describe('extraction processor', () => {
     await putObjectBytes(storageClient, BUCKET, 'test-invoice.pdf', Buffer.from('%PDF-1.4\n%%EOF'), 'application/pdf');
     // A real, OCR-able invoice — the trivial fake PDF above has no readable text at all, which
     // would make the 007-06 circuit-breaker-fallback test's "Tesseract found something real"
-    // assertion meaningless regardless of whether the fallback wiring is correct.
-    const realInvoiceBytes = readFileSync('../../spikes/extraction/corpus/clean/coastal-meats-55210.pdf');
+    // assertion meaningless regardless of whether the fallback wiring is correct. Lives in
+    // src/__fixtures__/ (tracked in git), not spikes/extraction/corpus/ (gitignored) — a CI
+    // runner's fresh clone never has the spike corpus, which broke this test in CI despite
+    // passing locally.
+    const realInvoiceBytes = readFileSync(new URL('./__fixtures__/coastal-meats-55210.pdf', import.meta.url));
     await putObjectBytes(storageClient, BUCKET, 'real-invoice.pdf', realInvoiceBytes, 'application/pdf');
   });
 
