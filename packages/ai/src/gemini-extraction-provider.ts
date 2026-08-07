@@ -65,6 +65,17 @@ Return only the structured JSON matching the schema.`;
 
 const MODEL = 'gemini-flash-lite-latest';
 
+/**
+ * Without an explicit timeout, a slow (not just erroring) Gemini response can block the circuit
+ * breaker (`circuit-breaker-extraction-provider.ts`) from failing over for however long the SDK's
+ * underlying HTTP call takes — defeating the breaker's whole purpose of a fast, bounded fallback.
+ * Confirmed as a real gap, not a hypothetical: a genuinely invalid API key (a 401, not one of the
+ * SDK's own retryable status codes) still took ~60s+ to resolve on GitHub Actions' network path to
+ * Gemini's API, well beyond what it took on this dev machine's network — an unbounded `await` on
+ * that call is exactly the failure mode a circuit breaker exists to prevent.
+ */
+const REQUEST_TIMEOUT_MS = 15_000;
+
 const isExtractedField = (value: unknown): value is ExtractedField => {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
@@ -111,7 +122,11 @@ export const createGeminiExtractionProvider = (apiKey: string): ExtractionProvid
         const response = await client.models.generateContent({
           model: MODEL,
           contents: [{ role: 'user', parts: [{ text: PROMPT }, { inlineData: { mimeType, data: bytes.toString('base64') } }] }],
-          config: { responseMimeType: 'application/json', responseSchema: INVOICE_SCHEMA },
+          config: {
+            responseMimeType: 'application/json',
+            responseSchema: INVOICE_SCHEMA,
+            httpOptions: { timeout: REQUEST_TIMEOUT_MS },
+          },
         });
 
         const latencyMs = Date.now() - started;
