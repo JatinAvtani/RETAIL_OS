@@ -137,7 +137,9 @@ export const createTesseractExtractionProvider = (): ExtractionProvider => ({
 
   async extract(bytes: Buffer, mimeType: string): Promise<ExtractionResult> {
     const started = Date.now();
+    console.log(`[diag] ${Date.now()} tesseract.extract start, mimeType=${mimeType}`);
     const tmpDir = await mkdtemp(path.join(tmpdir(), 'tesseract-provider-'));
+    console.log(`[diag] ${Date.now()} mkdtemp done: ${tmpDir}`);
     // Both images run as a fixed, non-root container UID (jitesoft/tesseract-ocr: UID 472;
     // minidocks/poppler: root, but still a different UID than the host process on Linux). Docker
     // Desktop's bind-mount layer on Windows/Mac ignores host Unix permissions, so mkdtemp's default
@@ -153,7 +155,9 @@ export const createTesseractExtractionProvider = (): ExtractionProvider => ({
       if (mimeType === 'application/pdf') {
         const pdfPath = path.join(tmpDir, 'input.pdf');
         await writeFile(pdfPath, bytes);
+        console.log(`[diag] ${Date.now()} rasterizePdfToImages start`);
         imagePaths = await rasterizePdfToImages(pdfPath, tmpDir);
+        console.log(`[diag] ${Date.now()} rasterizePdfToImages done, ${imagePaths.length} pages`);
         if (imagePaths.length === 0) {
           return { provider: 'tesseract', modelVersion: 'tesseract-5.5.2', latencyMs: Date.now() - started, error: 'PDF rasterization produced no pages', fields: null, lines: null, overallConfidence: null };
         }
@@ -166,7 +170,9 @@ export const createTesseractExtractionProvider = (): ExtractionProvider => ({
 
       let combinedText = '';
       for (let i = 0; i < imagePaths.length; i++) {
+        console.log(`[diag] ${Date.now()} ocrImage start, page ${i}`);
         const text = await ocrImage(imagePaths[i]!);
+        console.log(`[diag] ${Date.now()} ocrImage done, page ${i}, ${text.length} chars`);
         combinedText += (i > 0 ? '\n' : '') + text;
       }
 

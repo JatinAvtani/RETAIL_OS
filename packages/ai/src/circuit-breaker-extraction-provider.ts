@@ -66,13 +66,19 @@ export const createCircuitBreakerExtractionProvider = (primary: ExtractionProvid
 
       if (state === 'OPEN') {
         // Never touches the primary while genuinely open — the whole point of the pattern.
+        console.log(`[diag] ${Date.now()} breaker OPEN, routing straight to secondary`);
         return secondary.extract(bytes, mimeType);
       }
 
+      console.log(`[diag] ${Date.now()} breaker calling primary (${primary.name})`);
       const result = await primary.extract(bytes, mimeType);
+      console.log(`[diag] ${Date.now()} breaker primary returned, error=${result.error}`);
       if (result.error) {
         recordFailure();
-        return secondary.extract(bytes, mimeType);
+        console.log(`[diag] ${Date.now()} breaker calling secondary (${secondary.name})`);
+        const secondaryResult = await secondary.extract(bytes, mimeType);
+        console.log(`[diag] ${Date.now()} breaker secondary returned, error=${secondaryResult.error}`);
+        return secondaryResult;
       }
       recordSuccess();
       return result;
