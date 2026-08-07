@@ -63,13 +63,7 @@ export const createExtractionProcessor = (config: {
     const supplierRepository = new SupplierRepository(db, organizationId);
     const supplierPriceRepository = new SupplierPriceRepository(db, organizationId);
 
-    // TEMPORARY diagnostic logging (CI hang investigation): this test hangs to exactly the test
-    // timeout on GitHub Actions but never locally, and two evidence-based fixes (bind-mount
-    // permissions, Gemini request timeout) had zero effect — meaning the actual hang location is
-    // still unknown. Remove once the real stall point is identified from a live CI log.
-    console.log(`[diag] ${Date.now()} updateStatus(PROCESSING) start`);
     await documentRepository.updateStatus(documentId, 'PROCESSING');
-    console.log(`[diag] ${Date.now()} updateStatus(PROCESSING) done`);
 
     if (!provider) {
       // No key configured on this worker (e.g. CI, a fresh clone) — the job is not attempted,
@@ -78,26 +72,18 @@ export const createExtractionProcessor = (config: {
       return;
     }
 
-    console.log(`[diag] ${Date.now()} getObjectBytes start`);
     const bytes = await getObjectBytes(storageClient, config.storage.bucket, storageKey);
-    console.log(`[diag] ${Date.now()} getObjectBytes done, ${bytes.length} bytes`);
-
-    console.log(`[diag] ${Date.now()} provider.extract start`);
     const result = await provider.extract(bytes, mimeType);
-    console.log(`[diag] ${Date.now()} provider.extract done, provider=${result.provider} error=${result.error}`);
 
     // `document_extractions.fields`/`.lines` are NOT NULL — a provider error genuinely ran an
     // extraction attempt (unlike the no-provider-configured case above, which never attempts one
     // at all), so it gets a real row, just with empty structures rather than `null`, honestly
     // representing "this run happened, extracted nothing" (distinct from `null`, which would read
     // as "never asked").
-    console.log(`[diag] ${Date.now()} validation start`);
     const validation = result.error
       ? { issues: [{ severity: 'BLOCK' as const, code: 'EXTRACTION_FAILED', field: 'extraction', message: result.error }], canAutoApprove: false }
       : await runValidationGates(documentRepository, supplierRepository, supplierPriceRepository, documentId, result.fields, result.lines);
-    console.log(`[diag] ${Date.now()} validation done`);
 
-    console.log(`[diag] ${Date.now()} recordExtraction start`);
     await documentRepository.recordExtraction({
       documentId,
       provider: result.provider,
@@ -108,11 +94,8 @@ export const createExtractionProcessor = (config: {
       validation,
       ...(result.overallConfidence !== null ? { overallConfidence: result.overallConfidence.toFixed(4) } : {}),
     });
-    console.log(`[diag] ${Date.now()} recordExtraction done`);
 
-    console.log(`[diag] ${Date.now()} updateStatus(REVIEW_REQUIRED) start`);
     await documentRepository.updateStatus(documentId, 'REVIEW_REQUIRED');
-    console.log(`[diag] ${Date.now()} updateStatus(REVIEW_REQUIRED) done`);
   };
 };
 
