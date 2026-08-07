@@ -117,6 +117,17 @@ jobs:
       - name: Run concurrent-index migration
         run: pnpm --filter @retailos/db db:migrate:concurrent
 
+      # packages/ai's Tesseract-provider tests each do two sequential `docker run` calls
+      # (rasterize, then OCR), bounded at 90s per call. That ceiling already accounts for one cold
+      # image pull, but without this step both calls can independently hit a cold pull on a given
+      # runner, occasionally pushing a call just past the timeout — pre-pulling here means the
+      # timed calls only ever pay real container-run cost, not registry-pull cost.
+      - name: Pre-pull Tesseract/poppler OCR images
+        run: |
+          docker pull jitesoft/tesseract-ocr &
+          docker pull minidocks/poppler &
+          wait
+
       # apps/api's own runtime connection (apps/api/src/trpc/context.ts) must be the RLS-scoped
       # retailos_app role, never the job-level DATABASE_URL superuser (needed above for migrations
       # and for cross-tenant tests' own admin/seeding connection, which legitimately needs
