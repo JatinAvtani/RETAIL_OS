@@ -3,6 +3,7 @@ import { chmod, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { randomUUID } from 'node:crypto';
 import type { ExtractedField, ExtractedFields, ExtractedLine, ExtractionProvider, ExtractionResult } from './extraction-provider';
 
 const execFileAsync = promisify(execFile);
@@ -10,14 +11,48 @@ const execFileAsync = promisify(execFile);
 /**
  * `docker run` for `jitesoft/tesseract-ocr`/`minidocks/poppler` genuinely hung indefinitely on
  * GitHub Actions' runner — confirmed via timestamped diagnostic logging showing the call itself
- * never resolves, neither succeeding nor erroring, unlike every reproduction attempted locally
- * (which either succeeds in ~1-2s or fails fast with a real Docker error). The exact root cause on
- * that specific runner environment couldn't be pinned down further; a hard timeout turns an
- * unexplained silent stall into a normal, fast provider error — exactly the kind of real-world
- * failure the circuit breaker (`circuit-breaker-extraction-provider.ts`) and this provider's own
- * "never throw, return `error` instead" contract already exist to handle.
+ * never resolves, neither succeeding nor erroring. `execFile`'s own `timeout` option (SIGTERM to
+ * the `docker` CLI process) had ZERO effect there despite genuinely killing a hung `docker run` in
+ * every local test on this machine — `docker run` without `-it` is documented to not reliably
+ * forward a signal sent to the CLI process into the actual running container, so the CLI's own
+ * wait-for-container-exit call can outlive the timeout entirely. The one reliable way to stop a
+ * `docker run` container is `docker kill <name>` at the daemon level, independent of how the CLI
+ * process itself handles signals — so every container gets an explicit unique `--name`, and a
+ * timeout races the run against `docker kill`ing that name directly.
  */
 const DOCKER_RUN_TIMEOUT_MS = 20_000;
+
+/**
+ * Runs `docker run` with an explicit `--name`, racing it against `DOCKER_RUN_TIMEOUT_MS`. On
+ * timeout, issues a real `docker kill <name>` (best-effort — the container may have already exited)
+ * before rejecting, so a genuinely stuck container doesn't linger consuming resources after this
+ * function gives up on it.
+ */
+const runDockerContainer = async (args: string[]): Promise<void> => {
+  const containerName = `retailos-ocr-${randomUUID()}`;
+  const fullArgs = ['run', '--rm', '--name', containerName, ...args];
+
+  let timedOut = false;
+  const timeoutHandle = setTimeout(() => {
+    timedOut = true;
+    execFile('docker', ['kill', containerName], () => {
+      // Best-effort: the container may have already finished on its own between the timeout
+      // firing and this kill attempt landing — a failure here is not itself an error worth
+      // surfacing, the run's own rejection below is what the caller sees.
+    });
+  }, DOCKER_RUN_TIMEOUT_MS);
+
+  try {
+    await execFileAsync('docker', fullArgs, { env: { ...process.env, MSYS_NO_PATHCONV: '1' } });
+  } catch (e) {
+    if (timedOut) {
+      throw new Error(`docker run timed out after ${DOCKER_RUN_TIMEOUT_MS}ms and was killed: ${fullArgs.join(' ')}`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+};
 
 const NULL_FIELD: ExtractedField = { value: null, confidence: null };
 /** Tesseract gives no semantic confidence — every non-null field gets a null confidence rather than a fabricated number, so it never reads as "the model was uncertain" when really it's "this OCR engine has no concept of confidence at all" (I7's reasoning applied to metadata, not just values). */
@@ -53,11 +88,7 @@ const ocrImage = async (imagePath: string): Promise<string> => {
 
   const dockerMountPath = dir.replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_, d: string) => `//${d.toLowerCase()}`);
 
-  await execFileAsync(
-    'docker',
-    ['run', '--rm', '--entrypoint', 'tesseract', '-v', `${dockerMountPath}:/data`, 'jitesoft/tesseract-ocr', `/data/${path.basename(imagePath)}`, `/data/${outBase}`, '--psm', '6'],
-    { env: { ...process.env, MSYS_NO_PATHCONV: '1' }, timeout: DOCKER_RUN_TIMEOUT_MS }
-  );
+  await runDockerContainer(['--entrypoint', 'tesseract', '-v', `${dockerMountPath}:/data`, 'jitesoft/tesseract-ocr', `/data/${path.basename(imagePath)}`, `/data/${outBase}`, '--psm', '6']);
 
   const text = await readFile(path.join(dir, `${outBase}.txt`), 'utf-8');
   await rm(path.join(dir, `${outBase}.txt`), { force: true });
@@ -69,10 +100,7 @@ const rasterizePdfToImages = async (pdfPath: string, outDir: string): Promise<st
   const dockerMountPath = outDir.replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_, d: string) => `//${d.toLowerCase()}`);
   const pdfBase = path.basename(pdfPath);
 
-  await execFileAsync('docker', ['run', '--rm', '-v', `${dockerMountPath}:/data`, 'minidocks/poppler', 'pdftoppm', '-png', `/data/${pdfBase}`, '/data/page'], {
-    env: { ...process.env, MSYS_NO_PATHCONV: '1' },
-    timeout: DOCKER_RUN_TIMEOUT_MS,
-  });
+  await runDockerContainer(['-v', `${dockerMountPath}:/data`, 'minidocks/poppler', 'pdftoppm', '-png', `/data/${pdfBase}`, '/data/page']);
 
   const files = await readdir(outDir);
   const pageFiles = files.filter((f) => f.startsWith('page-') && f.endsWith('.png'));
