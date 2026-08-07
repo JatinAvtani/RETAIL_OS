@@ -73,6 +73,15 @@ fuzzy suggestions that a human always confirms.
 recipes, cost variance, contribution margin, food cost percentage, and waste by reason — each a
 registered, unit-tested function consumed through a single code path.
 
+**Supplier invoice pipeline** — upload or email in an invoice; dual-provider extraction (a vision
+model primary, OCR fallback behind a circuit breaker) reads it; deterministic validation gates check
+line arithmetic, document totals, duplicates, and price anomalies before any human sees it;
+confidence-based routing auto-approves the clean ones and queues the rest for review. A human
+approves, rejects, or corrects a supplier-SKU mapping — corrections become permanent mappings, never
+one-off guesses. Approval posts a real price history entry and a real stock receipt in a single
+transaction, and every posted number links back to the source document and forward from it, so any
+figure on the dashboard traces to the invoice it came from.
+
 ---
 
 ## Architecture
@@ -90,10 +99,12 @@ apps/worker      Background consumers
 packages/domain  Pure business logic, no I/O — costing, FEFO, recipe explosion
 packages/db      Schema, migrations, repositories, tenant guards
 packages/metrics The metric catalog — the only place a business number is computed
+packages/ai      All model calls — document extraction, classification
 packages/pos     POS vendor adapters and the canonical sales model
 packages/authz   Permission model
 packages/session Redis-backed sessions
 packages/storage S3-compatible object storage
+packages/queue   Background job queue (BullMQ)
 ```
 
 Module boundaries are enforced in CI by dependency-cruiser, so the layering can't quietly erode.
@@ -174,6 +185,6 @@ number is **contribution margin**, and it's labelled as such.
 
 ## Roadmap
 
-Not yet built: supplier invoice ingestion with document extraction and a review UI, purchase orders
-and reorder suggestions, anomaly detection, and a grounded natural-language assistant that routes
-questions to the metric catalog rather than computing answers itself.
+Not yet built: purchase orders, goods receipt, and three-way invoice matching against them; supplier
+performance scoring; deeper anomaly detection and trend reporting; and a grounded natural-language
+assistant that routes questions to the metric catalog rather than computing answers itself.
