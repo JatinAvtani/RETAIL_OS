@@ -9,18 +9,18 @@ import type { ExtractedField, ExtractedFields, ExtractedLine, ExtractionProvider
 const execFileAsync = promisify(execFile);
 
 /**
- * `docker run` for `jitesoft/tesseract-ocr`/`minidocks/poppler` genuinely hung indefinitely on
- * GitHub Actions' runner — confirmed via timestamped diagnostic logging showing the call itself
- * never resolves, neither succeeding nor erroring. `execFile`'s own `timeout` option (SIGTERM to
- * the `docker` CLI process) had ZERO effect there despite genuinely killing a hung `docker run` in
- * every local test on this machine — `docker run` without `-it` is documented to not reliably
- * forward a signal sent to the CLI process into the actual running container, so the CLI's own
- * wait-for-container-exit call can outlive the timeout entirely. The one reliable way to stop a
- * `docker run` container is `docker kill <name>` at the daemon level, independent of how the CLI
- * process itself handles signals — so every container gets an explicit unique `--name`, and a
- * timeout races the run against `docker kill`ing that name directly.
+ * `docker run` for `jitesoft/tesseract-ocr`/`minidocks/poppler` is genuinely much slower on GitHub
+ * Actions' runner than on a dev machine with a warm image cache and a faster CPU — confirmed
+ * directly: a named-container `docker kill` (see `runDockerContainer` below) reliably cuts off a
+ * stuck run, and doing so at 20s surfaced that CI needed MORE than 20s, not that the process was
+ * hung forever. 90s gives real headroom for a cold image pull plus Tesseract's own OCR pass on that
+ * runner's weaker CPU, while still bounding a genuine, unbounded stall if one ever occurs — the
+ * `execFile` `timeout` option was tried first and confirmed to have zero effect on this runner
+ * (`docker run` without `-it` doesn't reliably forward a signal sent to the CLI process into the
+ * actual container, so the CLI's own wait-for-exit call can outlive it); `docker kill` at the
+ * daemon level is what actually works, independent of the CLI's own signal handling.
  */
-const DOCKER_RUN_TIMEOUT_MS = 20_000;
+const DOCKER_RUN_TIMEOUT_MS = 90_000;
 
 /**
  * Runs `docker run` with an explicit `--name`, racing it against `DOCKER_RUN_TIMEOUT_MS`. On

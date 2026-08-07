@@ -28,7 +28,7 @@ describe('createTesseractExtractionProvider', () => {
     // field-for-field accuracy, which would be an unrealistic/overfit assertion for this provider.
     expect(result.fields).not.toBeNull();
     expect(result.overallConfidence).toBeNull(); // Tesseract has no semantic confidence — never fabricated.
-  }, 60000); // rasterization + OCR are two real, sequential `docker run` invocations — genuinely slower on GitHub Actions' runner than this dev machine's Docker Desktop.
+  }, 200000); // rasterization + OCR are two real, sequential `docker run` invocations, each bounded at 90s (DOCKER_RUN_TIMEOUT_MS) — confirmed via a real CI run that GitHub Actions' runner genuinely needs more than 20s per call (a cold image pull + a much weaker CPU than this dev machine), not that either call hangs.
 
   it('degrades to a real error, never throwing, on genuinely unreadable bytes', async () => {
     const provider = createTesseractExtractionProvider();
@@ -37,7 +37,7 @@ describe('createTesseractExtractionProvider', () => {
 
     expect(result.error).not.toBeNull();
     expect(result.fields).toBeNull();
-  }, 60000);
+  }, 100000);
 
   it('extracts from a real PNG image directly, without needing PDF rasterization', async () => {
     const pngBytes = readFileSync(new URL('./__fixtures__/coastal-meats-55210.png', import.meta.url));
@@ -47,5 +47,5 @@ describe('createTesseractExtractionProvider', () => {
 
     expect(result.error).toBeNull();
     expect(result.fields).not.toBeNull();
-  }, 60000);
+  }, 100000);
 });

@@ -205,7 +205,7 @@ describe('extraction processor', () => {
     const [extraction] = await adminDb.select().from(documentExtractions).where(eq(documentExtractions.documentId, documentId));
     expect(extraction?.provider).toBe('tesseract'); // real fallback, not gemini — confirms the breaker genuinely routed away from the failing primary.
     expect(extraction?.fields).not.toEqual({}); // Tesseract's real regex parser found at least the header shape on this real invoice.
-  }, 60000); // a real failed Gemini call + two real docker run invocations (poppler, tesseract) genuinely took >30s on GitHub Actions' runner — this machine's Docker Desktop and closer network path made 30s look sufficient locally.
+  }, 200000); // a real failed Gemini call + two real docker run invocations (poppler, tesseract), each bounded at 90s (DOCKER_RUN_TIMEOUT_MS) — confirmed via a real CI run that GitHub Actions' runner genuinely needs more than 20s per docker call (cold image pull + weaker CPU than this dev machine), not that either call hangs.
 
   it('007-07: a content-hash duplicate produces a real DUPLICATE validation issue', async () => {
     const sharedHash = `shared-hash-${generateId()}`;
