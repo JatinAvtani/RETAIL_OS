@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -138,6 +138,15 @@ export const createTesseractExtractionProvider = (): ExtractionProvider => ({
   async extract(bytes: Buffer, mimeType: string): Promise<ExtractionResult> {
     const started = Date.now();
     const tmpDir = await mkdtemp(path.join(tmpdir(), 'tesseract-provider-'));
+    // Both images run as a fixed, non-root container UID (jitesoft/tesseract-ocr: UID 472;
+    // minidocks/poppler: root, but still a different UID than the host process on Linux). Docker
+    // Desktop's bind-mount layer on Windows/Mac ignores host Unix permissions, so mkdtemp's default
+    // 0700 mode never mattered there — but on a real Linux host (confirmed: broke in CI, never
+    // locally) the container UID has no access to a directory it doesn't own, so the write into the
+    // mount fails silently and the expected output file never appears. World-writable for this
+    // directory's brief, process-private lifetime (deleted in `finally` below) is the standard fix
+    // for this exact bind-mount UID mismatch.
+    await chmod(tmpDir, 0o777);
 
     try {
       let imagePaths: string[];
