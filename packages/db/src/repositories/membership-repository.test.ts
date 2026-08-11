@@ -143,3 +143,117 @@ describe('MembershipRepository.findAcceptedMembershipsForLogin', () => {
     expect(resultForB).toEqual([]);
   });
 });
+
+describe('MembershipRepository.findByUserAndOrg', () => {
+  let adminClient: ReturnType<typeof postgres>;
+  let adminDb: ReturnType<typeof drizzle<typeof schema>>;
+  let appClient: ReturnType<typeof postgres>;
+  let repo: MembershipRepository;
+  const createdOrgIds: string[] = [];
+  const createdUserIds: string[] = [];
+
+  beforeAll(() => {
+    adminClient = postgres(ADMIN_CONNECTION_STRING);
+    adminDb = drizzle(adminClient, { schema });
+    appClient = postgres(APP_CONNECTION_STRING);
+    const appDb = drizzle(appClient, { schema });
+    repo = new MembershipRepository(appDb);
+  });
+
+  afterEach(async () => {
+    for (const orgId of createdOrgIds) {
+      await adminDb.delete(memberships).where(eq(memberships.organizationId, orgId));
+      await adminDb.delete(organizations).where(eq(organizations.id, orgId));
+    }
+    for (const userId of createdUserIds) {
+      await adminDb.delete(users).where(eq(users.id, userId));
+    }
+    createdOrgIds.length = 0;
+    createdUserIds.length = 0;
+  });
+
+  afterAll(async () => {
+    await adminClient.end();
+    await appClient.end();
+  });
+
+  const makeOrg = async (label: string) => {
+    const organizationId = generateId();
+    createdOrgIds.push(organizationId);
+    await adminDb.insert(organizations).values({
+      id: organizationId,
+      name: label,
+      slug: `${label.toLowerCase().replace(/\s+/g, '-')}-${organizationId}`,
+      baseCurrency: 'USD',
+    });
+    return organizationId;
+  };
+
+  const makeUser = async (email: string) => {
+    const userId = generateId();
+    createdUserIds.push(userId);
+    await adminDb.insert(users).values({ id: userId, email });
+    return userId;
+  };
+
+  it('returns the real, current approvalLimit for a real membership — read fresh, not cached on a session', async () => {
+    const orgId = await makeOrg(`Approval Limit Org ${Date.now()}`);
+    const userId = await makeUser(`approval-limit-${Date.now()}@example.test`);
+    await adminDb.insert(memberships).values({
+      id: generateId(),
+      organizationId: orgId,
+      userId,
+      role: 'MANAGER',
+      approvalLimit: '500.0000',
+      acceptedAt: new Date(),
+    });
+
+    const result = await repo.findByUserAndOrg(userId, orgId);
+
+    expect(result).not.toBeNull();
+    expect(result?.approvalLimit).toBe('500.0000');
+    expect(result?.role).toBe('MANAGER');
+  });
+
+  it('returns approvalLimit: null (unrestricted) for a membership with no configured limit — never a fabricated zero (I7)', async () => {
+    const orgId = await makeOrg(`No Limit Org ${Date.now()}`);
+    const userId = await makeUser(`no-limit-${Date.now()}@example.test`);
+    await adminDb.insert(memberships).values({
+      id: generateId(),
+      organizationId: orgId,
+      userId,
+      role: 'OWNER',
+      acceptedAt: new Date(),
+    });
+
+    const result = await repo.findByUserAndOrg(userId, orgId);
+
+    expect(result?.approvalLimit).toBeNull();
+  });
+
+  it('returns null for a real user with a real membership, but in a DIFFERENT organization (I4)', async () => {
+    const orgA = await makeOrg(`Cross Org A ${Date.now()}`);
+    const orgB = await makeOrg(`Cross Org B ${Date.now()}`);
+    const userId = await makeUser(`cross-org-${Date.now()}@example.test`);
+    await adminDb.insert(memberships).values({
+      id: generateId(),
+      organizationId: orgA,
+      userId,
+      role: 'OWNER',
+      acceptedAt: new Date(),
+    });
+
+    const result = await repo.findByUserAndOrg(userId, orgB);
+
+    expect(result).toBeNull();
+  });
+
+  it('returns null for a user with no membership at all', async () => {
+    const orgId = await makeOrg(`Empty Org ${Date.now()}`);
+    const userId = await makeUser(`no-membership-${Date.now()}@example.test`);
+
+    const result = await repo.findByUserAndOrg(userId, orgId);
+
+    expect(result).toBeNull();
+  });
+});

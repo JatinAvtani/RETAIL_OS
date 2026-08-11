@@ -198,7 +198,15 @@ report HIGH I5 "Float column in a monetary/quantity path" \
 # lots.remaining_quantity * lots.unit_cost, untouched by this COALESCE) - it only decides at-risk
 # classification, and per I7 a zero-consumption lot is treated as AT RISK (consumption_cover_days
 # stays NULL, never a fabricated number), the opposite of the "looks safe" failure this check guards.
-r=$(search '(\?\?|\|\|)[[:space:]]*0\b|COALESCE\([^,]+,[[:space:]]*0\)' 'format|display|/ui/|reconciliation\.ts|expiry-queue\.ts' '' \
+# reorder-suggestions.ts excluded: its three COALESCEs (stock_on_hand, on_order, the on_order CTE's
+# own received-quantity subtraction) are the same LEFT JOIN idiom - a product with no stock_levels
+# row, no open PO lines, or a PO line never yet (partially) received genuinely has zero stock/zero
+# on-order/zero received so far, matching stock_levels' own schema comment verbatim ("an untouched
+# product/variant/store combination genuinely has zero stock, a known fact, not a missing one").
+# None of these COALESCEs ever stand in for an unknown COST or PRICE - suggestReorder itself (the
+# actual consumer, packages/domain) separately treats a missing unitPrice/leadTime as null/unknown,
+# never defaulting either to zero.
+r=$(search '(\?\?|\|\|)[[:space:]]*0\b|COALESCE\([^,]+,[[:space:]]*0\)' 'format|display|/ui/|reconciliation\.ts|expiry-queue\.ts|reorder-suggestions\.ts' '' \
    | grep -Ei 'cost|price|margin|revenue|cogs|consumption|qty|quantity|yield' || true)
 report HIGH I7 "Null-to-zero coercion in a costing path" \
   "\`?? 0\` looks defensive; in costing it silently inflates margin to 100%. Degrade to unknown." "$r"

@@ -14,6 +14,7 @@ import { posItemsRouter } from './routers/pos-items';
 import { dashboardRouter } from './routers/dashboard';
 import { documentsRouter } from './routers/documents';
 import { suppliersRouter } from './routers/suppliers';
+import { purchaseOrdersRouter } from './routers/purchase-orders';
 
 export const appRouter = router({
   auth: authRouter,
@@ -31,6 +32,7 @@ export const appRouter = router({
   dashboard: dashboardRouter,
   documents: documentsRouter,
   suppliers: suppliersRouter,
+  purchaseOrders: purchaseOrdersRouter,
 });
 
 export type AppRouter = typeof appRouter;

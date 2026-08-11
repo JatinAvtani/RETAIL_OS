@@ -15,8 +15,10 @@ import {
   storageLocations,
   stores,
   suppliers,
+  supplierProducts,
   units,
   StockCountService,
+  PurchaseOrderRepository,
 } from '@retailos/db';
 import { eq } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
@@ -203,6 +205,67 @@ const seedInProgressStockCountLine = async (db: Db, organizationId: string): Pro
     throw new Error('Cross-tenant registry: seeded stock count has no line — createCount invariant broken?');
   }
   return lines[0].id;
+};
+
+/** Seeds a store + supplier + confirmed supplier_product — what every purchase-order registry entry below needs as its base fixture. */
+const seedStoreSupplierAndSupplierProduct = async (
+  db: Db,
+  organizationId: string
+): Promise<{ storeId: string; supplierId: string; productId: string; supplierProductId: string }> => {
+  const { storeId, productId } = await seedStoreAndProduct(db, organizationId);
+  const supplierId = generateId();
+  await db.insert(suppliers).values({ id: supplierId, organizationId, name: `Cross-tenant probe supplier ${supplierId}` });
+  const supplierProductId = generateId();
+  await db.insert(supplierProducts).values({
+    id: supplierProductId,
+    organizationId,
+    supplierId,
+    productId,
+    supplierSku: `CROSS-TENANT-PROBE-${supplierProductId}`,
+    isConfirmed: true,
+  });
+  return { storeId, supplierId, productId, supplierProductId };
+};
+
+/** A real DRAFT purchase order with no lines — what `purchaseOrders.get`/`addLine` need as their own-resource fixture. */
+const seedDraftPurchaseOrder = async (db: Db, organizationId: string): Promise<string> => {
+  const { storeId, supplierId } = await seedStoreSupplierAndSupplierProduct(db, organizationId);
+  const repo = new PurchaseOrderRepository(db, organizationId);
+  const created = await repo.create({ storeId, supplierId, poNumber: `CROSS-TENANT-PROBE-${generateId()}`, currency: 'USD' });
+  return created.id;
+};
+
+/** A real DRAFT purchase order WITH one real line — what `submit` needs (submit itself has no line-count requirement, but a realistic PO always has at least one). */
+const seedDraftPurchaseOrderWithLine = async (db: Db, organizationId: string): Promise<string> => {
+  const { supplierProductId, productId } = await seedStoreSupplierAndSupplierProduct(db, organizationId);
+  const purchaseOrderId = await seedDraftPurchaseOrder(db, organizationId);
+  const repo = new PurchaseOrderRepository(db, organizationId);
+  await repo.addLine({
+    purchaseOrderId,
+    supplierProductId,
+    productId,
+    quantityOrderUnits: '1',
+    conversionToBase: '1',
+    unitPrice: '10.00',
+    lineNumber: 1,
+  });
+  return purchaseOrderId;
+};
+
+/** A real PENDING_APPROVAL purchase order — what `approve`/`reject` need as their own-resource starting state. */
+const seedPendingApprovalPurchaseOrder = async (db: Db, organizationId: string): Promise<string> => {
+  const purchaseOrderId = await seedDraftPurchaseOrderWithLine(db, organizationId);
+  const repo = new PurchaseOrderRepository(db, organizationId);
+  await repo.applyTransition(purchaseOrderId, 'SUBMIT', 1);
+  return purchaseOrderId;
+};
+
+/** A real APPROVED purchase order — what `send` needs as its own-resource starting state. */
+const seedApprovedPurchaseOrder = async (db: Db, organizationId: string): Promise<string> => {
+  const purchaseOrderId = await seedPendingApprovalPurchaseOrder(db, organizationId);
+  const repo = new PurchaseOrderRepository(db, organizationId);
+  await repo.applyTransition(purchaseOrderId, 'APPROVE', 2);
+  return purchaseOrderId;
 };
 
 /** Seeds a real, one-component recipe (a real product component, needs a real baseUnitId/unitId). */
@@ -1011,5 +1074,88 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
       return documentId;
     },
     buildInput: (resourceId) => ({ documentId: resourceId }),
+  },
+  {
+    // Store-scoped, same shape as inventory.levels/dashboard.summary — the store-ownership check
+    // is the first thing reorderSuggestions' router runs, before findReorderSuggestions is called.
+    path: 'purchaseOrders.reorderSuggestions',
+    type: 'query',
+    seedResource: seedStore,
+    buildInput: (resourceId) => ({ storeId: resourceId }),
+  },
+  {
+    // Store-scoped (creating a PO needs a real storeId + supplierId, both org-owned) — attacks
+    // with tenant A's storeId, the first check the router runs before ever touching supplierId.
+    path: 'purchaseOrders.create',
+    type: 'mutation',
+    seedResource: async (db, organizationId) => {
+      const { storeId } = await seedStoreSupplierAndSupplierProduct(db, organizationId);
+      return storeId;
+    },
+    buildInput: async (resourceId, organizationId, db) => {
+      const [supplier] = await db.select({ id: suppliers.id }).from(suppliers).where(eq(suppliers.organizationId, organizationId));
+      return { storeId: resourceId, supplierId: supplier!.id, poNumber: `PO-${generateId()}` };
+    },
+  },
+  {
+    // Id-scoped, not store-scoped — the real risk is tenant B adding a line to tenant A's real PO.
+    path: 'purchaseOrders.addLine',
+    type: 'mutation',
+    seedResource: seedDraftPurchaseOrder,
+    buildInput: async (resourceId, organizationId, db) => {
+      const [sp] = await db.select({ id: supplierProducts.id, productId: supplierProducts.productId }).from(supplierProducts).where(eq(supplierProducts.organizationId, organizationId));
+      return { purchaseOrderId: resourceId, supplierProductId: sp!.id, productId: sp!.productId, quantityOrderUnits: '1', conversionToBase: '1', unitPrice: '5.00', lineNumber: 1 };
+    },
+  },
+  {
+    path: 'purchaseOrders.get',
+    type: 'query',
+    seedResource: seedDraftPurchaseOrder,
+    buildInput: (resourceId) => ({ purchaseOrderId: resourceId }),
+  },
+  {
+    // The own-resource case needs a real DRAFT PO at version 1 — submit rejects any other status
+    // regardless of who's calling, which would be a false negative for the cross-tenant guard.
+    path: 'purchaseOrders.submit',
+    type: 'mutation',
+    seedResource: seedDraftPurchaseOrderWithLine,
+    buildInput: (resourceId) => ({ purchaseOrderId: resourceId, expectedVersion: 1 }),
+  },
+  {
+    // The own-resource case needs a real PENDING_APPROVAL PO at version 2 (create=v1, submit=v2).
+    path: 'purchaseOrders.approve',
+    type: 'mutation',
+    seedResource: seedPendingApprovalPurchaseOrder,
+    buildInput: (resourceId) => ({ purchaseOrderId: resourceId, expectedVersion: 2 }),
+  },
+  {
+    path: 'purchaseOrders.reject',
+    type: 'mutation',
+    seedResource: seedPendingApprovalPurchaseOrder,
+    buildInput: (resourceId) => ({ purchaseOrderId: resourceId, expectedVersion: 2 }),
+  },
+  {
+    // The own-resource case needs a real APPROVED PO at version 3 (create=v1, submit=v2, approve=v3).
+    path: 'purchaseOrders.send',
+    type: 'mutation',
+    seedResource: seedApprovedPurchaseOrder,
+    buildInput: (resourceId) => ({ purchaseOrderId: resourceId, expectedVersion: 3 }),
+  },
+  {
+    path: 'purchaseOrders.cancel',
+    type: 'mutation',
+    seedResource: seedDraftPurchaseOrder,
+    buildInput: (resourceId) => ({ purchaseOrderId: resourceId, expectedVersion: 1 }),
+  },
+  {
+    // Id-scoped by supplierId, not store-scoped — the real risk is tenant B reading tenant A's
+    // real supplier-product mappings (pack sizes, confirmed SKUs) via a guessed/observed supplierId.
+    path: 'suppliers.confirmedProducts',
+    type: 'query',
+    seedResource: async (db, organizationId) => {
+      const { supplierId } = await seedStoreSupplierAndSupplierProduct(db, organizationId);
+      return supplierId;
+    },
+    buildInput: (resourceId) => ({ supplierId: resourceId }),
   },
 ];

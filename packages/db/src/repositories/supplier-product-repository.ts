@@ -58,6 +58,21 @@ export class SupplierProductRepository extends TenantScopedRepository<typeof sup
     );
   }
 
+  /**
+   * 008-05: every CONFIRMED mapping for one supplier — what the PO create/edit UI needs to offer
+   * "which products can I order from this supplier," same I7 reasoning as `findConfirmedForProduct`
+   * (an unconfirmed mapping has no reliable pack size/conversion factor, so offering it as an
+   * orderable line would silently let a PO line carry made-up unit-conversion data).
+   */
+  async findConfirmedBySupplier(supplierId: string) {
+    return this.runScoped((db, scopedWhere) =>
+      db
+        .select()
+        .from(supplierProducts)
+        .where(scopedWhere(and(eq(supplierProducts.supplierId, supplierId), eq(supplierProducts.isConfirmed, true))))
+    );
+  }
+
   async create(input: {
     id: string;
     supplierId: string;

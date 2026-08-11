@@ -1,6 +1,8 @@
-import { sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import * as schema from '../schema/index';
+import { memberships } from '../schema/index';
+import { withTenantContext } from '../tenant-context';
 
 type Db = ReturnType<typeof drizzle<typeof schema>>;
 
@@ -44,5 +46,33 @@ export class MembershipRepository {
       storeIds: row.store_ids,
       approvalLimit: row.approval_limit,
     }));
+  }
+
+  /**
+   * The ordinary, in-org membership lookup — unlike `findAcceptedMembershipsForLogin` above, this
+   * runs AFTER a session already picked one `organizationId`, so it goes through the normal
+   * RLS-protected path via a real `withTenantContext`-wrapped transaction (a plain `db.select()`
+   * against `memberships`, a `FORCE ROW LEVEL SECURITY` table, throws `unrecognized configuration
+   * parameter "app.current_org_id"` without this — the same class of bug confirmed 3x in this
+   * codebase; see project memory `retailos-tenant-context-outside-repository`). Used by 008-05's
+   * PO approval flow to read the CURRENT `approvalLimit` fresh at approval time, never a stale
+   * value cached on the session at login — a manager's limit can change after they logged in.
+   */
+  async findByUserAndOrg(userId: string, organizationId: string): Promise<AcceptedMembership | null> {
+    return this.db.transaction((tx) =>
+      withTenantContext(tx, organizationId, async () => {
+        const rows = await tx
+          .select({
+            id: memberships.id,
+            organizationId: memberships.organizationId,
+            role: memberships.role,
+            storeIds: memberships.storeIds,
+            approvalLimit: memberships.approvalLimit,
+          })
+          .from(memberships)
+          .where(and(eq(memberships.userId, userId), eq(memberships.organizationId, organizationId)));
+        return rows[0] ?? null;
+      })
+    );
   }
 }

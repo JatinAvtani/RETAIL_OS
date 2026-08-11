@@ -27,6 +27,8 @@ import {
   stockCounts,
   stockLevels,
   stockMovements,
+  purchaseOrderLines,
+  purchaseOrders,
   storageLocations,
   stores,
   supplierProducts,
@@ -126,6 +128,13 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
       await db.delete(extractionCorrections).where(eq(extractionCorrections.organizationId, orgId));
       await db.delete(documentExtractions).where(eq(documentExtractions.organizationId, orgId));
       await db.delete(documents).where(eq(documents.organizationId, orgId));
+      // 008-05: purchaseOrders.create/addLine/submit/approve/reject/send/cancel's registry entries
+      // now seed real purchase_order_lines/purchase_orders rows — purchase_orders references users
+      // via createdByUserId/submittedByUserId/approvedByUserId/rejectedByUserId/sentByUserId/
+      // cancelledByUserId, so both must be gone before the createdUserIds loop below, the same
+      // recurring FK-teardown-order bug class this shared fixture has hit repeatedly.
+      await db.delete(purchaseOrderLines).where(eq(purchaseOrderLines.organizationId, orgId));
+      await db.delete(purchaseOrders).where(eq(purchaseOrders.organizationId, orgId));
     }
 
     for (const userId of createdUserIds) {

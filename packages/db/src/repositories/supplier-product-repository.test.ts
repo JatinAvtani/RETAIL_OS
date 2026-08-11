@@ -105,6 +105,18 @@ describe('SupplierProductRepository', () => {
     expect(confirmed.some((m) => m.id === mapping.id)).toBe(true);
   });
 
+  it('findConfirmedBySupplier returns only confirmed mappings for that supplier', async () => {
+    const repo = new SupplierProductRepository(createScopedDb(client), organizationId);
+    const confirmedMapping = await repo.create({ id: generateId(), supplierId, productId, supplierSku: 'FLR-BY-SUPPLIER-CONFIRMED' });
+    await repo.confirm(confirmedMapping.id);
+    const unconfirmedMapping = await repo.create({ id: generateId(), supplierId, productId, supplierSku: 'FLR-BY-SUPPLIER-UNCONFIRMED' });
+
+    const results = await repo.findConfirmedBySupplier(supplierId);
+
+    expect(results.some((m) => m.id === confirmedMapping.id)).toBe(true);
+    expect(results.some((m) => m.id === unconfirmedMapping.id)).toBe(false);
+  });
+
   it('rejects a duplicate supplier SKU for the same supplier in the same org', async () => {
     const repo = new SupplierProductRepository(createScopedDb(client), organizationId);
     await repo.create({ id: generateId(), supplierId, productId, supplierSku: 'DUP-SKU' });
