@@ -15,6 +15,9 @@ import { dashboardRouter } from './routers/dashboard';
 import { documentsRouter } from './routers/documents';
 import { suppliersRouter } from './routers/suppliers';
 import { purchaseOrdersRouter } from './routers/purchase-orders';
+import { goodsReceiptsRouter } from './routers/goods-receipts';
+import { invoiceMatchesRouter } from './routers/invoice-matches';
+import { settingsRouter } from './routers/settings';
 
 export const appRouter = router({
   auth: authRouter,
@@ -33,6 +36,9 @@ export const appRouter = router({
   documents: documentsRouter,
   suppliers: suppliersRouter,
   purchaseOrders: purchaseOrdersRouter,
+  goodsReceipts: goodsReceiptsRouter,
+  invoiceMatches: invoiceMatchesRouter,
+  settings: settingsRouter,
 });
 
 export type AppRouter = typeof appRouter;

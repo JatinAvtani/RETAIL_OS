@@ -11,6 +11,8 @@ import { createAuthRateLimiters } from '../auth/rate-limit';
 export const PRODUCT_IMAGES_BUCKET = 'retailos-product-images';
 export const SALES_CSV_IMPORTS_BUCKET = 'retailos-sales-csv-imports';
 export const DOCUMENTS_BUCKET = 'retailos-documents';
+export const PURCHASE_ORDER_PDFS_BUCKET = 'retailos-purchase-order-pdfs';
+export const GOODS_RECEIPT_PHOTOS_BUCKET = 'retailos-goods-receipt-photos';
 
 /**
  * One connection pool / Redis client for the process lifetime, not one per request — both

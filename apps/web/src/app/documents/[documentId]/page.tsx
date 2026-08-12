@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
 import { Badge, Button, Card, ErrorNotice, LoadingState, PageHeader, Select, Value, type BadgeTone } from '@/components/ui';
 
@@ -139,6 +140,7 @@ const LineMapping = ({
 };
 
 type DocumentLink = Awaited<ReturnType<typeof trpc.documents.getLinks.query>>[number];
+type InvoiceMatchSummary = Awaited<ReturnType<typeof trpc.invoiceMatches.getByDocument.query>>;
 
 const ENTITY_TYPE_LABELS: Record<string, string> = {
   supplier_price: 'Supplier price updated',
@@ -173,6 +175,29 @@ const ProvenancePanel = ({ links }: { links: DocumentLink[] }) => {
 };
 
 /**
+ * 008-10: for a POSTED invoice, the real three-way match already ran automatically inside
+ * `documents.approve` — this just links to its own detail page rather than duplicating the line
+ * table here. `null` (no match found via `getByDocument`) means either this document wasn't an
+ * INVOICE, or the match genuinely failed after posting (see `documents.approve`'s own two-step-gap
+ * comment) — rendered as nothing, not an error, since posting itself already succeeded either way.
+ */
+const InvoiceMatchPanel = ({ invoiceMatch }: { invoiceMatch: InvoiceMatchSummary }) => {
+  if (!invoiceMatch) return null;
+  const severityTone = invoiceMatch.invoiceMatch.highestSeverity === 'HIGH' ? 'danger' : invoiceMatch.invoiceMatch.highestSeverity === 'MEDIUM' ? 'warning' : 'positive';
+  return (
+    <Card>
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-sm font-semibold text-content">Three-way match</h2>
+        <Badge tone={severityTone}>{invoiceMatch.invoiceMatch.highestSeverity}</Badge>
+      </div>
+      <Link href={`/invoice-matches/${invoiceMatch.invoiceMatch.id}`} className="mt-2 inline-block text-sm text-accent hover:underline">
+        View match details
+      </Link>
+    </Card>
+  );
+};
+
+/**
  * 007-09: the review workflow's actual screen — document image alongside every extracted field and
  * validation issue, so a reviewer can approve or reject in one place. Two real scope boundaries
  * (confirmed with the user before building): the document renders via a plain browser-native
@@ -194,6 +219,7 @@ export default function DocumentReviewPage() {
 
   const [data, setData] = useState<ReviewData | null>(null);
   const [links, setLinks] = useState<DocumentLink[]>([]);
+  const [invoiceMatch, setInvoiceMatch] = useState<InvoiceMatchSummary>(null);
   const [products, setProducts] = useState<ProductOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -224,7 +250,10 @@ export default function DocumentReviewPage() {
   useEffect(() => {
     if (data?.document.status !== 'POSTED') return;
     trpc.documents.getLinks.query({ documentId }).then(setLinks).catch(() => undefined);
-  }, [documentId, data?.document.status]);
+    if (data.document.type === 'INVOICE') {
+      trpc.invoiceMatches.getByDocument.query({ documentId }).then(setInvoiceMatch).catch(() => undefined);
+    }
+  }, [documentId, data?.document.status, data?.document.type]);
 
   const handleApprove = async () => {
     setBusy(true);
@@ -296,6 +325,7 @@ export default function DocumentReviewPage() {
 
           <div className="flex flex-col gap-4">
             {document.status === 'POSTED' && <ProvenancePanel links={links} />}
+            {document.status === 'POSTED' && document.type === 'INVOICE' && <InvoiceMatchPanel invoiceMatch={invoiceMatch} />}
 
             {validation.issues.length > 0 && (
               <Card>

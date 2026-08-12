@@ -17,3 +17,11 @@ export const buildDocumentKey = (organizationId: string, documentId: string, ext
 /** 007-03: a quarantined email attachment's storage key — a real organizationId when the recipient resolved to one, or `'unresolved'` when it didn't (there is no tenant prefix to give it). */
 export const buildEmailQuarantineAttachmentKey = (organizationId: string | null, intakeId: string, extension: string): string =>
   `org/${organizationId ?? 'unresolved'}/email-quarantine/${intakeId}.${extension}`;
+
+/** 008-06: the generated PO PDF's storage key — one PDF per PO, overwritten if regenerated (a PO is only ever SENT once per version, but re-sending an amendment reuses the same key deliberately, matching `buildProductImageKey`'s own "latest wins" convention). */
+export const buildPurchaseOrderPdfKey = (organizationId: string, purchaseOrderId: string): string =>
+  `org/${organizationId}/purchase-orders/${purchaseOrderId}.pdf`;
+
+/** 008-08: a damage-claim photo for one goods-receipt line — `photoId` is a fresh id per upload (never reused, unlike `buildProductImageKey`'s "latest wins"), since a receipt line can carry MULTIPLE photos appended one at a time, none of which should overwrite an earlier one. */
+export const buildGoodsReceiptLinePhotoKey = (organizationId: string, goodsReceiptLineId: string, photoId: string, extension: string): string =>
+  `org/${organizationId}/goods-receipt-lines/${goodsReceiptLineId}/photos/${photoId}.${extension}`;

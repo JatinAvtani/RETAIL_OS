@@ -51,15 +51,22 @@ export default function ReorderSuggestionsPage() {
         title="Reorder suggestions"
         description="Deterministic, explainable reorder suggestions grouped by supplier — no ML, no black box. Every quantity comes with the reasoning behind it, so you can verify it before ordering."
         actions={
-          !storesLoading && stores.length > 0 ? (
-            <Select value={selectedStoreId} onChange={(event) => setSelectedStoreId(event.target.value)} className="w-auto">
-              {stores.map((store) => (
-                <option key={store.id} value={store.id}>
-                  {store.name}
-                </option>
-              ))}
-            </Select>
-          ) : null
+          <div className="flex items-center gap-2">
+            {!storesLoading && stores.length > 0 && (
+              <Select value={selectedStoreId} onChange={(event) => setSelectedStoreId(event.target.value)} className="w-auto">
+                {stores.map((store) => (
+                  <option key={store.id} value={store.id}>
+                    {store.name}
+                  </option>
+                ))}
+              </Select>
+            )}
+            <Link href="/purchase-orders/receive-walk-in">
+              <Button type="button" variant="ghost">
+                Receive walk-in purchase
+              </Button>
+            </Link>
+          </div>
         }
       />
 

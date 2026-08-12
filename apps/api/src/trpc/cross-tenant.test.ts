@@ -7,7 +7,11 @@ import {
   documentExtractions,
   documents,
   extractionCorrections,
+  goodsReceiptLines,
+  goodsReceipts,
   hashPassword,
+  invoiceMatchLines,
+  invoiceMatches,
   lots,
   memberships,
   menuItems,
@@ -127,7 +131,24 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
       // Same recurring FK-teardown-order bug class this shared fixture has hit repeatedly.
       await db.delete(extractionCorrections).where(eq(extractionCorrections.organizationId, orgId));
       await db.delete(documentExtractions).where(eq(documentExtractions.organizationId, orgId));
+      // 008-10: invoiceMatches.get/.getByDocument/.pending's registry entries seed real
+      // invoice_matches/invoice_match_lines rows referencing documents, purchase_order_lines, AND
+      // goods_receipt_lines — all three must be gone before this SAME loop's own documents/
+      // purchase_order_lines/goods_receipt_lines deletes further down, the same recurring
+      // FK-teardown-order bug class this shared fixture has hit repeatedly.
+      await db.delete(invoiceMatchLines).where(eq(invoiceMatchLines.organizationId, orgId));
+      await db.delete(invoiceMatches).where(eq(invoiceMatches.organizationId, orgId));
       await db.delete(documents).where(eq(documents.organizationId, orgId));
+      // 008-07: goodsReceipts.confirmReceipt/.get's registry entries seed real
+      // goods_receipts/goods_receipt_lines rows referencing purchase_order_lines — must be gone
+      // BEFORE purchase_order_lines is deleted below, not just before lots further down (this is
+      // an earlier iteration of the SAME loop deleting purchase_order_lines, so the ordering
+      // matters within this one pass too). lots.goods_receipt_line_id forms a genuine mutual FK
+      // cycle with goods_receipt_lines.lot_id — nulled here too, ahead of the `lots` delete later
+      // in this same function, since a goods_receipt_lines row created here may already have set it.
+      await db.update(lots).set({ goodsReceiptLineId: null }).where(eq(lots.organizationId, orgId));
+      await db.delete(goodsReceiptLines).where(eq(goodsReceiptLines.organizationId, orgId));
+      await db.delete(goodsReceipts).where(eq(goodsReceipts.organizationId, orgId));
       // 008-05: purchaseOrders.create/addLine/submit/approve/reject/send/cancel's registry entries
       // now seed real purchase_order_lines/purchase_orders rows — purchase_orders references users
       // via createdByUserId/submittedByUserId/approvedByUserId/rejectedByUserId/sentByUserId/
@@ -147,6 +168,9 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
     }
     for (const orgId of createdOrgIds) {
       await db.delete(stockLevels).where(eq(stockLevels.organizationId, orgId));
+      // goods_receipts/goods_receipt_lines and the lots.goods_receipt_line_id <-> mutual FK cycle
+      // are already fully cleaned up in the loop above (must happen before purchase_order_lines is
+      // deleted there) — this delete only needs to handle the remaining lots rows.
       await db.delete(lots).where(eq(lots.organizationId, orgId));
       await db.delete(outboxEvents).where(eq(outboxEvents.organizationId, orgId));
 

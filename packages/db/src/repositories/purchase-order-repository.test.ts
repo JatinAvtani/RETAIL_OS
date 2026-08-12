@@ -173,6 +173,104 @@ describe('PurchaseOrderRepository', () => {
     expect(total).toBeNull();
   });
 
+  describe('buildPdfInput / recordSent (008-06)', () => {
+    it('assembles PO header, store, supplier, and line data joined with product/unit/supplier-SKU names', async () => {
+      const adminDb = drizzle(adminClient, { schema });
+      const contactSupplierId = generateId();
+      await adminDb.insert(suppliers).values({
+        id: contactSupplierId,
+        organizationId,
+        name: 'Contactable Supplier',
+        contacts: [{ name: 'Jane Doe', email: 'jane@example.test' }],
+      });
+      const contactSupplierProductId = generateId();
+      await adminDb.insert(supplierProducts).values({
+        id: contactSupplierProductId,
+        organizationId,
+        supplierId: contactSupplierId,
+        productId,
+        supplierSku: 'PDF-TEST-SKU',
+      });
+
+      const repo = new PurchaseOrderRepository(createScopedDb(client), organizationId);
+      const created = await repo.create({ storeId, supplierId: contactSupplierId, poNumber: 'PO-PDF-1', currency: 'USD', notes: 'Handle with care' });
+      await repo.addLine({
+        purchaseOrderId: created.id,
+        supplierProductId: contactSupplierProductId,
+        productId,
+        quantityOrderUnits: '5',
+        orderUnitId: kgUnitId,
+        conversionToBase: '1',
+        unitPrice: '4.00',
+        lineNumber: 1,
+      });
+
+      const pdfInput = await repo.buildPdfInput(created.id);
+      expect(pdfInput).not.toBeNull();
+      expect(pdfInput?.poNumber).toBe('PO-PDF-1');
+      expect(pdfInput?.notes).toBe('Handle with care');
+      expect(pdfInput?.store.name).toBe('Main Store');
+      expect(pdfInput?.supplier.name).toBe('Contactable Supplier');
+      expect(pdfInput?.supplier.contactEmail).toBe('jane@example.test');
+      expect(pdfInput?.total).toBe('20.0000'); // 5 * 4.00
+      expect(pdfInput?.lines).toHaveLength(1);
+      expect(pdfInput?.lines[0]?.productName).toBe('PO Test Product');
+      expect(pdfInput?.lines[0]?.supplierSku).toBe('PDF-TEST-SKU');
+      expect(pdfInput?.lines[0]?.orderUnitLabel).toBe('kg');
+
+      // purchase_order_lines (this PO's own line, referencing contactSupplierProductId) must be
+      // gone before supplier_products/suppliers can be deleted — the shared afterEach cleans up
+      // purchase_order_lines/purchase_orders for this org, but only AFTER this test body returns,
+      // so it must run first, explicitly, right here (the recurring FK-teardown-order class this
+      // project has hit repeatedly: a test's own inserted child row must be deleted before a
+      // shared fixture's cleanup deletes a parent row it references).
+      await adminDb.delete(purchaseOrderLines).where(eq(purchaseOrderLines.purchaseOrderId, created.id));
+      await adminDb.delete(purchaseOrders).where(eq(purchaseOrders.id, created.id));
+      await adminDb.delete(supplierProducts).where(eq(supplierProducts.id, contactSupplierProductId));
+      await adminDb.delete(suppliers).where(eq(suppliers.id, contactSupplierId));
+    });
+
+    it('returns contactEmail null (never a guessed address) when the supplier has no contacts on file — I7', async () => {
+      const repo = new PurchaseOrderRepository(createScopedDb(client), organizationId);
+      const created = await repo.create({ storeId, supplierId, poNumber: 'PO-PDF-2', currency: 'USD' });
+
+      const pdfInput = await repo.buildPdfInput(created.id);
+      expect(pdfInput?.supplier.contactEmail).toBeNull();
+      expect(pdfInput?.supplier.contactName).toBeNull();
+    });
+
+    it('returns total null (never a fabricated 0) for a purchase order with zero lines — I7', async () => {
+      const repo = new PurchaseOrderRepository(createScopedDb(client), organizationId);
+      const created = await repo.create({ storeId, supplierId, poNumber: 'PO-PDF-3', currency: 'USD' });
+
+      const pdfInput = await repo.buildPdfInput(created.id);
+      expect(pdfInput?.total).toBeNull();
+      expect(pdfInput?.lines).toHaveLength(0);
+    });
+
+    it('buildPdfInput returns null for a purchase order that does not exist', async () => {
+      const repo = new PurchaseOrderRepository(createScopedDb(client), organizationId);
+      const pdfInput = await repo.buildPdfInput(generateId());
+      expect(pdfInput).toBeNull();
+    });
+
+    it('recordSent writes pdfObjectKey/emailSentAt/emailSentTo onto the real row', async () => {
+      const repo = new PurchaseOrderRepository(createScopedDb(client), organizationId);
+      const created = await repo.create({ storeId, supplierId, poNumber: 'PO-PDF-4', currency: 'USD' });
+
+      const before = await repo.findById(created.id);
+      expect(before?.pdfObjectKey).toBeNull();
+      expect(before?.emailSentAt).toBeNull();
+
+      await repo.recordSent(created.id, `org/${organizationId}/purchase-orders/${created.id}.pdf`, 'jane@example.test');
+
+      const after = await repo.findById(created.id);
+      expect(after?.pdfObjectKey).toBe(`org/${organizationId}/purchase-orders/${created.id}.pdf`);
+      expect(after?.emailSentAt).not.toBeNull();
+      expect(after?.emailSentTo).toBe('jane@example.test');
+    });
+  });
+
   it('addLine refuses to add a line to a non-DRAFT purchase order', async () => {
     const repo = new PurchaseOrderRepository(createScopedDb(client), organizationId);
     const created = await repo.create({ storeId, supplierId, poNumber: 'PO-1003', currency: 'USD' });

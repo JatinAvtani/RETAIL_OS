@@ -7,6 +7,8 @@ import {
   documents,
   extractionCorrections,
   hashPassword,
+  invoiceMatchLines,
+  invoiceMatches,
   memberships,
   organizations,
   outboxEvents,
@@ -926,6 +928,11 @@ describe('documents router — approve triggers posting (007-11)', () => {
       await db.delete(documentExtractions).where(eq(documentExtractions.organizationId, orgId));
       await db.delete(auditLogs).where(eq(auditLogs.organizationId, orgId));
       await db.delete(outboxEvents).where(eq(outboxEvents.organizationId, orgId));
+      // 008-10: `approve` now runs InvoiceMatchRepository.runMatch for INVOICE-type documents —
+      // invoice_matches/invoice_match_lines reference documents (and, when a PO was resolved,
+      // purchase_order_lines) and must be gone before the documents delete just below.
+      await db.delete(invoiceMatchLines).where(eq(invoiceMatchLines.organizationId, orgId));
+      await db.delete(invoiceMatches).where(eq(invoiceMatches.organizationId, orgId));
       await db.delete(documents).where(eq(documents.organizationId, orgId));
       await db.delete(supplierProducts).where(eq(supplierProducts.organizationId, orgId));
       const orgProducts = await db.select({ id: products.id }).from(products).where(eq(products.organizationId, orgId));
@@ -1066,6 +1073,101 @@ describe('documents router — approve triggers posting (007-11)', () => {
 
     const [movementRow] = await db.execute(`SELECT movement_type FROM stock_movements WHERE source_id = '${documentId}'`);
     expect((movementRow as { movement_type: string } | undefined)?.movement_type).toBe('RECEIPT');
+  });
+
+  /**
+   * 008-10: `approve` also runs the real three-way match for an INVOICE-type document, immediately
+   * after posting, in the SAME request — confirmed with the user as the trigger point. Forces
+   * `type: 'INVOICE'` directly via the DB (this suite deliberately unsets `GEMINI_API_KEY`, so
+   * real classification never runs — see this file's own header comment) since the match-trigger
+   * gate reads the document's real `type` column, not the extraction's raw `fields`.
+   */
+  it('approve also runs the real three-way match for an INVOICE document, reachable via invoiceMatches.getByDocument', async () => {
+    const { organizationId, storeId, sessionCookie } = await setUpOrgWithStore();
+
+    const supplierRepository = new SupplierRepository(db, organizationId);
+    await supplierRepository.create({ id: generateId(), name: 'Match E2E Supplier' });
+
+    const unitRepository = new UnitRepository(db);
+    const eachUnit = await unitRepository.findByCode('each');
+    const productRepository = new ProductRepository(db, organizationId);
+    const product = await productRepository.create({ id: generateId(), sku: `MATCH-E2E-${generateId()}`, name: 'Match E2E Ingredient', baseUnitId: eachUnit!.id, type: 'INGREDIENT' });
+
+    const requestResponse = await app.inject({
+      method: 'POST',
+      url: '/trpc/documents.requestUpload',
+      payload: { storeId },
+      cookies: { '__Host-session': sessionCookie },
+    });
+    const { uploadUrl, key } = asSuccess(requestResponse.json()) as { uploadUrl: string; key: string };
+    await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: REAL_PDF_BYTES });
+    const confirmResponse = await app.inject({ method: 'POST', url: '/trpc/documents.confirmUpload', payload: { storeId, key }, cookies: { '__Host-session': sessionCookie } });
+    const { documentId } = asSuccess(confirmResponse.json()) as { documentId: string };
+
+    // Force this document to INVOICE — real classification never runs in this suite (GEMINI_API_KEY unset).
+    await db.update(documents).set({ type: 'INVOICE' }).where(eq(documents.id, documentId));
+
+    await db.insert(documentExtractions).values({
+      id: generateId(),
+      organizationId,
+      documentId,
+      provider: 'gemini',
+      modelVersion: 'flash-lite-v1',
+      promptVersion: '1',
+      fields: {
+        supplier: { value: 'Match E2E Supplier', confidence: 0.9 },
+        documentNumber: { value: 'INV-MATCH-1', confidence: 0.9 },
+        documentDate: { value: '2026-01-01', confidence: 0.9 },
+        currency: { value: 'USD', confidence: 1 },
+        subtotal: { value: '20.00', confidence: 0.9 },
+        tax: { value: '0', confidence: 0.9 },
+        discount: { value: null, confidence: null },
+        total: { value: '20.00', confidence: 0.9 },
+      },
+      lines: [
+        {
+          sku: { value: 'MATCH-E2E-SKU', confidence: 0.9 },
+          description: { value: 'Match E2E line', confidence: 0.9 },
+          quantity: { value: '2', confidence: 0.9 },
+          unit: { value: 'ea', confidence: 0.9 },
+          unitPrice: { value: '10.00', confidence: 0.9 },
+          lineTotal: { value: '20.00', confidence: 0.9 },
+        },
+      ],
+      validation: { issues: [], canAutoApprove: true },
+      overallConfidence: '0.9000',
+    });
+    await db.update(documents).set({ status: 'REVIEW_REQUIRED' }).where(eq(documents.id, documentId));
+
+    const mapResponse = await app.inject({
+      method: 'POST',
+      url: '/trpc/documents.confirmLineMapping',
+      payload: { documentId, lineIndex: 0, productId: product.id },
+      cookies: { '__Host-session': sessionCookie },
+    });
+    expect(mapResponse.statusCode).toBe(200);
+
+    const approveResponse = await app.inject({
+      method: 'POST',
+      url: '/trpc/documents.approve',
+      payload: { documentId },
+      cookies: { '__Host-session': sessionCookie },
+    });
+    expect(approveResponse.statusCode).toBe(200);
+
+    // No PO/receipt exists anywhere for this product — the real three-way match must have run and
+    // classified the line UNORDERED_ITEM (a real, honest "billed but never ordered or received").
+    const matchResponse = await app.inject({
+      method: 'GET',
+      url: `/trpc/invoiceMatches.getByDocument?input=${encodeURIComponent(JSON.stringify({ documentId }))}`,
+      cookies: { '__Host-session': sessionCookie },
+    });
+    expect(matchResponse.statusCode).toBe(200);
+    const matchBody = asSuccess(matchResponse.json()) as { invoiceMatch: { highestSeverity: string; purchaseOrderId: string | null }; lines: { varianceType: string }[] };
+    expect(matchBody.invoiceMatch.purchaseOrderId).toBeNull();
+    expect(matchBody.invoiceMatch.highestSeverity).toBe('MEDIUM');
+    expect(matchBody.lines).toHaveLength(1);
+    expect(matchBody.lines[0]?.varianceType).toBe('UNORDERED_ITEM');
   });
 
   it('getLinks returns the real document_links rows PostingService wrote for a posted document (007-12)', async () => {

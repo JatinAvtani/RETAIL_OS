@@ -206,7 +206,14 @@ report HIGH I5 "Float column in a monetary/quantity path" \
 # None of these COALESCEs ever stand in for an unknown COST or PRICE - suggestReorder itself (the
 # actual consumer, packages/domain) separately treats a missing unitPrice/leadTime as null/unknown,
 # never defaulting either to zero.
-r=$(search '(\?\?|\|\|)[[:space:]]*0\b|COALESCE\([^,]+,[[:space:]]*0\)' 'format|display|/ui/|reconciliation\.ts|expiry-queue\.ts|reorder-suggestions\.ts' '' \
+# goods-receipt-repository.ts excluded: its COALESCE(purchase_order_lines.received_quantity_base_units, 0)
+# is the same accumulator idiom, not a costing value - a PO line that has never been received
+# genuinely has zero received-so-far (the column starts NULL specifically to mean "not yet
+# received," per purchase-orders.ts's own schema comment), and this COALESCE only computes how much
+# MORE has now arrived; it never feeds a cost/price calculation. unitCost is resolved completely
+# separately in the same function and throws UnknownReceiptCostError rather than defaulting to 0
+# when it can't be determined (I7 applied to the actual money value, not this quantity accumulator).
+r=$(search '(\?\?|\|\|)[[:space:]]*0\b|COALESCE\([^,]+,[[:space:]]*0\)' 'format|display|/ui/|reconciliation\.ts|expiry-queue\.ts|reorder-suggestions\.ts|goods-receipt-repository\.ts' '' \
    | grep -Ei 'cost|price|margin|revenue|cogs|consumption|qty|quantity|yield' || true)
 report HIGH I7 "Null-to-zero coercion in a costing path" \
   "\`?? 0\` looks defensive; in costing it silently inflates margin to 100%. Degrade to unknown." "$r"

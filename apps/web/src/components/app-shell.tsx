@@ -15,6 +15,8 @@ const NAV = [
   { href: '/documents', label: 'Documents' },
   { href: '/pos-items', label: 'POS mapping' },
   { href: '/purchase-orders/suggestions', label: 'Reorder suggestions' },
+  { href: '/purchase-orders/variance-queue', label: 'Variance queue' },
+  { href: '/settings', label: 'Settings' },
 ];
 
 export const AppShell = ({ children }: { children: ReactNode }) => {

@@ -225,6 +225,41 @@
       "when": 1788300000000,
       "tag": "0032_purchase_orders",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1788400000000,
+      "tag": "0033_purchase_orders_pdf_email",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1788500000000,
+      "tag": "0034_goods_receipts",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1788600000000,
+      "tag": "0035_invoice_matches",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1788700000000,
+      "tag": "0036_match_tolerances",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1788800000000,
+      "tag": "0037_invoice_match_resolution",
+      "breakpoints": true
     }
   ]
 }

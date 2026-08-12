@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { generateId } from '@retailos/domain';
 import { computeExtractionAutoApprovalRate, computeValidationIssueFrequency } from '@retailos/metrics';
-import { DocumentRepository, PostingService, StoreRepository, SupplierProductRepository, SupplierRepository } from '@retailos/db';
+import { DocumentRepository, InvoiceMatchRepository, PostingService, StoreRepository, SupplierProductRepository, SupplierRepository } from '@retailos/db';
 import { canAccessStore } from '@retailos/authz';
 import { classifyDocument } from '@retailos/ai';
 import { enqueueExtractionJob } from '@retailos/queue';
@@ -241,6 +241,18 @@ export const documentsRouter = router({
    * has already committed (a real, if narrow, two-step gap — acceptable since approve failing
    * silently would be worse than a document stuck at APPROVED needing a retry, and this project has
    * no PurchaseOrder/GoodsReceipt/InvoiceMatch tables yet to make posting fail on THEIR account).
+   *
+   * 008-10 (plan.md Phase 4, spec 05 §5.2.4): immediately after posting, an `INVOICE`-type document
+   * also runs the real three-way match (`InvoiceMatchRepository.runMatch`) — confirmed with the
+   * user as the trigger point, since `PostingService` is already the one write path a posted
+   * invoice goes through, and matching genuinely needs the same already-fetched extraction lines
+   * posting used. Gated to `type === 'INVOICE'` — a delivery note or credit note has no PO/receipt
+   * reconciliation semantics to match against. A document with no supplier resolved at all still
+   * runs the match (every line lands as `UNORDERED_ITEM`, an honest "could not reconcile" result,
+   * never skipped silently). If the match itself fails (e.g. this document was already matched —
+   * the real unique `document_id` constraint), the failure is logged but does not roll back the
+   * approve/posting that already committed, matching this same method's own established two-step
+   * gap reasoning above.
    */
   approve: protectedProcedure.input(reviewDecisionInput).mutation(async ({ ctx, input }) => {
     requirePermission(ctx.session.permissions, 'documents:approve');
@@ -264,6 +276,24 @@ export const documentsRouter = router({
         lines: extraction.lines as { sku: { value: string | null }; quantity: { value: string | null }; unitPrice: { value: string | null }; lineTotal: { value: string | null } }[],
         actorUserId: ctx.session.userId,
       });
+
+      if (updated.type === 'INVOICE') {
+        const invoiceMatchRepository = new InvoiceMatchRepository(ctx.db, ctx.session.organizationId);
+        const rawFields = extraction.fields as { supplier: { value: string | null } };
+        try {
+          await invoiceMatchRepository.runMatch({
+            documentId: input.documentId,
+            storeId: updated.storeId,
+            supplierName: rawFields.supplier.value,
+            lines: extraction.lines as { sku: { value: string | null }; quantity: { value: string | null }; unitPrice: { value: string | null } }[],
+          });
+        } catch (err) {
+          // A real, already-matched document (the unique document_id constraint) or an
+          // unresolvable-supplier edge case must not roll back an approve/posting that already
+          // genuinely committed — matching this endpoint's own established two-step gap reasoning.
+          console.warn(`Three-way match failed for document ${input.documentId}:`, err);
+        }
+      }
     }
 
     const posted = await documentRepository.findById(input.documentId);

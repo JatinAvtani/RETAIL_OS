@@ -422,4 +422,92 @@ describe('purchaseOrders — create/addLine/submit/approve/reject/send/cancel (0
     const staleSubmit = await call('purchaseOrders.submit', token, { purchaseOrderId, expectedVersion: 1 });
     expect(staleSubmit.statusCode).toBe(409);
   });
+
+  describe('send — PDF generation + mocked email (008-06)', () => {
+    it('sending a PO whose supplier has no contact email on file returns a real error, but the PO is still SENT — I7', async () => {
+      const { organizationId, storeId, supplierId, productId, supplierProductId } = await setUpOrgWithSupplierProduct();
+      const { token } = await issueSessionWithMembership(organizationId, 'OWNER', ['purchasing:read', 'purchasing:write', 'purchasing:approve']);
+
+      const createResponse = await call('purchaseOrders.create', token, { storeId, supplierId, poNumber: 'PO-SEND-1' });
+      const purchaseOrderId = JSON.parse(createResponse.body).result.data.id;
+      await call('purchaseOrders.addLine', token, { purchaseOrderId, supplierProductId, productId, quantityOrderUnits: '1', conversionToBase: '1', unitPrice: '10.00', lineNumber: 1 });
+      await call('purchaseOrders.submit', token, { purchaseOrderId, expectedVersion: 1 });
+      await call('purchaseOrders.approve', token, { purchaseOrderId, expectedVersion: 2 });
+
+      const sendResponse = await call('purchaseOrders.send', token, { purchaseOrderId, expectedVersion: 3 });
+      expect(sendResponse.statusCode).toBe(412);
+
+      // The transition itself already committed before the PDF/email step ran — spec 05 §5.2.2
+      // ties immutability to the state change, not to whether the notification succeeded.
+      const getResponse = await query('purchaseOrders.get', token, { purchaseOrderId });
+      expect(JSON.parse(getResponse.body).result.data.purchaseOrder.status).toBe('SENT');
+    });
+
+    it('sending a PO whose supplier HAS a contact email genuinely generates a real, loadable PDF and records the mocked send', async () => {
+      const { organizationId, storeId, supplierId: baseSupplierId, productId, supplierProductId: baseSupplierProductId } = await setUpOrgWithSupplierProduct();
+      // A second, contactable supplier — setUpOrgWithSupplierProduct's own supplier has no contacts,
+      // matching the no-contact test above; this one needs a real email to exercise the success path.
+      const supplierId = generateId();
+      await db.insert(suppliers).values({ id: supplierId, organizationId, name: 'Contactable Supplier', contacts: [{ name: 'Jane Doe', email: 'jane@example.test' }] });
+      const supplierProductId = generateId();
+      await db.insert(supplierProducts).values({ id: supplierProductId, organizationId, supplierId, productId, supplierSku: 'SEND-TEST-SKU', isConfirmed: true });
+      void baseSupplierId;
+      void baseSupplierProductId;
+
+      const { token } = await issueSessionWithMembership(organizationId, 'OWNER', ['purchasing:read', 'purchasing:write', 'purchasing:approve']);
+
+      const createResponse = await call('purchaseOrders.create', token, { storeId, supplierId, poNumber: 'PO-SEND-2' });
+      const purchaseOrderId = JSON.parse(createResponse.body).result.data.id;
+      await call('purchaseOrders.addLine', token, { purchaseOrderId, supplierProductId, productId, quantityOrderUnits: '3', conversionToBase: '1', unitPrice: '15.00', lineNumber: 1 });
+      await call('purchaseOrders.submit', token, { purchaseOrderId, expectedVersion: 1 });
+      await call('purchaseOrders.approve', token, { purchaseOrderId, expectedVersion: 2 });
+
+      const sendResponse = await call('purchaseOrders.send', token, { purchaseOrderId, expectedVersion: 3 });
+      expect(sendResponse.statusCode).toBe(200);
+      expect(JSON.parse(sendResponse.body).result.data.newStatus).toBe('SENT');
+
+      const getResponse = await query('purchaseOrders.get', token, { purchaseOrderId });
+      const po = JSON.parse(getResponse.body).result.data.purchaseOrder;
+      expect(po.status).toBe('SENT');
+      expect(po.pdfObjectKey).toBe(`org/${organizationId}/purchase-orders/${purchaseOrderId}.pdf`);
+      expect(po.emailSentTo).toBe('jane@example.test');
+      expect(po.emailSentAt).not.toBeNull();
+
+      const pdfUrlResponse = await query('purchaseOrders.getPdfUrl', token, { purchaseOrderId });
+      expect(pdfUrlResponse.statusCode).toBe(200);
+      const pdfUrl = JSON.parse(pdfUrlResponse.body).result.data.url;
+      expect(pdfUrl).toMatch(/^http/);
+
+      // The real proof: fetch the presigned url and confirm it resolves to genuine, valid PDF bytes
+      // (magic-byte signature), the same standing substitute this project's every prior storage-
+      // backed task has used in place of a browser (no browser-automation tool exists here).
+      const fetched = await fetch(pdfUrl);
+      expect(fetched.status).toBe(200);
+      const bytes = Buffer.from(await fetched.arrayBuffer());
+      expect(bytes.subarray(0, 5).toString('ascii')).toBe('%PDF-');
+
+      // purchase_order_lines (this PO's own line, referencing supplierProductId) must be deleted
+      // before supplier_products/suppliers — the shared afterEach only cleans up
+      // purchase_order_lines/purchase_orders/etc. AFTER this test body returns, so the FK-ordering
+      // must be handled explicitly here first (the same recurring teardown-order class this
+      // project has hit repeatedly).
+      await db.delete(outboxEvents).where(eq(outboxEvents.aggregateId, purchaseOrderId));
+      await db.delete(auditLogs).where(eq(auditLogs.entityId, purchaseOrderId));
+      await db.delete(purchaseOrderLines).where(eq(purchaseOrderLines.purchaseOrderId, purchaseOrderId));
+      await db.delete(purchaseOrders).where(eq(purchaseOrders.id, purchaseOrderId));
+      await db.delete(supplierProducts).where(eq(supplierProducts.id, supplierProductId));
+      await db.delete(suppliers).where(eq(suppliers.id, supplierId));
+    });
+
+    it('getPdfUrl returns url null for a purchase order that has never been sent — no PDF exists yet (I7)', async () => {
+      const { organizationId, storeId, supplierId } = await setUpOrgWithSupplierProduct();
+      const { token } = await issueSessionWithMembership(organizationId, 'OWNER', ['purchasing:read', 'purchasing:write', 'purchasing:approve']);
+      const createResponse = await call('purchaseOrders.create', token, { storeId, supplierId, poNumber: 'PO-SEND-3' });
+      const purchaseOrderId = JSON.parse(createResponse.body).result.data.id;
+
+      const pdfUrlResponse = await query('purchaseOrders.getPdfUrl', token, { purchaseOrderId });
+      expect(pdfUrlResponse.statusCode).toBe(200);
+      expect(JSON.parse(pdfUrlResponse.body).result.data.url).toBeNull();
+    });
+  });
 });

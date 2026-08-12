@@ -1,4 +1,4 @@
-import { pgEnum, pgTable, smallint, text } from 'drizzle-orm/pg-core';
+import { numeric, pgEnum, pgTable, smallint, text } from 'drizzle-orm/pg-core';
 import { idColumn, softDelete, timestamps, optimisticVersion } from './columns';
 
 /**
@@ -25,6 +25,17 @@ export const organizations = pgTable('organizations', {
   fiscalYearStartMonth: smallint('fiscal_year_start_month').notNull().default(1),
   tier: organizationTierEnum('tier').notNull().default('trial'),
   status: organizationStatusEnum('status').notNull().default('active'),
+
+  // 008-11 (spec D8: "avoid alert fatigue on cents"). All three nullable, matching
+  // memberships.approvalLimit's exact precedent — NULL means "use
+  // packages/domain's DEFAULT_MATCH_TOLERANCES", never a fabricated zero (a zero tolerance would
+  // flag every cent of rounding as a variance, the opposite of this feature's purpose). Percent
+  // columns store a fraction (0.02 = 2%), not a whole-number percentage, matching
+  // MatchTolerances' own domain-layer shape exactly so no conversion happens at the boundary.
+  matchPriceTolerancePercent: numeric('match_price_tolerance_percent', { precision: 5, scale: 4 }),
+  matchPriceToleranceAbsolute: numeric('match_price_tolerance_absolute', { precision: 19, scale: 4 }),
+  matchQuantityTolerancePercent: numeric('match_quantity_tolerance_percent', { precision: 5, scale: 4 }),
+
   ...timestamps,
   ...softDelete,
   ...optimisticVersion,

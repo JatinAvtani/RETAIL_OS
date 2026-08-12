@@ -85,6 +85,14 @@ export const purchaseOrders = pgTable('purchase_orders', {
 
   closedAt: timestamp('closed_at', { withTimezone: true }),
 
+  // 008-06: spec 05 §5.2.2, "SENT triggers PDF generation + email to the supplier contact."
+  // `pdfObjectKey` is null until a SEND actually generates one (I7 — no PDF exists before that).
+  // `emailSentAt`/`emailSentTo` record the (mocked, per this project's no-cost constraint) send
+  // outcome directly on the row, so "was this actually sent, to whom" needs no audit_logs join.
+  pdfObjectKey: text('pdf_object_key'),
+  emailSentAt: timestamp('email_sent_at', { withTimezone: true }),
+  emailSentTo: text('email_sent_to'),
+
   createdByUserId: uuid('created_by_user_id').references(() => users.id),
   ...timestamps,
   ...optimisticVersion,

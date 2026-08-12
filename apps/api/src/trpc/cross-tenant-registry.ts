@@ -9,6 +9,8 @@ import {
   posItems,
   products,
   productVariants,
+  purchaseOrderLines,
+  purchaseOrders,
   recipeComponents,
   recipes,
   salesCsvImports,
@@ -19,13 +21,15 @@ import {
   units,
   StockCountService,
   PurchaseOrderRepository,
+  GoodsReceiptRepository,
+  InvoiceMatchRepository,
 } from '@retailos/db';
 import { eq } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import { generateId } from '@retailos/domain';
 import { encryptToken } from '@retailos/pos';
-import { buildProductImageKey, buildCsvImportKey, buildDocumentKey, createPresignedUploadUrl, ensureBucketExists } from '@retailos/storage';
-import { PRODUCT_IMAGES_BUCKET, SALES_CSV_IMPORTS_BUCKET, DOCUMENTS_BUCKET, storageClient } from './context';
+import { buildProductImageKey, buildCsvImportKey, buildDocumentKey, buildGoodsReceiptLinePhotoKey, createPresignedUploadUrl, ensureBucketExists } from '@retailos/storage';
+import { PRODUCT_IMAGES_BUCKET, SALES_CSV_IMPORTS_BUCKET, DOCUMENTS_BUCKET, GOODS_RECEIPT_PHOTOS_BUCKET, storageClient } from './context';
 
 type Db = ReturnType<typeof createDb>['db'];
 
@@ -214,7 +218,15 @@ const seedStoreSupplierAndSupplierProduct = async (
 ): Promise<{ storeId: string; supplierId: string; productId: string; supplierProductId: string }> => {
   const { storeId, productId } = await seedStoreAndProduct(db, organizationId);
   const supplierId = generateId();
-  await db.insert(suppliers).values({ id: supplierId, organizationId, name: `Cross-tenant probe supplier ${supplierId}` });
+  // A real contact email — `purchaseOrders.send`'s own-resource case (008-06) needs one to
+  // genuinely reach a 200; every OTHER registry entry using this shared fixture only reads
+  // storeId/supplierId/productId/supplierProductId, so this addition is inert for them.
+  await db.insert(suppliers).values({
+    id: supplierId,
+    organizationId,
+    name: `Cross-tenant probe supplier ${supplierId}`,
+    contacts: [{ name: 'Probe Contact', email: `probe-${supplierId}@example.test` }],
+  });
   const supplierProductId = generateId();
   await db.insert(supplierProducts).values({
     id: supplierProductId,
@@ -266,6 +278,60 @@ const seedApprovedPurchaseOrder = async (db: Db, organizationId: string): Promis
   const repo = new PurchaseOrderRepository(db, organizationId);
   await repo.applyTransition(purchaseOrderId, 'APPROVE', 2);
   return purchaseOrderId;
+};
+
+/**
+ * 008-07: a real SENT purchase order — `goodsReceipts.confirmReceipt`'s own-resource starting
+ * state. Returns the PO's real `purchaseOrderLineId` (not the PO id itself) since that's the
+ * actual attack surface: `confirmReceipt` takes a `purchaseOrderLineId` per line, and the real
+ * cross-tenant risk is tenant B posting a receipt against tenant A's real PO line.
+ */
+const seedSentPurchaseOrderWithLine = async (db: Db, organizationId: string): Promise<string> => {
+  const purchaseOrderId = await seedApprovedPurchaseOrder(db, organizationId);
+  const repo = new PurchaseOrderRepository(db, organizationId);
+  await repo.applyTransition(purchaseOrderId, 'SEND', 3);
+  const lines = await repo.findLines(purchaseOrderId);
+  if (!lines[0]) {
+    throw new Error('Cross-tenant registry: seeded SENT purchase order has no line — seedDraftPurchaseOrderWithLine invariant broken?');
+  }
+  return lines[0].id;
+};
+
+/** A real confirmed goods receipt — `goodsReceipts.get`'s own-resource starting state. */
+const seedGoodsReceipt = async (db: Db, organizationId: string): Promise<string> => {
+  const result = await seedGoodsReceiptAndLine(db, organizationId);
+  return result.goodsReceiptId;
+};
+
+/**
+ * 008-08: a real confirmed goods-receipt LINE — `goodsReceipts.requestPhotoUpload`/
+ * `.confirmPhotoUpload`'s own-resource starting state, since both take a `goodsReceiptLineId`
+ * directly, not a `goodsReceiptId`. Shares the same confirm-a-real-receipt logic
+ * `seedGoodsReceipt` uses, factored out so both can return whichever id their own registry entry
+ * actually attacks with.
+ */
+const seedGoodsReceiptAndLine = async (db: Db, organizationId: string): Promise<{ goodsReceiptId: string; goodsReceiptLineId: string }> => {
+  const purchaseOrderLineId = await seedSentPurchaseOrderWithLine(db, organizationId);
+  const [line] = await db.select({ purchaseOrderId: purchaseOrderLines.purchaseOrderId, storeId: purchaseOrders.storeId, supplierId: purchaseOrders.supplierId })
+    .from(purchaseOrderLines)
+    .innerJoin(purchaseOrders, eq(purchaseOrders.id, purchaseOrderLines.purchaseOrderId))
+    .where(eq(purchaseOrderLines.id, purchaseOrderLineId));
+  if (!line) {
+    throw new Error('Cross-tenant registry: seedGoodsReceiptAndLine could not resolve its own seeded PO line.');
+  }
+  const repo = new GoodsReceiptRepository(db, organizationId);
+  const result = await repo.confirmReceipt({
+    storeId: line.storeId,
+    purchaseOrderId: line.purchaseOrderId,
+    supplierId: line.supplierId,
+    receivedAt: new Date(),
+    lines: [{ purchaseOrderLineId, receivedQuantityBaseUnits: '1', lineNumber: 1 }],
+  });
+  const receiptLines = await repo.findLines(result.goodsReceiptId);
+  if (!receiptLines[0]) {
+    throw new Error('Cross-tenant registry: seedGoodsReceiptAndLine produced a receipt with no line.');
+  }
+  return { goodsReceiptId: result.goodsReceiptId, goodsReceiptLineId: receiptLines[0].id };
 };
 
 /** Seeds a real, one-component recipe (a real product component, needs a real baseUnitId/unitId). */
@@ -449,6 +515,40 @@ const seedDocumentAwaitingReview = async (db: Db, organizationId: string): Promi
   });
   await db.update(documents).set({ status: 'REVIEW_REQUIRED' }).where(eq(documents.id, seeded.documentId));
   return seeded;
+};
+
+/**
+ * 008-10: a real `InvoiceMatch` — `invoiceMatches.get`/`.getByDocument`'s own-resource starting
+ * state. Reuses `seedStoreSupplierAndSupplierProduct`'s real confirmed mapping and calls
+ * `InvoiceMatchRepository.runMatch` directly (the same repository `documents.approve` calls
+ * internally) rather than driving a full document-approve flow — this line is intentionally
+ * unmatched against any PO/receipt (an `UNORDERED_ITEM` result), since the registry only needs a
+ * real row to attack, not a specific variance outcome.
+ */
+const seedInvoiceMatch = async (db: Db, organizationId: string): Promise<{ storeId: string; invoiceMatchId: string }> => {
+  const { storeId, supplierId } = await seedStoreSupplierAndSupplierProduct(db, organizationId);
+  const documentId = generateId();
+  await db.insert(documents).values({
+    id: documentId,
+    organizationId,
+    storeId,
+    type: 'INVOICE',
+    source: 'UPLOAD',
+    status: 'POSTED',
+    storageKey: `${organizationId}/cross-tenant-probe-invoice-${documentId}.pdf`,
+    contentHash: createHash('sha256').update(`invoice-match-probe-${documentId}`).digest('hex'),
+    mimeType: 'application/pdf',
+    sizeBytes: 1,
+  });
+  const [supplier] = await db.select({ name: suppliers.name }).from(suppliers).where(eq(suppliers.id, supplierId));
+  const repo = new InvoiceMatchRepository(db, organizationId);
+  const result = await repo.runMatch({
+    documentId,
+    storeId,
+    supplierName: supplier!.name,
+    lines: [{ sku: { value: `cross-tenant-probe-invoice-sku-${generateId()}` }, quantity: { value: '1' }, unitPrice: { value: '1.00' } }],
+  });
+  return { storeId, invoiceMatchId: result.id };
 };
 
 /**
@@ -1142,10 +1242,82 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     buildInput: (resourceId) => ({ purchaseOrderId: resourceId, expectedVersion: 3 }),
   },
   {
+    // 008-06: id-scoped by purchaseOrderId — a DRAFT PO (never sent) is a valid own-resource case,
+    // since `getPdfUrl` must return `{ url: null }` rather than error for one (I7), same as `get`.
+    path: 'purchaseOrders.getPdfUrl',
+    type: 'query',
+    seedResource: seedDraftPurchaseOrder,
+    buildInput: (resourceId) => ({ purchaseOrderId: resourceId }),
+  },
+  {
     path: 'purchaseOrders.cancel',
     type: 'mutation',
     seedResource: seedDraftPurchaseOrder,
     buildInput: (resourceId) => ({ purchaseOrderId: resourceId, expectedVersion: 1 }),
+  },
+  {
+    // 008-07: id-scoped by purchaseOrderLineId — the real risk is tenant B posting a receipt (and
+    // thereby a real lot + RECEIPT movement + PO state transition) against tenant A's real PO line.
+    // `buildInput` re-derives storeId/purchaseOrderId/supplierId from the SEEDED line itself (via a
+    // real join), not the calling org — attacking with tenant A's line must fail regardless of what
+    // other fields the request carries.
+    path: 'goodsReceipts.confirmReceipt',
+    type: 'mutation',
+    seedResource: seedSentPurchaseOrderWithLine,
+    buildInput: async (resourceId, _organizationId, db) => {
+      const [line] = await db
+        .select({ purchaseOrderId: purchaseOrderLines.purchaseOrderId, storeId: purchaseOrders.storeId, supplierId: purchaseOrders.supplierId })
+        .from(purchaseOrderLines)
+        .innerJoin(purchaseOrders, eq(purchaseOrders.id, purchaseOrderLines.purchaseOrderId))
+        .where(eq(purchaseOrderLines.id, resourceId));
+      if (!line) {
+        throw new Error('Cross-tenant registry: goodsReceipts.confirmReceipt could not resolve its seeded PO line.');
+      }
+      return {
+        storeId: line.storeId,
+        purchaseOrderId: line.purchaseOrderId,
+        supplierId: line.supplierId,
+        receivedAt: new Date().toISOString(),
+        lines: [{ purchaseOrderLineId: resourceId, receivedQuantityBaseUnits: '1', lineNumber: 1 }],
+      };
+    },
+  },
+  {
+    path: 'goodsReceipts.get',
+    type: 'query',
+    seedResource: seedGoodsReceipt,
+    buildInput: (resourceId) => ({ goodsReceiptId: resourceId }),
+  },
+  {
+    // 008-08: id-scoped by goodsReceiptLineId — the real risk is tenant B obtaining a real presigned
+    // upload URL for tenant A's receipt line (a genuine information/write-surface leak even though
+    // the URL alone doesn't touch photoObjectKeys until confirmPhotoUpload).
+    path: 'goodsReceipts.requestPhotoUpload',
+    type: 'mutation',
+    seedResource: async (db, organizationId) => (await seedGoodsReceiptAndLine(db, organizationId)).goodsReceiptLineId,
+    buildInput: (resourceId) => ({ goodsReceiptLineId: resourceId, contentType: 'image/jpeg' as const }),
+  },
+  {
+    // Id-scoped by goodsReceiptLineId — the real risk is tenant B appending a photo key onto tenant
+    // A's real receipt line. Uploads a REAL, valid JPEG at the exact key `confirmPhotoUpload` would
+    // look for (matching `products.confirmImageUpload`'s own precedent exactly), so the OWN-resource
+    // positive case gets a genuine 200, not an incidental S3-404. The primary check tenant B actually
+    // hits first is still `GoodsReceiptRepository.findLineById` returning null cross-org.
+    path: 'goodsReceipts.confirmPhotoUpload',
+    type: 'mutation',
+    seedResource: async (db, organizationId) => {
+      const { goodsReceiptLineId } = await seedGoodsReceiptAndLine(db, organizationId);
+      await ensureBucketExists(storageClient, GOODS_RECEIPT_PHOTOS_BUCKET);
+      const key = buildGoodsReceiptLinePhotoKey(organizationId, goodsReceiptLineId, 'probe', 'jpg');
+      const uploadUrl = await createPresignedUploadUrl(storageClient, GOODS_RECEIPT_PHOTOS_BUCKET, key, 'image/jpeg');
+      const realJpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
+      await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': 'image/jpeg' }, body: realJpegBytes });
+      return goodsReceiptLineId;
+    },
+    buildInput: (resourceId, organizationId) => ({
+      goodsReceiptLineId: resourceId,
+      key: buildGoodsReceiptLinePhotoKey(organizationId, resourceId, 'probe', 'jpg'),
+    }),
   },
   {
     // Id-scoped by supplierId, not store-scoped — the real risk is tenant B reading tenant A's
@@ -1157,5 +1329,40 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
       return supplierId;
     },
     buildInput: (resourceId) => ({ supplierId: resourceId }),
+  },
+  {
+    path: 'invoiceMatches.get',
+    type: 'query',
+    seedResource: async (db, organizationId) => (await seedInvoiceMatch(db, organizationId)).invoiceMatchId,
+    buildInput: (resourceId) => ({ invoiceMatchId: resourceId }),
+  },
+  {
+    // Id-scoped by documentId, not the match id — the real risk is tenant B reading tenant A's
+    // match result by guessing/observing a documentId (e.g. from documents.list).
+    path: 'invoiceMatches.getByDocument',
+    type: 'query',
+    seedResource: async (db, organizationId) => {
+      const { invoiceMatchId } = await seedInvoiceMatch(db, organizationId);
+      const repo = new InvoiceMatchRepository(db, organizationId);
+      const match = await repo.findById(invoiceMatchId);
+      return match!.documentId;
+    },
+    buildInput: (resourceId) => ({ documentId: resourceId }),
+  },
+  {
+    // Store-scoped, same shape as dashboard.summary/inventory.levels — the real risk is tenant B
+    // passing tenant A's real storeId to read its pending variance queue.
+    path: 'invoiceMatches.pending',
+    type: 'query',
+    seedResource: async (db, organizationId) => (await seedInvoiceMatch(db, organizationId)).storeId,
+    buildInput: (resourceId) => ({ storeId: resourceId }),
+  },
+  {
+    // 008-12: the real risk is tenant B resolving tenant A's real invoice match (a genuine
+    // financial-control action, not just a read) via a guessed/observed invoiceMatchId.
+    path: 'invoiceMatches.resolve',
+    type: 'mutation',
+    seedResource: async (db, organizationId) => (await seedInvoiceMatch(db, organizationId)).invoiceMatchId,
+    buildInput: (resourceId) => ({ invoiceMatchId: resourceId, resolutionNotes: 'Cross-tenant probe resolution note.' }),
   },
 ];

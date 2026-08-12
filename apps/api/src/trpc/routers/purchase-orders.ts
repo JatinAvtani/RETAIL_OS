@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
-import { money, type CurrencyCode } from '@retailos/domain';
+import { money, generatePurchaseOrderPdf, type CurrencyCode } from '@retailos/domain';
 import { canApproveAmount, canAccessStore, type AuthContext, type Permission } from '@retailos/authz';
+import { createMockPoEmailSender } from '@retailos/email';
 import {
   MembershipRepository,
   PurchaseOrderRepository,
@@ -11,8 +12,31 @@ import {
   organizations,
 } from '@retailos/db';
 import { eq } from 'drizzle-orm';
+import {
+  buildPurchaseOrderPdfKey,
+  createPresignedDownloadUrl,
+  ensureBucketExists,
+  putObjectBytes,
+} from '@retailos/storage';
 import { protectedProcedure, router } from '../trpc';
+import { storageClient, PURCHASE_ORDER_PDFS_BUCKET } from '../context';
 import type { db as Db } from '../context';
+
+/**
+ * 008-06: the same mocked transport for every `send` call in this process — matches this project's
+ * "mock only the transport, keep the real code path real" precedent from Postmark inbound (007-03).
+ * `onSend` is a no-op here (the caller persists the outcome via `recordSent` instead of relying on
+ * this hook); a dedicated test constructs its own sender with a real `onSend` to assert on.
+ */
+const poEmailSender = createMockPoEmailSender();
+
+/** Idempotent, matching `documents.ts`'s own `ensureBucketOnce` precedent — a separate bucket needing its own one-time creation. */
+let pdfBucketEnsured = false;
+const ensurePdfBucketOnce = async () => {
+  if (pdfBucketEnsured) return;
+  await ensureBucketExists(storageClient, PURCHASE_ORDER_PDFS_BUCKET);
+  pdfBucketEnsured = true;
+};
 
 const suggestionsInput = z.object({ storeId: z.string().uuid() });
 const createInput = z.object({
@@ -223,6 +247,15 @@ export const purchaseOrdersRouter = router({
     return result;
   }),
 
+  /**
+   * 008-06: spec 05 §5.2.2, "SENT triggers PDF generation + email to the supplier contact." The
+   * state transition itself (immutability boundary) happens first and is authoritative regardless
+   * of what follows — matching `recordSent`'s own doc comment: a PDF/email failure after a genuine
+   * SEND must not leave the PO stuck in a half-transitioned state, since spec 08 §8.2's optimistic
+   * lock has already been consumed by a real, valid transition. `contactEmail === null` (no
+   * confirmed supplier contact on file) is a real, visible failure — I7: this project never
+   * silently treats "no email to send to" as "sent successfully."
+   */
   send: protectedProcedure.input(transitionInput).mutation(async ({ ctx, input }) => {
     requirePermission(ctx.session.permissions, 'purchasing:write');
     const repo = new PurchaseOrderRepository(ctx.db, ctx.session.organizationId);
@@ -230,7 +263,50 @@ export const purchaseOrdersRouter = router({
     if (!result.ok) {
       throw new TRPCError({ code: result.reason.includes('not found') ? 'NOT_FOUND' : 'CONFLICT', message: result.reason });
     }
+
+    const pdfInput = await repo.buildPdfInput(input.purchaseOrderId);
+    if (!pdfInput) {
+      throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Purchase order was sent, but its PDF could not be generated (order not found on re-read).' });
+    }
+    if (pdfInput.supplier.contactEmail === null) {
+      throw new TRPCError({
+        code: 'PRECONDITION_FAILED',
+        message: 'Purchase order was sent, but this supplier has no contact email on file — add one before it can be emailed.',
+      });
+    }
+
+    const pdfBytes = await generatePurchaseOrderPdf(pdfInput);
+    await ensurePdfBucketOnce();
+    const pdfKey = buildPurchaseOrderPdfKey(ctx.session.organizationId, input.purchaseOrderId);
+    await putObjectBytes(storageClient, PURCHASE_ORDER_PDFS_BUCKET, pdfKey, Buffer.from(pdfBytes), 'application/pdf');
+
+    const emailResult = await poEmailSender.send({
+      to: pdfInput.supplier.contactEmail,
+      subject: `Purchase Order ${pdfInput.poNumber}`,
+      bodyText: `Please find attached Purchase Order ${pdfInput.poNumber}.`,
+      attachment: { filename: `${pdfInput.poNumber}.pdf`, contentType: 'application/pdf', bytes: pdfBytes },
+    });
+    if (!emailResult.ok) {
+      throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: `Purchase order was sent and its PDF generated, but the email failed: ${emailResult.error}` });
+    }
+
+    await repo.recordSent(input.purchaseOrderId, pdfKey, pdfInput.supplier.contactEmail);
+
     return result;
+  }),
+
+  getPdfUrl: protectedProcedure.input(getInput).query(async ({ ctx, input }) => {
+    requirePermission(ctx.session.permissions, 'purchasing:read');
+    const repo = new PurchaseOrderRepository(ctx.db, ctx.session.organizationId);
+    const purchaseOrder = await repo.findById(input.purchaseOrderId);
+    if (!purchaseOrder) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Purchase order not found.' });
+    }
+    if (purchaseOrder.pdfObjectKey === null) {
+      return { url: null };
+    }
+    const url = await createPresignedDownloadUrl(storageClient, PURCHASE_ORDER_PDFS_BUCKET, purchaseOrder.pdfObjectKey);
+    return { url };
   }),
 
   cancel: protectedProcedure.input(rejectOrCancelInput).mutation(async ({ ctx, input }) => {

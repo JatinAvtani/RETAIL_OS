@@ -55,3 +55,17 @@ export const validateProductImage = (bytes: Buffer): ImageValidationResult => {
   }
   return { valid: true, format };
 };
+
+/** 008-08: a damage-claim photo attached to a goods-receipt line — same real magic-byte detection as `validateProductImage`, its own size cap (a phone photo of physical damage, not a curated product shot). */
+export const MAX_GOODS_RECEIPT_PHOTO_BYTES = 10 * 1024 * 1024;
+
+export const validateGoodsReceiptPhoto = (bytes: Buffer): ImageValidationResult => {
+  if (bytes.length > MAX_GOODS_RECEIPT_PHOTO_BYTES) {
+    return { valid: false, reason: 'TOO_LARGE' };
+  }
+  const format = detectImageFormat(bytes);
+  if (!format) {
+    return { valid: false, reason: 'UNSUPPORTED_FORMAT' };
+  }
+  return { valid: true, format };
+};

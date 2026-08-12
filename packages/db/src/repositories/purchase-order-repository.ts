@@ -5,9 +5,21 @@ import {
   applyPurchaseOrderTransition,
   type PurchaseOrderEvent,
   type PurchaseOrderStatus,
+  type PurchaseOrderPdfInput,
 } from '@retailos/domain';
 import * as schema from '../schema/index';
-import { auditLogs, outboxEvents, purchaseOrders, purchaseOrderLines, type purchaseOrderStatusEnum } from '../schema/index';
+import {
+  auditLogs,
+  outboxEvents,
+  purchaseOrders,
+  purchaseOrderLines,
+  products,
+  units,
+  supplierProducts,
+  stores,
+  suppliers,
+  type purchaseOrderStatusEnum,
+} from '../schema/index';
 import { TenantScopedRepository } from '../tenant-repository';
 
 /** Spec 05 §5.2.2's named events (`po.created`/`po.approved`/`po.sent`/`po.cancelled`), extended
@@ -220,6 +232,112 @@ export class PurchaseOrderRepository extends TenantScopedRepository<typeof purch
         .where(and(eq(purchaseOrderLines.organizationId, this.organizationId), eq(purchaseOrderLines.purchaseOrderId, purchaseOrderId)))
     );
     return rows[0]?.total ?? null;
+  }
+
+  /**
+   * 008-06: assembles everything `generatePurchaseOrderPdf` (packages/domain, a pure function with
+   * no DB access of its own) needs — the PO header, store, supplier, and every line joined to its
+   * product/unit/supplier-SKU names. Returns `null` if the PO doesn't exist in this org (the
+   * standard cross-tenant-safe 404 shape every other `findById`-style method here uses).
+   *
+   * `orderUnitLabel` falls back to `'unit'` only for display purposes on a line whose
+   * `orderUnitId` was never set (an edge case `addLine`'s optional `orderUnitId` allows) — this is
+   * cosmetic text on a generated document, not a business number, so it does not trip I7 the way a
+   * missing MONEY or QUANTITY value would; the real `quantityOrderUnits`/`unitPrice`/`lineTotal`
+   * figures are always real, already-validated column values, never defaulted here.
+   */
+  async buildPdfInput(purchaseOrderId: string): Promise<PurchaseOrderPdfInput | null> {
+    return this.runScoped(async (db, scopedWhere) => {
+      const [po] = await db
+        .select({
+          poNumber: purchaseOrders.poNumber,
+          status: purchaseOrders.status,
+          currency: purchaseOrders.currency,
+          createdAt: purchaseOrders.createdAt,
+          expectedDeliveryDate: purchaseOrders.expectedDeliveryDate,
+          notes: purchaseOrders.notes,
+          storeName: stores.name,
+          storeAddress: stores.address,
+          supplierName: suppliers.name,
+          supplierContacts: suppliers.contacts,
+        })
+        .from(purchaseOrders)
+        .innerJoin(stores, eq(stores.id, purchaseOrders.storeId))
+        .innerJoin(suppliers, eq(suppliers.id, purchaseOrders.supplierId))
+        .where(scopedWhere(eq(purchaseOrders.id, purchaseOrderId)));
+      if (!po) return null;
+
+      const lineRows = await db
+        .select({
+          lineNumber: purchaseOrderLines.lineNumber,
+          quantityOrderUnits: purchaseOrderLines.quantityOrderUnits,
+          unitPrice: purchaseOrderLines.unitPrice,
+          lineTotal: purchaseOrderLines.lineTotal,
+          productName: products.name,
+          orderUnitCode: units.code,
+          supplierSku: supplierProducts.supplierSku,
+        })
+        .from(purchaseOrderLines)
+        .innerJoin(products, eq(products.id, purchaseOrderLines.productId))
+        .innerJoin(supplierProducts, eq(supplierProducts.id, purchaseOrderLines.supplierProductId))
+        .leftJoin(units, eq(units.id, purchaseOrderLines.orderUnitId))
+        .where(and(eq(purchaseOrderLines.organizationId, this.organizationId), eq(purchaseOrderLines.purchaseOrderId, purchaseOrderId)))
+        .orderBy(purchaseOrderLines.lineNumber);
+
+      // Same real SQL SUM() `getTotal` uses (I5 — never re-derive a money total via JS
+      // float/Number arithmetic over already-fetched rows, even for display-only PDF text).
+      const [totalRow] = await db
+        .select({ total: sql<string | null>`SUM(${purchaseOrderLines.lineTotal})` })
+        .from(purchaseOrderLines)
+        .where(and(eq(purchaseOrderLines.organizationId, this.organizationId), eq(purchaseOrderLines.purchaseOrderId, purchaseOrderId)));
+      const total = totalRow?.total ?? null;
+
+      const contacts = Array.isArray(po.supplierContacts) ? (po.supplierContacts as Array<{ name?: string; email?: string }>) : [];
+      const primaryContact = contacts[0] ?? null;
+
+      return {
+        poNumber: po.poNumber,
+        status: po.status,
+        currency: po.currency,
+        createdAt: po.createdAt,
+        expectedDeliveryDate: po.expectedDeliveryDate,
+        notes: po.notes,
+        store: { name: po.storeName, address: po.storeAddress },
+        supplier: {
+          name: po.supplierName,
+          contactName: primaryContact?.name ?? null,
+          contactEmail: primaryContact?.email ?? null,
+        },
+        lines: lineRows.map((line) => ({
+          lineNumber: line.lineNumber,
+          productName: line.productName,
+          supplierSku: line.supplierSku,
+          quantityOrderUnits: line.quantityOrderUnits,
+          orderUnitLabel: line.orderUnitCode ?? 'unit',
+          unitPrice: line.unitPrice,
+          lineTotal: line.lineTotal,
+        })),
+        total,
+      };
+    });
+  }
+
+  /**
+   * 008-06: records the outcome of a real SEND — the object storage key the generated PDF landed
+   * at, and who the (mocked) email was addressed to. Deliberately a separate write from
+   * `applyTransition`'s SEND branch: PDF generation + a mock email call are not database
+   * operations, so they cannot happen INSIDE that method's transaction — this runs immediately
+   * after, once both have genuinely succeeded. If the caller failed before reaching this (a PDF
+   * generation error, an email-send failure), the PO is still correctly `SENT` — spec 05 §5.2.2
+   * ties immutability to the state transition itself, not to whether the notification succeeded.
+   */
+  async recordSent(purchaseOrderId: string, pdfObjectKey: string, emailSentTo: string): Promise<void> {
+    await this.runScoped(async (db, scopedWhere) => {
+      await db
+        .update(purchaseOrders)
+        .set({ pdfObjectKey, emailSentAt: new Date(), emailSentTo })
+        .where(scopedWhere(eq(purchaseOrders.id, purchaseOrderId)));
+    });
   }
 
   /**

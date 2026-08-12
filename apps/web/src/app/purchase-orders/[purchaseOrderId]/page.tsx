@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { TRPCClientError } from '@trpc/client';
+import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
 import { Badge, Button, Card, ErrorNotice, LoadingState, PageHeader, Table, Td, Th, Tr, Value, type BadgeTone } from '@/components/ui';
 
@@ -38,6 +39,7 @@ export default function PurchaseOrderDetailPage() {
   const [actionPending, setActionPending] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [showRejectForm, setShowRejectForm] = useState(false);
+  const [pdfUrlPending, setPdfUrlPending] = useState(false);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -93,6 +95,23 @@ export default function PurchaseOrderDetailPage() {
 
   const { purchaseOrder, lines, total } = data;
   const version = purchaseOrder.version;
+
+  const downloadPdf = async () => {
+    setPdfUrlPending(true);
+    setError(null);
+    try {
+      const result = await trpc.purchaseOrders.getPdfUrl.query({ purchaseOrderId: purchaseOrder.id });
+      if (result.url === null) {
+        setError('This purchase order has not been sent yet — no PDF exists.');
+        return;
+      }
+      window.open(result.url, '_blank', 'noopener,noreferrer');
+    } catch {
+      setError('Could not fetch the purchase order PDF.');
+    } finally {
+      setPdfUrlPending(false);
+    }
+  };
 
   return (
     <>
@@ -164,6 +183,24 @@ export default function PurchaseOrderDetailPage() {
         )}
       </Card>
 
+      {(purchaseOrder.pdfObjectKey !== null || purchaseOrder.emailSentAt !== null) && (
+        <Card className="mb-6 p-6">
+          <h3 className="mb-4 text-sm font-semibold text-content">Supplier document</h3>
+          <div className="flex flex-wrap items-center gap-4">
+            {purchaseOrder.pdfObjectKey !== null && (
+              <Button type="button" variant="ghost" disabled={pdfUrlPending} onClick={downloadPdf}>
+                Download PDF
+              </Button>
+            )}
+            {purchaseOrder.emailSentAt !== null && (
+              <p className="text-sm text-content-subtle">
+                Emailed to {purchaseOrder.emailSentTo} on {new Date(purchaseOrder.emailSentAt).toLocaleString()}
+              </p>
+            )}
+          </div>
+        </Card>
+      )}
+
       <Card className="p-6">
         <h3 className="mb-4 text-sm font-semibold text-content">Actions</h3>
         <div className="flex flex-wrap items-center gap-2">
@@ -216,8 +253,12 @@ export default function PurchaseOrderDetailPage() {
             </Button>
           )}
 
-          {purchaseOrder.status === 'PARTIALLY_RECEIVED' && (
-            <p className="text-sm text-content-subtle">Awaiting the rest of the delivery — receiving isn&apos;t built yet.</p>
+          {(purchaseOrder.status === 'SENT' || purchaseOrder.status === 'PARTIALLY_RECEIVED') && (
+            <Link href={`/purchase-orders/${purchaseOrder.id}/receive`}>
+              <Button type="button" variant="primary">
+                Receive delivery
+              </Button>
+            </Link>
           )}
 
           {(purchaseOrder.status === 'RECEIVED' || purchaseOrder.status === 'CLOSED' || purchaseOrder.status === 'CANCELLED') && (
