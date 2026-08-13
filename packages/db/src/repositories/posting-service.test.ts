@@ -17,6 +17,7 @@ import {
   stores,
   supplierProducts,
   supplierPrices,
+  supplierPerformanceEvents,
   suppliers,
   units,
   users,
@@ -45,6 +46,7 @@ describe('PostingService', () => {
   let productId: string;
   let userId: string;
   let documentId: string;
+  let secondDocumentIds: string[] = [];
 
   beforeAll(async () => {
     client = postgres(APP_CONNECTION_STRING);
@@ -77,6 +79,7 @@ describe('PostingService', () => {
     await adminDb.delete(documentLinks).where(eq(documentLinks.organizationId, organizationId));
     await adminDb.delete(auditLogs).where(eq(auditLogs.organizationId, organizationId));
     await adminDb.delete(outboxEvents).where(eq(outboxEvents.organizationId, organizationId));
+    await adminDb.delete(supplierPerformanceEvents).where(eq(supplierPerformanceEvents.organizationId, organizationId));
     await adminDb.delete(stockLevels).where(eq(stockLevels.organizationId, organizationId));
     await adminDb.delete(stockMovements).where(eq(stockMovements.organizationId, organizationId));
     await adminDb.delete(lots).where(eq(lots.organizationId, organizationId));
@@ -91,6 +94,10 @@ describe('PostingService', () => {
     if (documentId) {
       await adminDb.delete(documents).where(eq(documents.id, documentId));
     }
+    for (const id of secondDocumentIds) {
+      await adminDb.delete(documents).where(eq(documents.id, id));
+    }
+    secondDocumentIds = [];
   });
 
   afterAll(async () => {
@@ -187,11 +194,14 @@ describe('PostingService', () => {
     const links = await adminDb.select().from(documentLinks).where(eq(documentLinks.documentId, docId));
     expect(links.map((l) => l.relationship).sort()).toEqual(['PRICE_SOURCE', 'STOCK_RECEIPT', 'STOCK_RECEIPT']);
 
-    // Outbox: document.posted, supplier.price_changed, cost.updated (this service's own events),
-    // PLUS stock.moved — MovementService.postMovementInTx emits its own outbox event internally as
-    // part of the SAME transaction, since postDocument composes it rather than duplicating its logic.
+    // Outbox: document.posted, cost.updated (this service's own events), PLUS stock.moved —
+    // MovementService.postMovementInTx emits its own outbox event internally as part of the SAME
+    // transaction, since postDocument composes it rather than duplicating its logic.
+    // 008-14: supplier.price_changed does NOT fire here — this is the FIRST price ever recorded for
+    // this supplier product (a baseline being established, not a "change" from anything), and
+    // detectPriceChange is only invoked when a real prior price exists to compare against.
     const events = await adminDb.select().from(outboxEvents).where(eq(outboxEvents.organizationId, organizationId));
-    expect(events.map((e) => e.eventType).sort()).toEqual(['cost.updated', 'document.posted', 'stock.moved', 'supplier.price_changed']);
+    expect(events.map((e) => e.eventType).sort()).toEqual(['cost.updated', 'document.posted', 'stock.moved']);
 
     // The document itself reached POSTED.
     const [postedDoc] = await adminDb.select().from(documents).where(eq(documents.id, docId));
@@ -220,6 +230,149 @@ describe('PostingService', () => {
 
     const [level] = await adminDb.select().from(stockLevels).where(and(eq(stockLevels.productId, pid), eq(stockLevels.storeId, storeId)));
     expect(level?.avgUnitCost).toBe('1.2000');
+  });
+
+  /** A second REVIEW_REQUIRED document against the SAME supplier/product/mapping `setUpMappedLine` already created — needed to exercise a real second price transition. */
+  const postSecondDocument = async (unitPrice: string, quantity = '1') => {
+    const documentRepo = new DocumentRepository(createScopedDb(client), organizationId);
+    const doc = await documentRepo.create({
+      storeId,
+      type: 'INVOICE',
+      source: 'UPLOAD',
+      storageKey: `${organizationId}/posting-test-2.pdf`,
+      contentHash: `posting-hash-2-${generateId()}`,
+      mimeType: 'application/pdf',
+      sizeBytes: 1,
+      uploadedByUserId: userId,
+    });
+    await documentRepo.updateStatus(doc.id, 'REVIEW_REQUIRED');
+    secondDocumentIds.push(doc.id);
+
+    const service = new PostingService(createScopedDb(client), organizationId);
+    await service.postDocument({
+      documentId: doc.id,
+      storeId,
+      fields: { supplier: { value: (await new SupplierRepository(createScopedDb(client), organizationId).findById(supplierId))!.name } },
+      lines: [{ sku: { value: 'FLR-POST-1' }, quantity: { value: quantity }, unitPrice: { value: unitPrice }, lineTotal: { value: unitPrice } }],
+      actorUserId: userId,
+    });
+    return doc.id;
+  };
+
+  describe('price-change detection (008-14)', () => {
+    it('a real threshold-crossing price change emits a real PRICE_CHANGE event and a gated supplier.price_changed outbox event, with the correct annualized_impact', async () => {
+      const { mappingId } = await setUpMappedLine();
+
+      const firstService = new PostingService(createScopedDb(client), organizationId);
+      await firstService.postDocument({
+        documentId,
+        storeId,
+        fields: { supplier: { value: (await new SupplierRepository(createScopedDb(client), organizationId).findById(supplierId))!.name } },
+        lines: [{ sku: { value: 'FLR-POST-1' }, quantity: { value: '100' }, unitPrice: { value: '5.00' }, lineTotal: { value: '500.00' } }],
+        actorUserId: userId,
+      });
+
+      // A second post at $6.00 — a 20% jump, well beyond the default 2% threshold.
+      const secondDocId = await postSecondDocument('6.00', '50');
+
+      const adminDb = drizzle(adminClient, { schema });
+
+      const events = await adminDb.select().from(supplierPerformanceEvents).where(eq(supplierPerformanceEvents.organizationId, organizationId));
+      const priceChangeEvent = events.find((e) => e.eventType === 'PRICE_CHANGE');
+      expect(priceChangeEvent).toBeDefined();
+      expect(priceChangeEvent!.expectedValue).toBe('5.000000');
+      expect(priceChangeEvent!.actualValue).toBe('6.000000');
+      expect(priceChangeEvent!.documentId).toBe(secondDocId);
+      // annualized_impact = $1.00 delta x 100 real trailing RECEIPT units (from the first post) = $100.
+      expect(priceChangeEvent!.variance).toBe('100.000000');
+
+      const outbox = await adminDb.select().from(outboxEvents).where(eq(outboxEvents.organizationId, organizationId));
+      const priceChangedEvent = outbox.find((e) => e.eventType === 'supplier.price_changed');
+      expect(priceChangedEvent).toBeDefined();
+      const payload = priceChangedEvent!.payload as Record<string, unknown>;
+      expect(payload.oldUnitPrice).toBe('5.0000');
+      expect(payload.newUnitPrice).toBe('6.0000');
+      expect(payload.annualizedImpact).toBe('100.0000');
+
+      void mappingId;
+    });
+
+    it('a price change WITHIN the default 2% threshold emits NEITHER a PRICE_CHANGE event nor a supplier.price_changed outbox event', async () => {
+      await setUpMappedLine();
+
+      const firstService = new PostingService(createScopedDb(client), organizationId);
+      await firstService.postDocument({
+        documentId,
+        storeId,
+        fields: { supplier: { value: (await new SupplierRepository(createScopedDb(client), organizationId).findById(supplierId))!.name } },
+        lines: [{ sku: { value: 'FLR-POST-1' }, quantity: { value: '10' }, unitPrice: { value: '5.00' }, lineTotal: { value: '50.00' } }],
+        actorUserId: userId,
+      });
+
+      // $5.00 -> $5.05 is exactly 1% — within the default 2% threshold.
+      await postSecondDocument('5.05', '10');
+
+      const adminDb = drizzle(adminClient, { schema });
+      const events = await adminDb.select().from(supplierPerformanceEvents).where(eq(supplierPerformanceEvents.organizationId, organizationId));
+      expect(events.some((e) => e.eventType === 'PRICE_CHANGE')).toBe(false);
+
+      const outbox = await adminDb.select().from(outboxEvents).where(eq(outboxEvents.organizationId, organizationId));
+      expect(outbox.some((e) => e.eventType === 'supplier.price_changed')).toBe(false);
+    });
+
+    it('the FIRST price ever recorded for a supplier product never fires PRICE_CHANGE — a baseline being established is not a "change"', async () => {
+      await setUpMappedLine();
+
+      const service = new PostingService(createScopedDb(client), organizationId);
+      await service.postDocument({
+        documentId,
+        storeId,
+        fields: { supplier: { value: (await new SupplierRepository(createScopedDb(client), organizationId).findById(supplierId))!.name } },
+        lines: [{ sku: { value: 'FLR-POST-1' }, quantity: { value: '1' }, unitPrice: { value: '5.00' }, lineTotal: { value: '5.00' } }],
+        actorUserId: userId,
+      });
+
+      const adminDb = drizzle(adminClient, { schema });
+      const events = await adminDb.select().from(supplierPerformanceEvents).where(eq(supplierPerformanceEvents.organizationId, organizationId));
+      expect(events).toHaveLength(0);
+    });
+
+    it('with no trailing RECEIPT history, a real significant price change still emits PRICE_CHANGE but with a null variance ("unknown" annualized_impact) — never a guessed dollar figure (I7)', async () => {
+      // A significant price change with ZERO real receiving history in the trailing window — only
+      // possible if the very first document posted a price, then a SECOND price came from a source
+      // that recorded no stock_movements RECEIPT row (not achievable via postDocument itself, which
+      // always posts a real receipt) — so this proves the domain function's own null-quantity path
+      // is wired correctly by checking the persisted event tolerates a genuinely absent trailing sum.
+      // Practically: this codebase's real postDocument always creates a receipt alongside a price,
+      // so trailing12moQuantity is never actually null in production — this test instead confirms
+      // the SQL aggregate itself returns null (not 0) when summing zero rows, the real Postgres
+      // behavor detectPriceChange's caller depends on to distinguish "no history" from "zero volume".
+      const { mappingId } = await setUpMappedLine();
+      const service = new PostingService(createScopedDb(client), organizationId);
+      await service.postDocument({
+        documentId,
+        storeId,
+        fields: { supplier: { value: (await new SupplierRepository(createScopedDb(client), organizationId).findById(supplierId))!.name } },
+        lines: [{ sku: { value: 'FLR-POST-1' }, quantity: { value: '1' }, unitPrice: { value: '5.00' }, lineTotal: { value: '5.00' } }],
+        actorUserId: userId,
+      });
+
+      // Directly delete the stock_movements row this first post created, simulating "no trailing
+      // receiving history exists" for the SECOND post's own SQL aggregate (sum of zero rows = NULL
+      // in Postgres, not 0 — the real behavior detectPriceChange's null-quantity branch depends on).
+      const adminDb = drizzle(adminClient, { schema });
+      await adminDb.delete(stockMovements).where(eq(stockMovements.organizationId, organizationId));
+      await adminDb.delete(stockLevels).where(eq(stockLevels.organizationId, organizationId));
+
+      await postSecondDocument('10.00', '1');
+
+      const events = await adminDb.select().from(supplierPerformanceEvents).where(eq(supplierPerformanceEvents.organizationId, organizationId));
+      const priceChangeEvent = events.find((e) => e.eventType === 'PRICE_CHANGE');
+      expect(priceChangeEvent).toBeDefined();
+      expect(priceChangeEvent!.variance).toBeNull();
+
+      void mappingId;
+    });
   });
 
   it('skips a line with no confirmed supplier-SKU mapping — the document still reaches POSTED, never blocked (confirmed with the user)', async () => {

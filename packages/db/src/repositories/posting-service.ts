@@ -1,11 +1,12 @@
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, gte, isNull, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { Decimal } from 'decimal.js';
 import * as schema from '../schema/index';
-import { documentLinks, documents, outboxEvents, productVariants, supplierPrices, supplierProducts } from '../schema/index';
+import { documentLinks, documents, outboxEvents, productVariants, supplierPrices, supplierProducts, stockMovements } from '../schema/index';
 import { withTenantContext, type Tx } from '../tenant-context';
-import { generateId } from '@retailos/domain';
+import { generateId, detectPriceChange } from '@retailos/domain';
 import { MovementService } from './movement-service';
+import { SupplierPerformanceEventRepository } from './supplier-performance-event-repository';
 
 type Db = ReturnType<typeof drizzle<typeof schema>>;
 
@@ -202,6 +203,63 @@ export class PostingService {
       sourceDocumentId: documentId,
     });
 
+    // 008-14 (spec 05 §5.3.4): a real price change is only worth surfacing when it crosses the
+    // threshold `detectPriceChange` applies — never on every single post, which is what this code
+    // did before 008-14 (an unconditional `supplier.price_changed` outbox event on every line,
+    // regardless of whether the price actually moved). Only runs when a real prior price existed —
+    // the FIRST price for a supplier product is a baseline being established, not a "change."
+    if (currentPrice) {
+      const trailingSince = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
+      const [receiptTotal] = await tx
+        .select({ total: sql<string | null>`sum(${stockMovements.quantity})` })
+        .from(stockMovements)
+        .where(
+          and(
+            eq(stockMovements.organizationId, this.organizationId),
+            eq(stockMovements.productId, mapping.productId),
+            eq(stockMovements.movementType, 'RECEIPT'),
+            gte(stockMovements.occurredAt, trailingSince)
+          )
+        );
+      const trailing12moQuantity = receiptTotal?.total !== null && receiptTotal?.total !== undefined ? new Decimal(receiptTotal.total) : null;
+
+      const priceChange = detectPriceChange({
+        oldUnitPrice: new Decimal(currentPrice.unitPrice),
+        newUnitPrice: unitPrice,
+        trailing12moQuantity,
+      });
+
+      if (priceChange.isSignificantChange) {
+        await SupplierPerformanceEventRepository.recordInTx(tx, this.organizationId, {
+          organizationId: this.organizationId,
+          supplierId: mapping.supplierId,
+          eventType: 'PRICE_CHANGE',
+          documentId,
+          productId: mapping.productId,
+          expectedValue: new Decimal(currentPrice.unitPrice).toFixed(6),
+          actualValue: unitPrice.toFixed(6),
+          ...(priceChange.annualizedImpact !== 'unknown' ? { variance: priceChange.annualizedImpact.toFixed(6) } : {}),
+          occurredAt: now,
+        });
+
+        await tx.insert(outboxEvents).values({
+          id: generateId(),
+          organizationId: this.organizationId,
+          aggregateType: 'supplier_product',
+          aggregateId: mapping.id,
+          eventType: 'supplier.price_changed',
+          payload: {
+            supplierProductId: mapping.id,
+            oldUnitPrice: currentPrice.unitPrice,
+            newUnitPrice: unitPrice.toFixed(4),
+            percentChange: priceChange.percentChange?.toFixed(6) ?? null,
+            annualizedImpact: priceChange.annualizedImpact !== 'unknown' ? priceChange.annualizedImpact.toFixed(4) : null,
+            documentId,
+          },
+        });
+      }
+    }
+
     // 2. Stock receipt (creates a lot + posts a RECEIPT movement, which recomputes stock_levels'
     // moving-average cost — this system's real "product cost", per stock_levels.avgUnitCost, since
     // no separate products.cost column exists). Quantity/cost both convert from the supplier's pack
@@ -258,24 +316,16 @@ export class PostingService {
       ])
       .onConflictDoNothing({ target: [documentLinks.documentId, documentLinks.entityType, documentLinks.entityId, documentLinks.relationship] });
 
-    await tx.insert(outboxEvents).values([
-      {
-        id: generateId(),
-        organizationId: this.organizationId,
-        aggregateType: 'supplier_product',
-        aggregateId: mapping.id,
-        eventType: 'supplier.price_changed',
-        payload: { supplierProductId: mapping.id, unitPrice: unitPrice.toFixed(4), documentId },
-      },
-      {
-        id: generateId(),
-        organizationId: this.organizationId,
-        aggregateType: 'product',
-        aggregateId: mapping.productId,
-        eventType: 'cost.updated',
-        payload: { productId: mapping.productId, storeId, documentId },
-      },
-    ]);
+    // 008-14: `supplier.price_changed` moved above — now emitted ONLY when detectPriceChange
+    // confirms a real, threshold-crossing change, not unconditionally on every posted line.
+    await tx.insert(outboxEvents).values({
+      id: generateId(),
+      organizationId: this.organizationId,
+      aggregateType: 'product',
+      aggregateId: mapping.productId,
+      eventType: 'cost.updated',
+      payload: { productId: mapping.productId, storeId, documentId },
+    });
 
     return { lineIndex, status: 'POSTED', productId: mapping.productId, supplierProductId: mapping.id, lotId };
   }

@@ -24,6 +24,8 @@ import {
 import { createScopedDb } from '../tenant-repository';
 import { PurchaseOrderRepository } from './purchase-order-repository';
 import { GoodsReceiptRepository, UnknownReceiptCostError } from './goods-receipt-repository';
+import { SupplierPerformanceEventRepository } from './supplier-performance-event-repository';
+import { supplierPerformanceEvents } from '../schema/index';
 import { setUpTwoTenants, type TwoTenantFixture } from '../test-support/tenant-fixture';
 
 const APP_CONNECTION_STRING =
@@ -43,9 +45,15 @@ describe('GoodsReceiptRepository', () => {
   let supplierProductId: string;
   let kgUnitId: string;
 
-  const createSentPurchaseOrder = async (quantityOrderUnits: string, unitPrice: string) => {
+  const createSentPurchaseOrder = async (quantityOrderUnits: string, unitPrice: string, expectedDeliveryDate?: Date) => {
     const poRepo = new PurchaseOrderRepository(createScopedDb(client), organizationId);
-    const created = await poRepo.create({ storeId, supplierId, poNumber: `PO-GR-${generateId()}`, currency: 'USD' });
+    const created = await poRepo.create({
+      storeId,
+      supplierId,
+      poNumber: `PO-GR-${generateId()}`,
+      currency: 'USD',
+      ...(expectedDeliveryDate !== undefined ? { expectedDeliveryDate } : {}),
+    });
     const addLineResult = await poRepo.addLine({
       purchaseOrderId: created.id,
       supplierProductId,
@@ -116,6 +124,7 @@ describe('GoodsReceiptRepository', () => {
     // circular-reference teardown.
     await adminDb.delete(outboxEvents).where(eq(outboxEvents.organizationId, organizationId));
     await adminDb.delete(auditLogs).where(eq(auditLogs.organizationId, organizationId));
+    await adminDb.delete(supplierPerformanceEvents).where(eq(supplierPerformanceEvents.organizationId, organizationId));
     await adminDb.delete(stockMovements).where(eq(stockMovements.organizationId, organizationId));
     await adminDb.delete(stockLevels).where(eq(stockLevels.organizationId, organizationId));
     await adminDb.update(lots).set({ goodsReceiptLineId: null }).where(eq(lots.organizationId, organizationId));
@@ -424,6 +433,136 @@ describe('GoodsReceiptRepository', () => {
 
     const lines = await repo.findLines(result.goodsReceiptId);
     expect(lines).toHaveLength(1);
+  });
+
+  describe('supplier performance event emission (008-13)', () => {
+    it('a receipt matching a PO fully, on time, emits DELIVERY_ON_TIME + FILL_COMPLETE', async () => {
+      const expectedDeliveryDate = new Date(Date.now() + 24 * 60 * 60 * 1000); // tomorrow
+      const { purchaseOrderId, purchaseOrderLineId } = await createSentPurchaseOrder('10', '5.00', expectedDeliveryDate);
+      const repo = new GoodsReceiptRepository(createScopedDb(client), organizationId);
+
+      const receivedAt = new Date(); // before the expected date -> on time
+      await repo.confirmReceipt({
+        storeId,
+        purchaseOrderId,
+        supplierId,
+        receivedAt,
+        lines: [{ purchaseOrderLineId, productId, variantId, receivedQuantityBaseUnits: '10', lineNumber: 1 }],
+      });
+
+      const eventRepo = new SupplierPerformanceEventRepository(createScopedDb(client), organizationId);
+      const events = await eventRepo.findForSupplierSince(supplierId, new Date(Date.now() - 60_000));
+      const types = events.map((e) => e.eventType).sort();
+      expect(types).toEqual(['DELIVERY_ON_TIME', 'FILL_COMPLETE']);
+
+      const fillEvent = events.find((e) => e.eventType === 'FILL_COMPLETE')!;
+      expect(fillEvent.expectedValue).toBe('10.000000');
+      expect(fillEvent.actualValue).toBe('10.000000');
+      expect(fillEvent.productId).toBe(productId);
+      expect(fillEvent.purchaseOrderId).toBe(purchaseOrderId);
+    });
+
+    it('a receipt arriving after the PO expected delivery date emits DELIVERY_LATE', async () => {
+      const expectedDeliveryDate = new Date(Date.now() - 24 * 60 * 60 * 1000); // yesterday
+      const { purchaseOrderId, purchaseOrderLineId } = await createSentPurchaseOrder('5', '2.00', expectedDeliveryDate);
+      const repo = new GoodsReceiptRepository(createScopedDb(client), organizationId);
+
+      await repo.confirmReceipt({
+        storeId,
+        purchaseOrderId,
+        supplierId,
+        receivedAt: new Date(), // today -> after the expected date
+        lines: [{ purchaseOrderLineId, productId, variantId, receivedQuantityBaseUnits: '5', lineNumber: 1 }],
+      });
+
+      const eventRepo = new SupplierPerformanceEventRepository(createScopedDb(client), organizationId);
+      const events = await eventRepo.findForSupplierSince(supplierId, new Date(Date.now() - 60_000));
+      const deliveryEvent = events.find((e) => e.eventType === 'DELIVERY_LATE' || e.eventType === 'DELIVERY_ON_TIME');
+      expect(deliveryEvent?.eventType).toBe('DELIVERY_LATE');
+      expect(Number(deliveryEvent!.variance)).toBeGreaterThan(0); // received after expected -> positive day variance
+    });
+
+    it('a short receipt (less than ordered) emits FILL_SHORT with the real ordered/received figures', async () => {
+      const { purchaseOrderId, purchaseOrderLineId } = await createSentPurchaseOrder('10', '5.00');
+      const repo = new GoodsReceiptRepository(createScopedDb(client), organizationId);
+
+      await repo.confirmReceipt({
+        storeId,
+        purchaseOrderId,
+        supplierId,
+        receivedAt: new Date(),
+        lines: [{ purchaseOrderLineId, productId, variantId, receivedQuantityBaseUnits: '6', lineNumber: 1 }],
+      });
+
+      const eventRepo = new SupplierPerformanceEventRepository(createScopedDb(client), organizationId);
+      const events = await eventRepo.findForSupplierSince(supplierId, new Date(Date.now() - 60_000));
+      const fillEvent = events.find((e) => e.eventType === 'FILL_SHORT');
+      expect(fillEvent).toBeDefined();
+      expect(fillEvent!.expectedValue).toBe('10.000000');
+      expect(fillEvent!.actualValue).toBe('6.000000');
+      expect(fillEvent!.variance).toBe('-4.000000');
+    });
+
+    it('a receipt line carrying a discrepancy code emits QUALITY_REJECT using its own received quantity', async () => {
+      const { purchaseOrderId, purchaseOrderLineId } = await createSentPurchaseOrder('8', '3.00');
+      const repo = new GoodsReceiptRepository(createScopedDb(client), organizationId);
+
+      await repo.confirmReceipt({
+        storeId,
+        purchaseOrderId,
+        supplierId,
+        receivedAt: new Date(),
+        lines: [
+          {
+            purchaseOrderLineId,
+            productId,
+            variantId,
+            receivedQuantityBaseUnits: '8',
+            discrepancyCode: 'DAMAGED',
+            lineNumber: 1,
+          },
+        ],
+      });
+
+      const eventRepo = new SupplierPerformanceEventRepository(createScopedDb(client), organizationId);
+      const events = await eventRepo.findForSupplierSince(supplierId, new Date(Date.now() - 60_000));
+      const rejectEvent = events.find((e) => e.eventType === 'QUALITY_REJECT');
+      expect(rejectEvent).toBeDefined();
+      expect(rejectEvent!.actualValue).toBe('8.000000');
+    });
+
+    it('a walk-in receipt (no purchaseOrderId) emits no delivery-timing or fill events, since there is no PO to compare against', async () => {
+      const repo = new GoodsReceiptRepository(createScopedDb(client), organizationId);
+
+      await repo.confirmReceipt({
+        storeId,
+        supplierId,
+        receivedAt: new Date(),
+        lines: [{ productId, variantId, receivedQuantityBaseUnits: '3', unitCost: '9.00', currency: 'USD', lineNumber: 1 }],
+      });
+
+      const eventRepo = new SupplierPerformanceEventRepository(createScopedDb(client), organizationId);
+      const events = await eventRepo.findForSupplierSince(supplierId, new Date(Date.now() - 60_000));
+      expect(events).toHaveLength(0);
+    });
+
+    it('a PO with no expectedDeliveryDate emits no DELIVERY_ON_TIME/LATE event — never a guessed on-time verdict (I7)', async () => {
+      const { purchaseOrderId, purchaseOrderLineId } = await createSentPurchaseOrder('4', '1.00');
+      const repo = new GoodsReceiptRepository(createScopedDb(client), organizationId);
+
+      await repo.confirmReceipt({
+        storeId,
+        purchaseOrderId,
+        supplierId,
+        receivedAt: new Date(),
+        lines: [{ purchaseOrderLineId, productId, variantId, receivedQuantityBaseUnits: '4', lineNumber: 1 }],
+      });
+
+      const eventRepo = new SupplierPerformanceEventRepository(createScopedDb(client), organizationId);
+      const events = await eventRepo.findForSupplierSince(supplierId, new Date(Date.now() - 60_000));
+      expect(events.some((e) => e.eventType === 'DELIVERY_ON_TIME' || e.eventType === 'DELIVERY_LATE')).toBe(false);
+      expect(events.some((e) => e.eventType === 'FILL_COMPLETE')).toBe(true);
+    });
   });
 
   describe('cross-tenant isolation (I4)', () => {

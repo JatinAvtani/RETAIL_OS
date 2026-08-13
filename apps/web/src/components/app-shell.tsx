@@ -16,6 +16,7 @@ const NAV = [
   { href: '/pos-items', label: 'POS mapping' },
   { href: '/purchase-orders/suggestions', label: 'Reorder suggestions' },
   { href: '/purchase-orders/variance-queue', label: 'Variance queue' },
+  { href: '/purchase-orders/supplier-scorecard', label: 'Supplier scorecard' },
   { href: '/settings', label: 'Settings' },
 ];
 

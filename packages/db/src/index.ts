@@ -38,6 +38,7 @@ export * from './repositories/purchase-order-repository';
 export * from './repositories/goods-receipt-repository';
 export * from './repositories/invoice-match-repository';
 export * from './repositories/organization-repository';
+export * from './repositories/supplier-performance-event-repository';
 export * from './purchasing/reorder-suggestions';
 export * from './tenant-context';
 export * from './reconciliation';

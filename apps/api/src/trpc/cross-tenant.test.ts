@@ -12,6 +12,7 @@ import {
   hashPassword,
   invoiceMatchLines,
   invoiceMatches,
+  supplierPerformanceEvents,
   lots,
   memberships,
   menuItems,
@@ -136,6 +137,11 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
       // goods_receipt_lines — all three must be gone before this SAME loop's own documents/
       // purchase_order_lines/goods_receipt_lines deletes further down, the same recurring
       // FK-teardown-order bug class this shared fixture has hit repeatedly.
+      // 008-13: supplierPerformance.components/.events registry entries + the runMatch/confirmReceipt
+      // calls the invoiceMatches/goodsReceipts entries above already make all write real
+      // supplier_performance_events rows referencing documents/goods_receipts/purchase_orders — must
+      // be gone before every one of those parent-table deletes in this same function.
+      await db.delete(supplierPerformanceEvents).where(eq(supplierPerformanceEvents.organizationId, orgId));
       await db.delete(invoiceMatchLines).where(eq(invoiceMatchLines.organizationId, orgId));
       await db.delete(invoiceMatches).where(eq(invoiceMatches.organizationId, orgId));
       await db.delete(documents).where(eq(documents.organizationId, orgId));

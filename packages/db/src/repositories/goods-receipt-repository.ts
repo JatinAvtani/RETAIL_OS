@@ -15,6 +15,7 @@ import {
 } from '../schema/index';
 import { withTenantContext, type Tx } from '../tenant-context';
 import { MovementService } from './movement-service';
+import { SupplierPerformanceEventRepository } from './supplier-performance-event-repository';
 
 type Db = ReturnType<typeof drizzle<typeof schema>>;
 
@@ -70,11 +71,17 @@ export class UnknownReceiptCostError extends Error {
 
 /**
  * 008-07 (plan.md Phase 3, spec 05 §5.2.3): "on confirm, in one transaction: create lots → post
- * RECEIPT movements → update PO state → emit supplier performance events → outbox." Confirmed with
- * the user: supplier performance events are skipped here — `supplier_performance_events` is 008-13's
- * own table, which doesn't exist yet (the exact same situation `PostingService` (007-11) hit with
- * EPIC-008's tables during EPIC-007 — built only what already-existing tables support). 008-13 wires
- * this flow to emit real events once that table exists; not silently dropped, a real deferred scope.
+ * RECEIPT movements → update PO state → emit supplier performance events → outbox." 008-13 wires the
+ * real supplier-performance-event emission this doc comment always named: `DELIVERY_ON_TIME`/
+ * `DELIVERY_LATE` (once per receipt tied to a PO, comparing `receivedAt` against that PO's
+ * `expectedDeliveryDate`), `FILL_COMPLETE`/`FILL_SHORT` (once per PO-backed line, received vs.
+ * ordered quantity), and `QUALITY_REJECT` (once per line carrying a discrepancy code — confirmed
+ * with the user: this codebase has no distinct "how much was rejected vs. accepted" figure yet, so
+ * the line's own `receivedQuantityBaseUnits` is used as the rejected amount, the honest reading of
+ * the only number that actually exists). A walk-in receipt with no `purchaseOrderId` (008-09) has no
+ * "expected" delivery date or ordered quantity to compare against, so it emits no
+ * delivery-timing/fill events at all — only `QUALITY_REJECT` still applies, since that only needs
+ * the line's own discrepancy code, not a PO.
  *
  * A plain class taking `db`/`organizationId` directly (NOT a `TenantScopedRepository` subclass) —
  * matches `PostingService`'s exact precedent, since every real write here happens inside ONE
@@ -215,6 +222,19 @@ export class GoodsReceiptRepository {
 
     const movementService = new MovementService(tx as unknown as Db, this.organizationId);
 
+    // Fetched once per receipt, not per line — `expectedDeliveryDate` is a PO-header field, and a
+    // walk-in receipt (no `purchaseOrderId`) has none, so DELIVERY_ON_TIME/LATE simply never fires
+    // for that case (no "expected" to compare against exists at all, I7).
+    const expectedDeliveryDate =
+      input.purchaseOrderId !== undefined
+        ? (
+            await tx
+              .select({ expectedDeliveryDate: purchaseOrders.expectedDeliveryDate })
+              .from(purchaseOrders)
+              .where(and(eq(purchaseOrders.organizationId, this.organizationId), eq(purchaseOrders.id, input.purchaseOrderId)))
+          )[0]?.expectedDeliveryDate ?? null
+        : null;
+
     for (const line of input.lines) {
       let unitCost = line.unitCost;
       let currency = line.currency;
@@ -334,7 +354,64 @@ export class GoodsReceiptRepository {
           .update(purchaseOrderLines)
           .set({ receivedQuantityBaseUnits: sql`COALESCE(${purchaseOrderLines.receivedQuantityBaseUnits}, 0) + ${line.receivedQuantityBaseUnits}::numeric(19,6)` })
           .where(and(eq(purchaseOrderLines.organizationId, this.organizationId), eq(purchaseOrderLines.id, line.purchaseOrderLineId)));
+
+        // FILL_COMPLETE/FILL_SHORT: THIS receipt's own line quantity against what THIS PO line
+        // ordered — never the PO line's cumulative received-so-far, since fill rate measures how
+        // complete a single delivery event was, not the PO's overall completion (a later receipt
+        // finishing off a first short delivery is its own, separate fill event).
+        const [orderedLine] = await tx
+          .select({ quantityBaseUnits: purchaseOrderLines.quantityBaseUnits })
+          .from(purchaseOrderLines)
+          .where(and(eq(purchaseOrderLines.organizationId, this.organizationId), eq(purchaseOrderLines.id, line.purchaseOrderLineId)));
+        if (orderedLine) {
+          const ordered = new Decimal(orderedLine.quantityBaseUnits);
+          const received = new Decimal(line.receivedQuantityBaseUnits);
+          await SupplierPerformanceEventRepository.recordInTx(tx, this.organizationId, {
+            organizationId: this.organizationId,
+            supplierId: input.supplierId,
+            eventType: received.greaterThanOrEqualTo(ordered) ? 'FILL_COMPLETE' : 'FILL_SHORT',
+            ...(input.purchaseOrderId !== undefined ? { purchaseOrderId: input.purchaseOrderId } : {}),
+            goodsReceiptId,
+            productId: resolvedProductId,
+            expectedValue: ordered.toFixed(6),
+            actualValue: received.toFixed(6),
+            variance: received.minus(ordered).toFixed(6),
+            occurredAt: input.receivedAt,
+          });
+        }
       }
+
+      // QUALITY_REJECT (confirmed with the user): a discrepancy-coded line's own received quantity
+      // is used as the rejected amount — the only real number this codebase has for "how much of
+      // this delivery was a problem," not a fabricated partial split between accepted/rejected.
+      if (line.discrepancyCode !== undefined) {
+        await SupplierPerformanceEventRepository.recordInTx(tx, this.organizationId, {
+          organizationId: this.organizationId,
+          supplierId: input.supplierId,
+          eventType: 'QUALITY_REJECT',
+          ...(input.purchaseOrderId !== undefined ? { purchaseOrderId: input.purchaseOrderId } : {}),
+          goodsReceiptId,
+          productId: resolvedProductId,
+          actualValue: new Decimal(line.receivedQuantityBaseUnits).toFixed(6),
+          occurredAt: input.receivedAt,
+        });
+      }
+    }
+
+    if (input.purchaseOrderId !== undefined && expectedDeliveryDate !== null) {
+      // DELIVERY_ON_TIME/LATE: once per receipt (not per line) — the delivery either arrived by the
+      // PO's expected date or it didn't, a single fact about this receiving event as a whole.
+      const onTime = input.receivedAt.getTime() <= expectedDeliveryDate.getTime();
+      const varianceDays = (input.receivedAt.getTime() - expectedDeliveryDate.getTime()) / (24 * 60 * 60 * 1000);
+      await SupplierPerformanceEventRepository.recordInTx(tx, this.organizationId, {
+        organizationId: this.organizationId,
+        supplierId: input.supplierId,
+        eventType: onTime ? 'DELIVERY_ON_TIME' : 'DELIVERY_LATE',
+        purchaseOrderId: input.purchaseOrderId,
+        goodsReceiptId,
+        variance: varianceDays.toFixed(6),
+        occurredAt: input.receivedAt,
+      });
     }
 
     await tx.insert(outboxEvents).values({

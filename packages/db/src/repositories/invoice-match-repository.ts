@@ -23,6 +23,7 @@ import {
   supplierProducts,
 } from '../schema/index';
 import { withTenantContext, type Tx } from '../tenant-context';
+import { SupplierPerformanceEventRepository } from './supplier-performance-event-repository';
 
 type Db = ReturnType<typeof drizzle<typeof schema>>;
 
@@ -172,23 +173,61 @@ export class InvoiceMatchRepository {
     const overallSeverity = highestSeverity(lineResults.map((l) => l.varianceSeverity));
 
     const matchId = generateId();
+    const matchedAt = new Date();
+    // supplierId is required on the row (a match must belong to a real supplier); when the
+    // invoice's own supplier name didn't resolve at all, every line is necessarily UNORDERED_ITEM
+    // already (no candidate could be resolved without a supplier), so this only ever happens
+    // together with an already-honest "everything unmatched" result, never a silently-guessed supplier.
+    const resolvedSupplierId = supplierId ?? (await this.requireFallbackSupplierId(tx, input.storeId));
     await tx.insert(invoiceMatches).values({
       id: matchId,
       organizationId: this.organizationId,
       storeId: input.storeId,
       documentId: input.documentId,
-      // supplierId is required on the row (a match must belong to a real supplier); when the
-      // invoice's own supplier name didn't resolve at all, every line is necessarily UNORDERED_ITEM
-      // already (no candidate could be resolved without a supplier), so this only ever happens
-      // together with an already-honest "everything unmatched" result, never a silently-guessed supplier.
-      supplierId: supplierId ?? (await this.requireFallbackSupplierId(tx, input.storeId)),
+      supplierId: resolvedSupplierId,
       purchaseOrderId: resolvedPurchaseOrderId,
       highestSeverity: overallSeverity,
+      matchedAt,
     });
 
     for (const values of lineInsertValues) {
       await tx.insert(invoiceMatchLines).values({ ...values, invoiceMatchId: matchId });
     }
+
+    // PRICE_VARIANCE: one event per REAL matched line whose classification actually found a price
+    // variance — never for UNORDERED_ITEM/INVOICED_NOT_RECEIVED lines, which have no real poUnitPrice
+    // to compare against (classifyLineMatch itself never computes a priceVariance for those cases).
+    for (let lineIndex = 0; lineIndex < lineResults.length; lineIndex++) {
+      const result = lineResults[lineIndex]!;
+      const values = lineInsertValues[lineIndex]!;
+      const poUnitPrice = values.poUnitPrice;
+      const invoiceUnitPrice = values.invoiceUnitPrice;
+      if (result.varianceType === 'PRICE_VARIANCE' && poUnitPrice !== null && poUnitPrice !== undefined && invoiceUnitPrice !== null && invoiceUnitPrice !== undefined) {
+        await SupplierPerformanceEventRepository.recordInTx(tx, this.organizationId, {
+          organizationId: this.organizationId,
+          supplierId: resolvedSupplierId,
+          eventType: 'PRICE_VARIANCE',
+          documentId: input.documentId,
+          ...(values.productId !== null && values.productId !== undefined ? { productId: values.productId } : {}),
+          expectedValue: poUnitPrice,
+          actualValue: invoiceUnitPrice,
+          ...(values.priceVariance !== null && values.priceVariance !== undefined ? { variance: values.priceVariance } : {}),
+          occurredAt: matchedAt,
+        });
+      }
+    }
+
+    // INVOICE_CLEAN/INVOICE_ERROR: one event for the whole invoice (spec 05 §5.3.3's "invoice
+    // accuracy = clean_invoices / total_invoices" is a per-INVOICE rate, not per-line) — clean only
+    // when every real line matched within tolerance (`overallSeverity === 'NONE'`), matching
+    // `findPending`'s own established "highestSeverity is the worst thing on this invoice" reading.
+    await SupplierPerformanceEventRepository.recordInTx(tx, this.organizationId, {
+      organizationId: this.organizationId,
+      supplierId: resolvedSupplierId,
+      eventType: overallSeverity === 'NONE' ? 'INVOICE_CLEAN' : 'INVOICE_ERROR',
+      documentId: input.documentId,
+      occurredAt: matchedAt,
+    });
 
     await tx.insert(outboxEvents).values({
       id: generateId(),

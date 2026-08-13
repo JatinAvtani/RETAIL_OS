@@ -9,6 +9,7 @@ import {
   hashPassword,
   invoiceMatchLines,
   invoiceMatches,
+  supplierPerformanceEvents,
   memberships,
   organizations,
   outboxEvents,
@@ -931,6 +932,9 @@ describe('documents router — approve triggers posting (007-11)', () => {
       // 008-10: `approve` now runs InvoiceMatchRepository.runMatch for INVOICE-type documents —
       // invoice_matches/invoice_match_lines reference documents (and, when a PO was resolved,
       // purchase_order_lines) and must be gone before the documents delete just below.
+      // 008-13: supplier_performance_events references documents too (PRICE_VARIANCE/INVOICE_*
+      // events written by the same runMatch call) — must go before the documents delete as well.
+      await db.delete(supplierPerformanceEvents).where(eq(supplierPerformanceEvents.organizationId, orgId));
       await db.delete(invoiceMatchLines).where(eq(invoiceMatchLines.organizationId, orgId));
       await db.delete(invoiceMatches).where(eq(invoiceMatches.organizationId, orgId));
       await db.delete(documents).where(eq(documents.organizationId, orgId));

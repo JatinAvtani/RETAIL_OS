@@ -260,6 +260,13 @@
       "when": 1788800000000,
       "tag": "0037_invoice_match_resolution",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1788900000000,
+      "tag": "0038_supplier_performance_events",
+      "breakpoints": true
     }
   ]
 }

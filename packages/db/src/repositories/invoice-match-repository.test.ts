@@ -29,6 +29,8 @@ import { PurchaseOrderRepository } from './purchase-order-repository';
 import { GoodsReceiptRepository } from './goods-receipt-repository';
 import { DocumentRepository } from './document-repository';
 import { InvoiceMatchRepository, UnresolvableInvoiceSupplierError } from './invoice-match-repository';
+import { SupplierPerformanceEventRepository } from './supplier-performance-event-repository';
+import { supplierPerformanceEvents } from '../schema/index';
 
 const APP_CONNECTION_STRING =
   process.env.TEST_DATABASE_URL ?? 'postgresql://retailos_app:retailos_app_local_only@localhost:5432/retailos';
@@ -143,6 +145,7 @@ describe('InvoiceMatchRepository', () => {
     const adminDb = drizzle(adminClient, { schema });
     await adminDb.delete(auditLogs).where(eq(auditLogs.organizationId, organizationId));
     await adminDb.delete(outboxEvents).where(eq(outboxEvents.organizationId, organizationId));
+    await adminDb.delete(supplierPerformanceEvents).where(eq(supplierPerformanceEvents.organizationId, organizationId));
     await adminDb.delete(invoiceMatchLines).where(eq(invoiceMatchLines.organizationId, organizationId));
     await adminDb.delete(invoiceMatches).where(eq(invoiceMatches.organizationId, organizationId));
     await adminDb.delete(documents).where(eq(documents.organizationId, organizationId));
@@ -226,6 +229,79 @@ describe('InvoiceMatchRepository', () => {
     expect(lineRows[0]?.priceVariance).toBe('50.0000');
     expect(lineRows[0]?.poUnitPrice).toBe('50.0000');
     expect(lineRows[0]?.invoiceUnitPrice).toBe('100.0000');
+  });
+
+  describe('supplier performance event emission (008-13)', () => {
+    it('a real price variance emits a real PRICE_VARIANCE event AND an INVOICE_ERROR event for the whole invoice', async () => {
+      const { purchaseOrderId, purchaseOrderLineId } = await createSentPurchaseOrder('10', '50.00');
+      await receiveAgainstPo(purchaseOrderId, purchaseOrderLineId, '10');
+      const documentId = await createPostedInvoiceDocument();
+
+      const repo = new InvoiceMatchRepository(createScopedDb(client), organizationId);
+      await repo.runMatch({
+        documentId,
+        storeId,
+        supplierName,
+        lines: [{ sku: { value: 'SUP-SKU-IM-TEST' }, quantity: { value: '10' }, unitPrice: { value: '100.00' } }],
+      });
+
+      const eventRepo = new SupplierPerformanceEventRepository(createScopedDb(client), organizationId);
+      const events = await eventRepo.findForSupplierSince(supplierId, new Date(Date.now() - 60_000));
+      const types = events.map((e) => e.eventType).sort();
+      // FILL_COMPLETE/DELIVERY_* also fire from the receiveAgainstPo() call above this test makes —
+      // this asserts the two NEW event types this test actually cares about are both present.
+      expect(types).toContain('PRICE_VARIANCE');
+      expect(types).toContain('INVOICE_ERROR');
+      expect(types).not.toContain('INVOICE_CLEAN');
+
+      const priceEvent = events.find((e) => e.eventType === 'PRICE_VARIANCE')!;
+      // The event's real column is numeric(19,6) — Postgres pads the 4dp value this repository
+      // writes ('50.0000') to the column's own real scale on storage; the ACTUAL persisted value,
+      // not a hand-guessed one, is what this asserts (memory: re-derive precision from real output).
+      expect(priceEvent.expectedValue).toBe('50.000000');
+      expect(priceEvent.actualValue).toBe('100.000000');
+      expect(priceEvent.variance).toBe('50.000000');
+      expect(priceEvent.documentId).toBe(documentId);
+      expect(priceEvent.productId).toBe(productId);
+    });
+
+    it('a clean match emits INVOICE_CLEAN and no PRICE_VARIANCE event at all', async () => {
+      const { purchaseOrderId, purchaseOrderLineId } = await createSentPurchaseOrder('10', '4.50');
+      await receiveAgainstPo(purchaseOrderId, purchaseOrderLineId, '10');
+      const documentId = await createPostedInvoiceDocument();
+
+      const repo = new InvoiceMatchRepository(createScopedDb(client), organizationId);
+      await repo.runMatch({
+        documentId,
+        storeId,
+        supplierName,
+        lines: [{ sku: { value: 'SUP-SKU-IM-TEST' }, quantity: { value: '10' }, unitPrice: { value: '4.50' } }],
+      });
+
+      const eventRepo = new SupplierPerformanceEventRepository(createScopedDb(client), organizationId);
+      const events = await eventRepo.findForSupplierSince(supplierId, new Date(Date.now() - 60_000));
+      const types = events.map((e) => e.eventType);
+      expect(types).toContain('INVOICE_CLEAN');
+      expect(types).not.toContain('INVOICE_ERROR');
+      expect(types).not.toContain('PRICE_VARIANCE');
+    });
+
+    it('an UNORDERED_ITEM line (no PO/receipt match at all) emits no PRICE_VARIANCE event — there is no real poUnitPrice to compare against', async () => {
+      const documentId = await createPostedInvoiceDocument();
+      const repo = new InvoiceMatchRepository(createScopedDb(client), organizationId);
+      await repo.runMatch({
+        documentId,
+        storeId,
+        supplierName,
+        lines: [{ sku: { value: 'NO-SUCH-SKU' }, quantity: { value: '3' }, unitPrice: { value: '9.00' } }],
+      });
+
+      const eventRepo = new SupplierPerformanceEventRepository(createScopedDb(client), organizationId);
+      const events = await eventRepo.findForSupplierSince(supplierId, new Date(Date.now() - 60_000));
+      expect(events.some((e) => e.eventType === 'PRICE_VARIANCE')).toBe(false);
+      // The whole-invoice INVOICE_ERROR event still fires — an unordered item is a real error, just not a price one.
+      expect(events.some((e) => e.eventType === 'INVOICE_ERROR')).toBe(true);
+    });
   });
 
   it('a widened org-level price tolerance turns a would-be variance into CLEAN — 008-11', async () => {

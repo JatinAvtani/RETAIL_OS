@@ -18,6 +18,7 @@ import {
   stores,
   suppliers,
   supplierProducts,
+  supplierPerformanceEvents,
   units,
   users,
 } from '@retailos/db';
@@ -44,6 +45,10 @@ describe('goodsReceipts — confirmReceipt/get (008-07)', () => {
     for (const orgId of createdOrgIds) {
       await db.delete(outboxEvents).where(eq(outboxEvents.organizationId, orgId));
       await db.delete(auditLogs).where(eq(auditLogs.organizationId, orgId));
+      // 008-13: supplier_performance_events references goods_receipts (and purchase_orders/documents
+      // in other test files) — must be deleted before those parent tables, the same recurring
+      // FK-teardown-order class every new table with provenance FKs to already-existing tables hits.
+      await db.delete(supplierPerformanceEvents).where(eq(supplierPerformanceEvents.organizationId, orgId));
       await db.delete(stockMovements).where(eq(stockMovements.organizationId, orgId));
       await db.delete(stockLevels).where(eq(stockLevels.organizationId, orgId));
       // lots <-> goods_receipt_lines is a genuine mutual FK cycle (this task's own migration) —
@@ -324,6 +329,7 @@ describe('goodsReceipts — requestPhotoUpload/confirmPhotoUpload (008-08)', () 
     for (const orgId of createdOrgIds) {
       await db.delete(outboxEvents).where(eq(outboxEvents.organizationId, orgId));
       await db.delete(auditLogs).where(eq(auditLogs.organizationId, orgId));
+      await db.delete(supplierPerformanceEvents).where(eq(supplierPerformanceEvents.organizationId, orgId));
       await db.delete(stockMovements).where(eq(stockMovements.organizationId, orgId));
       await db.delete(stockLevels).where(eq(stockLevels.organizationId, orgId));
       await db.update(lots).set({ goodsReceiptLineId: null }).where(eq(lots.organizationId, orgId));

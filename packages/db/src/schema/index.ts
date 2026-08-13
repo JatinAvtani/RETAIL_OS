@@ -31,3 +31,4 @@ export * from './document-email-intake';
 export * from './purchase-orders';
 export * from './goods-receipts';
 export * from './invoice-matches';
+export * from './supplier-performance-events';

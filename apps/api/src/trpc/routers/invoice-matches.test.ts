@@ -21,6 +21,7 @@ import {
   stores,
   suppliers,
   supplierProducts,
+  supplierPerformanceEvents,
   units,
   users,
   InvoiceMatchRepository,
@@ -48,6 +49,9 @@ describe('invoiceMatches — get/getByDocument/pending/resolve (008-10, 008-12)'
     for (const orgId of createdOrgIds) {
       await db.delete(auditLogs).where(eq(auditLogs.organizationId, orgId));
       await db.delete(outboxEvents).where(eq(outboxEvents.organizationId, orgId));
+      // 008-13: supplier_performance_events references documents/goods_receipts/purchase_orders —
+      // must be gone before those parent tables are deleted below.
+      await db.delete(supplierPerformanceEvents).where(eq(supplierPerformanceEvents.organizationId, orgId));
       await db.delete(invoiceMatchLines).where(eq(invoiceMatchLines.organizationId, orgId));
       await db.delete(invoiceMatches).where(eq(invoiceMatches.organizationId, orgId));
       await db.delete(documents).where(eq(documents.organizationId, orgId));

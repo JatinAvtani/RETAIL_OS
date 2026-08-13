@@ -1331,6 +1331,35 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     buildInput: (resourceId) => ({ supplierId: resourceId }),
   },
   {
+    // Id-scoped by supplierId — the real risk is tenant B reading tenant A's real supplier
+    // performance figures (fill rate, price variance) via a guessed/observed supplierId.
+    path: 'supplierPerformance.components',
+    type: 'query',
+    seedResource: async (db, organizationId) => {
+      const { supplierId } = await seedStoreSupplierAndSupplierProduct(db, organizationId);
+      return supplierId;
+    },
+    buildInput: (resourceId) => ({ supplierId: resourceId }),
+  },
+  {
+    path: 'supplierPerformance.events',
+    type: 'query',
+    seedResource: async (db, organizationId) => {
+      const { supplierId } = await seedStoreSupplierAndSupplierProduct(db, organizationId);
+      return supplierId;
+    },
+    buildInput: (resourceId) => ({ supplierId: resourceId }),
+  },
+  {
+    path: 'supplierPerformance.trend',
+    type: 'query',
+    seedResource: async (db, organizationId) => {
+      const { supplierId } = await seedStoreSupplierAndSupplierProduct(db, organizationId);
+      return supplierId;
+    },
+    buildInput: (resourceId) => ({ supplierId: resourceId }),
+  },
+  {
     path: 'invoiceMatches.get',
     type: 'query',
     seedResource: async (db, organizationId) => (await seedInvoiceMatch(db, organizationId)).invoiceMatchId,
