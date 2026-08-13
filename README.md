@@ -82,6 +82,28 @@ one-off guesses. Approval posts a real price history entry and a real stock rece
 transaction, and every posted number links back to the source document and forward from it, so any
 figure on the dashboard traces to the invoice it came from.
 
+**Purchasing** — reorder suggestions computed from trimmed-mean daily consumption, safety stock, and
+supplier lead time, each carrying a plain-language explanation and rounded to a real pack size and
+minimum order value. Purchase orders move through a state machine (draft → submitted → approved →
+sent → received), immutable once sent, with approval thresholds enforced per manager. Sending
+generates a real PDF and a mocked supplier email. Receiving supports partial deliveries, discrepancy
+codes, damage photos, and walk-in purchases with no PO at all — all of it posting real lots and stock
+movements through the same ledger the invoice pipeline uses.
+
+**Three-way match** — every posted invoice is automatically reconciled against its purchase order and
+what was actually received. Price and quantity variances outside a configurable tolerance land in a
+review queue, worst severity first; an item invoiced but never received is flagged high priority as a
+possible billing error. A manager resolves a variance with a required note, which is the whole audit
+trail.
+
+**Supplier performance** — delivery timing, fill rate, price variance, and invoice accuracy are
+recorded as events off the receiving and matching flows that already exist, then read back as
+components on a scorecard with drill-through to the source event and a real period-over-period trend
+for each one. A real, threshold-crossing price change is flagged with its annualised dollar impact —
+translating a percentage into a number an owner will actually act on. There is deliberately no single
+composite score: an invented weighted average would be exactly the fabricated-scoring problem this
+project exists to avoid.
+
 ---
 
 ## Architecture
@@ -187,6 +209,7 @@ number is **contribution margin**, and it's labelled as such.
 
 ## Roadmap
 
-Not yet built: purchase orders, goods receipt, and three-way invoice matching against them; supplier
-performance scoring; deeper anomaly detection and trend reporting; and a grounded natural-language
-assistant that routes questions to the metric catalog rather than computing answers itself.
+Not yet built: deeper anomaly detection on top of the metric catalog, and a grounded natural-language
+assistant that routes questions to registered metric functions rather than computing an answer
+itself — the same "no ad-hoc arithmetic" discipline that already governs every dashboard number,
+applied to a conversational interface.
