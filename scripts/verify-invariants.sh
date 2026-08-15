@@ -182,7 +182,10 @@ report HIGH I3 "Mutation of an append-only table" \
 # inventory.ts excluded for the identical reason: `unknownCostLineCount` (dead-stock lines with an
 # unknown average cost) is the same event-count pattern as margin.ts's `unknownCostEventCount`, not
 # a monetary value.
-r=$(search '[A-Za-z_]*([Pp]rice|[Cc]ost|[Aa]mount|[Tt]otal|[Rr]evenue|[Mm]argin|[Qq]uantity|[Qq]ty)[A-Za-z_]*[[:space:]]*:[[:space:]]*number\b' 'apps/api/src/integrations/csv-import\.ts|packages/db/src/repositories/csv-import-repository\.ts|packages/metrics/src/margin/margin\.ts|packages/metrics/src/inventory/inventory\.ts' '*.ts')
+# purchasing.ts excluded for the identical reason: `totalReceiptCount` (computeEmergencyPurchaseRate's
+# denominator) is a plain receipt COUNT, never a monetary value - the regex matches "Total" as a
+# substring regardless of what it's counting, same as csv-import.ts's row counts above.
+r=$(search '[A-Za-z_]*([Pp]rice|[Cc]ost|[Aa]mount|[Tt]otal|[Rr]evenue|[Mm]argin|[Qq]uantity|[Qq]ty)[A-Za-z_]*[[:space:]]*:[[:space:]]*number\b' 'apps/api/src/integrations/csv-import\.ts|packages/db/src/repositories/csv-import-repository\.ts|packages/metrics/src/margin/margin\.ts|packages/metrics/src/inventory/inventory\.ts|packages/metrics/src/purchasing/purchasing\.ts' '*.ts')
 report HIGH I5 "Money or quantity typed as \`number\`" \
   "Float arithmetic on money loses precision silently. Use Money / Quantity<Unit>." "$r"
 

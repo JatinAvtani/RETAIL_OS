@@ -1,4 +1,4 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, gte, isNotNull, lt, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { Decimal } from 'decimal.js';
 import { generateId, applyPurchaseOrderTransition, type PurchaseOrderStatus } from '@retailos/domain';
@@ -488,5 +488,61 @@ export class GoodsReceiptRepository {
     });
 
     return nextStatus;
+  }
+
+  /**
+   * `emergency_purchase_rate`'s real input (spec 12 §F) — every receipt for one store in a period,
+   * with whether it had a real linked PO. `purchaseOrderId IS NULL` is the exact, schema-native
+   * "walk-in/emergency purchase" signal 008-09 already established — no separate flag or inference
+   * needed. `receivedAt` (not `createdAt`) is the period anchor, matching the receipt's own real
+   * business-time column.
+   */
+  async findReceiptPoLinkage(storeId: string, from: Date, to: Date) {
+    return this.db.transaction((tx) =>
+      withTenantContext(tx, this.organizationId, () =>
+        tx
+          .select({ purchaseOrderId: goodsReceipts.purchaseOrderId })
+          .from(goodsReceipts)
+          .where(
+            and(
+              eq(goodsReceipts.organizationId, this.organizationId),
+              eq(goodsReceipts.storeId, storeId),
+              gte(goodsReceipts.receivedAt, from),
+              lt(goodsReceipts.receivedAt, to)
+            )
+          )
+      )
+    );
+  }
+
+  /**
+   * `lead_time_actual`/`lead_time_variance`'s real input (spec 12 §G) — `sentAt`/`receivedAt`
+   * pairs for every receipt against a real PO for one supplier in a period. Only receipts with a
+   * real linked PO whose `sentAt` is set are included (I7 — a walk-in/emergency receipt with no PO
+   * at all has no "lead time" to report; neither does a receipt against a PO that was never
+   * actually sent, an edge case the schema technically allows but which has no real meaning here).
+   */
+  async findSupplierLeadTimes(supplierId: string, from: Date, to: Date) {
+    const rows = await this.db.transaction((tx) =>
+      withTenantContext(tx, this.organizationId, () =>
+        tx
+          .select({ sentAt: purchaseOrders.sentAt, receivedAt: goodsReceipts.receivedAt })
+          .from(goodsReceipts)
+          .innerJoin(purchaseOrders, eq(purchaseOrders.id, goodsReceipts.purchaseOrderId))
+          .where(
+            and(
+              eq(goodsReceipts.organizationId, this.organizationId),
+              eq(purchaseOrders.organizationId, this.organizationId),
+              eq(goodsReceipts.supplierId, supplierId),
+              isNotNull(purchaseOrders.sentAt),
+              gte(goodsReceipts.receivedAt, from),
+              lt(goodsReceipts.receivedAt, to)
+            )
+          )
+      )
+    );
+    return rows
+      .filter((row): row is { sentAt: Date; receivedAt: Date } => row.sentAt !== null)
+      .map((row) => ({ sentAt: row.sentAt, receivedAt: row.receivedAt }));
   }
 }

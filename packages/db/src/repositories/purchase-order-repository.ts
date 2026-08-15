@@ -1,4 +1,4 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, isNotNull, lt, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { generateId } from '@retailos/domain';
 import {
@@ -437,5 +437,107 @@ export class PurchaseOrderRepository extends TenantScopedRepository<typeof purch
 
       return { ok: true, newStatus: transition.nextStatus };
     });
+  }
+
+  /** POs at or past `APPROVED` — the real "someone signed off on this spend" gate, confirmed with the user as the source for `total_spend`/`spend_by_category` (spec 12 §F), since this codebase has no invoice-level approval concept. */
+  private static readonly APPROVED_OR_LATER_STATUSES: PurchaseOrderStatus[] = [
+    'APPROVED',
+    'SENT',
+    'PARTIALLY_RECEIVED',
+    'RECEIVED',
+    'CLOSED',
+  ];
+
+  /**
+   * `total_spend`/`spend_by_category`'s real input — every line of every PO at or past `APPROVED`
+   * for one store in a period, joined to the product's category. `createdAt` (the PO's own, not
+   * the line's) is the period anchor, matching `po_cycle_time`'s own choice of timestamp — a line
+   * belongs to the period its PARENT PO was created in, not when it was later approved/sent.
+   */
+  async findApprovedSpendLines(storeId: string, from: Date, to: Date) {
+    return this.runScoped((db) =>
+      db
+        .select({
+          categoryId: products.categoryId,
+          lineTotal: purchaseOrderLines.lineTotal,
+        })
+        .from(purchaseOrderLines)
+        .innerJoin(purchaseOrders, eq(purchaseOrders.id, purchaseOrderLines.purchaseOrderId))
+        .innerJoin(products, eq(products.id, purchaseOrderLines.productId))
+        .where(
+          and(
+            eq(purchaseOrderLines.organizationId, this.organizationId),
+            eq(purchaseOrders.organizationId, this.organizationId),
+            eq(purchaseOrders.storeId, storeId),
+            inArray(purchaseOrders.status, PurchaseOrderRepository.APPROVED_OR_LATER_STATUSES),
+            gte(purchaseOrders.createdAt, from),
+            lt(purchaseOrders.createdAt, to)
+          )
+        )
+    );
+  }
+
+  /**
+   * `po_cycle_time`'s real input — `createdAt`/`sentAt` pairs for every PO in a store that has
+   * actually been sent within the period. Only POs with a real `sentAt` are returned (I7 — a PO
+   * still sitting in DRAFT/PENDING_APPROVAL has no cycle time to report yet, not a zero one).
+   */
+  async findSentCycleTimes(storeId: string, from: Date, to: Date) {
+    const rows = await this.runScoped((db, scopedWhere) =>
+      db
+        .select({ createdAt: purchaseOrders.createdAt, sentAt: purchaseOrders.sentAt })
+        .from(purchaseOrders)
+        .where(
+          scopedWhere(
+            and(
+              eq(purchaseOrders.storeId, storeId),
+              isNotNull(purchaseOrders.sentAt),
+              gte(purchaseOrders.sentAt, from),
+              lt(purchaseOrders.sentAt, to)
+            )
+          )
+        )
+    );
+    return rows
+      .filter((row): row is { createdAt: Date; sentAt: Date } => row.sentAt !== null)
+      .map((row) => ({ createdAt: row.createdAt, sentAt: row.sentAt }));
+  }
+
+  /**
+   * `order_frequency`/`average_order_value`'s real input — a real count of every PO placed with one
+   * supplier in a period, and the real sum of every one of those POs' own line totals in one
+   * aggregate query. Approved-or-later status is deliberately NOT required here — a supplier's
+   * order frequency/average value reflects every PO placed with them, not just the ones that
+   * cleared approval, since a rejected/cancelled PO still represents real ordering activity worth
+   * counting for these two specific metrics (unlike `total_spend`, which is about REAL committed
+   * spend, not raw ordering activity).
+   */
+  async findSupplierOrderSummary(
+    supplierId: string,
+    from: Date,
+    to: Date
+  ): Promise<{ poCount: number; totalSpend: string | null }> {
+    const rows = await this.runScoped((db) =>
+      db
+        .select({
+          poCount: sql<string>`COUNT(DISTINCT ${purchaseOrders.id})`,
+          totalSpend: sql<string | null>`SUM(${purchaseOrderLines.lineTotal})`,
+        })
+        .from(purchaseOrders)
+        .leftJoin(
+          purchaseOrderLines,
+          and(eq(purchaseOrderLines.purchaseOrderId, purchaseOrders.id), eq(purchaseOrderLines.organizationId, this.organizationId))
+        )
+        .where(
+          and(
+            eq(purchaseOrders.organizationId, this.organizationId),
+            eq(purchaseOrders.supplierId, supplierId),
+            gte(purchaseOrders.createdAt, from),
+            lt(purchaseOrders.createdAt, to)
+          )
+        )
+    );
+    const row = rows[0];
+    return { poCount: row ? Number(row.poCount) : 0, totalSpend: row?.totalSpend ?? null };
   }
 }

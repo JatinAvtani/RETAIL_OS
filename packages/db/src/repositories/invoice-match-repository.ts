@@ -1,4 +1,4 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, gte, isNotNull, lt, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { Decimal } from 'decimal.js';
 import {
@@ -511,6 +511,39 @@ export class InvoiceMatchRepository {
 
         return { ok: true };
       })
+    );
+  }
+
+  /**
+   * `price_variance_total`'s real input (spec 12 §F) — every invoice line matched to one supplier
+   * in a period with both `priceVariance` and `invoiceQuantity` present. `classifyLineMatch`
+   * populates these two fields independently (one gated on whether a PO price was found, the other
+   * on whether the invoice line itself parsed) — see `three-way-match.ts` — so both are checked
+   * explicitly rather than assuming one implies the other. `matchedAt` (the invoice match's own
+   * timestamp) is the period anchor.
+   */
+  async findPriceVarianceLines(supplierId: string, from: Date, to: Date) {
+    return this.db.transaction((tx) =>
+      withTenantContext(tx, this.organizationId, () =>
+        tx
+          .select({
+            priceVariance: invoiceMatchLines.priceVariance,
+            invoiceQuantity: invoiceMatchLines.invoiceQuantity,
+          })
+          .from(invoiceMatchLines)
+          .innerJoin(invoiceMatches, eq(invoiceMatches.id, invoiceMatchLines.invoiceMatchId))
+          .where(
+            and(
+              eq(invoiceMatchLines.organizationId, this.organizationId),
+              eq(invoiceMatches.organizationId, this.organizationId),
+              eq(invoiceMatches.supplierId, supplierId),
+              isNotNull(invoiceMatchLines.priceVariance),
+              isNotNull(invoiceMatchLines.invoiceQuantity),
+              gte(invoiceMatches.matchedAt, from),
+              lt(invoiceMatches.matchedAt, to)
+            )
+          )
+      )
     );
   }
 }
