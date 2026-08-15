@@ -1,7 +1,7 @@
 import { and, eq, gte, isNotNull, lt, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import * as schema from '../schema/index';
-import { salesTransactionLines, salesTransactions, stockMovements } from '../schema/index';
+import { posItems, salesTransactionLines, salesTransactions, stockMovements } from '../schema/index';
 import { TenantScopedRepository } from '../tenant-repository';
 
 /**
@@ -31,6 +31,7 @@ export class DashboardRepository extends TenantScopedRepository<typeof salesTran
           quantity: salesTransactionLines.quantity,
           posItemId: salesTransactionLines.posItemId,
           currency: salesTransactions.currency,
+          occurredAt: salesTransactions.occurredAt,
         })
         .from(salesTransactionLines)
         .innerJoin(salesTransactions, eq(salesTransactionLines.transactionId, salesTransactions.id))
@@ -151,6 +152,40 @@ export class DashboardRepository extends TenantScopedRepository<typeof salesTran
     return rows.map((row) => ({ menuItemId: row.menu_item_id, quantitySold: row.quantity_sold }));
   }
 
+  /**
+   * Per-menu-item quantity sold AND real quantity-weighted average realized unit price, over
+   * completed, mapped sales lines in the period — the input `margin_attribution`'s `price_effect`
+   * term needs. Deliberately the ACTUAL transacted price (`Σ line_total / Σ quantity`), never
+   * `menu_items.price` (today's list price, with no historical version) — a customer's real paid
+   * price differs from list price through per-line discounts, and `menu_items` has no effective-
+   * dated history to reconstruct what the list price even was at an earlier period. Only MAPPED
+   * items are returned, matching `findSoldMappedItems`'s own completeness convention.
+   */
+  async findSoldMappedItemLines(storeId: string, from: Date, to: Date) {
+    const rows = await this.runScoped((db) =>
+      db.execute<{ menu_item_id: string; quantity_sold: string; revenue: string }>(sql`
+        SELECT pi.menu_item_id, SUM(stl.quantity) AS quantity_sold, SUM(stl.line_total) AS revenue
+        FROM sales_transaction_lines stl
+        JOIN sales_transactions st ON st.id = stl.transaction_id
+        JOIN pos_items pi ON pi.id = stl.pos_item_id
+        WHERE stl.organization_id = ${this.organizationId}
+          AND st.organization_id = ${this.organizationId}
+          AND st.store_id = ${storeId}
+          AND st.status = 'COMPLETED'
+          AND st.occurred_at >= ${from.toISOString()}::timestamptz
+          AND st.occurred_at < ${to.toISOString()}::timestamptz
+          AND pi.mapping_status = 'MAPPED'
+          AND pi.menu_item_id IS NOT NULL
+        GROUP BY pi.menu_item_id
+      `)
+    );
+    return rows.map((row) => ({
+      menuItemId: row.menu_item_id,
+      quantitySold: row.quantity_sold,
+      revenue: row.revenue,
+    }));
+  }
+
   /** How many sold lines in the period came from a POS item nobody has mapped yet — the honesty signal on the dashboard. */
   async countUnmappedSoldLines(storeId: string, from: Date, to: Date): Promise<number> {
     const rows = await this.runScoped((db) =>
@@ -169,5 +204,71 @@ export class DashboardRepository extends TenantScopedRepository<typeof salesTran
       `)
     );
     return Number(rows[0]?.count ?? 0);
+  }
+
+  /**
+   * Transaction HEADERS (not lines) for every status in the period — `gross_revenue`/
+   * `discount_rate`/`refund_rate` all need `subtotal`/`discount`/`total`/`status` at the
+   * transaction level, not summed line totals, since `sales_transactions`' own columns are the
+   * vendor's authoritative figures (see this table's own header comment: recomputing them from
+   * lines risks disagreeing with the vendor's receipt by a cent). Unlike `findSalesLines`, this
+   * does NOT filter to `COMPLETED` only — `refund_rate` specifically needs `REFUNDED` rows counted
+   * against the period's gross revenue, and `discount_rate`/`gross_revenue` are conventionally
+   * computed over completed sales only, which the metric's own compute step decides, not this
+   * fetch.
+   */
+  async findTransactions(storeId: string, from: Date, to: Date) {
+    return this.runScoped((db) =>
+      db
+        .select({
+          occurredAt: salesTransactions.occurredAt,
+          subtotal: salesTransactions.subtotal,
+          discount: salesTransactions.discount,
+          tax: salesTransactions.tax,
+          total: salesTransactions.total,
+          currency: salesTransactions.currency,
+          status: salesTransactions.status,
+        })
+        .from(salesTransactions)
+        .where(
+          and(
+            eq(salesTransactions.organizationId, this.organizationId),
+            eq(salesTransactions.storeId, storeId),
+            gte(salesTransactions.occurredAt, from),
+            lt(salesTransactions.occurredAt, to)
+          )
+        )
+    );
+  }
+
+  /**
+   * Sales lines for completed transactions, joined to the POS item's own name/category — the input
+   * `sales_mix_percentage` needs to group revenue by item. Returns `itemId: null` for a line with
+   * no `posItemId` at all (rare, but the schema allows it) rather than dropping the row, so total
+   * mix-grouped revenue still reconciles against `net_revenue` for the same period.
+   */
+  async findSalesLinesWithItem(storeId: string, from: Date, to: Date) {
+    return this.runScoped((db) =>
+      db
+        .select({
+          lineTotal: salesTransactionLines.lineTotal,
+          itemId: salesTransactionLines.posItemId,
+          itemName: posItems.name,
+          currency: salesTransactions.currency,
+        })
+        .from(salesTransactionLines)
+        .innerJoin(salesTransactions, eq(salesTransactionLines.transactionId, salesTransactions.id))
+        .leftJoin(posItems, eq(salesTransactionLines.posItemId, posItems.id))
+        .where(
+          and(
+            eq(salesTransactionLines.organizationId, this.organizationId),
+            eq(salesTransactions.organizationId, this.organizationId),
+            eq(salesTransactions.storeId, storeId),
+            eq(salesTransactions.status, 'COMPLETED'),
+            gte(salesTransactions.occurredAt, from),
+            lt(salesTransactions.occurredAt, to)
+          )
+        )
+    );
   }
 }

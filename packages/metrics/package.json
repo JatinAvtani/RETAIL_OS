@@ -11,12 +11,16 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@retailos/authz": "workspace:*",
     "@retailos/db": "workspace:*",
     "@retailos/domain": "workspace:*",
-    "decimal.js": "^10.6.0"
+    "decimal.js": "^10.6.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
+    "drizzle-orm": "^0.36.4",
     "fast-check": "^3.23.2",
+    "postgres": "^3.4.5",
     "typescript": "^5.7.0",
     "vitest": "^2.1.8"
   }

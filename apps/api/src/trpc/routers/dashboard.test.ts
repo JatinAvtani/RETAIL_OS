@@ -114,8 +114,11 @@ describe('dashboard.summary', () => {
   const issueSession = async (organizationId: string): Promise<string> => {
     const userId = generateId();
     createdUserIds.push(userId);
+    // dashboard.summary now resolves every figure through the metric catalog (009-02), which
+    // enforces each metric's requiredPermission ('financial:read' for every margin metric) before
+    // executing — a real OWNER session carries this via ROLE_PERMISSIONS, so the fixture must too.
     const { token } = await sessionStore.create(
-      { userId, organizationId, storeIds: 'ALL', role: 'OWNER', permissions: [] },
+      { userId, organizationId, storeIds: 'ALL', role: 'OWNER', permissions: ['financial:read'] },
       '127.0.0.1',
       'test-agent'
     );

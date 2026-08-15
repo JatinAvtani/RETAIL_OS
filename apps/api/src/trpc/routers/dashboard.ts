@@ -1,25 +1,13 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import Decimal from 'decimal.js';
+import { DashboardRepository, MenuItemRepository, RecipeRepository, StoreRepository } from '@retailos/db';
+import { canAccessStore, type AuthContext, type Permission } from '@retailos/authz';
+import { money } from '@retailos/domain';
 import {
-  DashboardRepository,
-  MenuItemRepository,
-  StoreRepository,
-  RecipeRepository,
-} from '@retailos/db';
-import { canAccessStore } from '@retailos/authz';
-import { money, type Money } from '@retailos/domain';
-import {
-  computeCogsActual,
-  computeCogsTheoretical,
-  computeContributionMargin,
-  computeContributionMarginPercentage,
-  computeCostVariance,
-  computeFoodCostPercentage,
-  computeNetRevenue,
   computeWasteBreakdown,
-  type ConsumptionLine,
-  type SoldItemLine,
+  executeMetric,
+  type MarginMetricContext,
   type WasteLine,
 } from '@retailos/metrics';
 import { protectedProcedure, router } from '../trpc';
@@ -31,20 +19,22 @@ const summaryInput = z.object({
   days: z.number().int().min(1).max(365).default(30),
 });
 
-/** Serializes a Money (or 'unknown') for the wire. `Decimal` has no custom toJSON, so the amount is sent as an explicit string rather than relying on incidental serialization. */
-const serializeMoney = (value: Money | 'unknown') =>
-  value === 'unknown' ? null : { amount: value.amount.toFixed(4), currency: value.currency };
+const numberOrNull = (value: string | 'unknown'): number | null =>
+  value === 'unknown' ? null : Number(value);
+
+const moneyOrNull = (value: string | 'unknown', currency: string) =>
+  value === 'unknown' ? null : { amount: value, currency };
 
 /**
- * The owner dashboard's read surface. Every figure it returns comes from a registered metric
- * function in `@retailos/metrics` — this router fetches rows, resolves recipe costs, and passes
- * them in. It performs no arithmetic on a business number itself, which is what keeps the
- * dashboard and any future consumer (an API, an assistant) mathematically identical by
- * construction rather than by discipline.
+ * The owner dashboard's read surface. Every figure it returns is resolved through
+ * `executeMetric` — the catalog registered in `packages/metrics/src/catalog` (009-02) — rather
+ * than computed inline. This is what makes "dashboard and AI produce identical values" (spec 12's
+ * own acceptance criterion) true by construction: both call the same registered function, not two
+ * independently-written code paths that happen to agree today.
  *
- * Every value that can genuinely be unknown is serialized as `null` with an accompanying reason,
- * never as a zero. A dashboard that renders $0.00 for "we could not determine this" is the exact
- * failure mode the costing invariants exist to prevent.
+ * `resolveRecipeUnitCost` lives in `apps/api` (it throws `TRPCError`), so it's injected onto
+ * `MarginMetricContext` here rather than imported into `packages/metrics` — see
+ * `catalog-entries.ts`'s own header for why crossing that boundary the other way would be wrong.
  */
 export const dashboardRouter = router({
   summary: protectedProcedure.input(summaryInput).query(async ({ ctx, input }) => {
@@ -58,88 +48,74 @@ export const dashboardRouter = router({
     const from = new Date(to.getTime() - input.days * 24 * 60 * 60 * 1000);
     const currency = 'USD' as const;
 
+    const auth: AuthContext = {
+      userId: ctx.session.userId,
+      organizationId: ctx.session.organizationId,
+      storeIds: ctx.session.storeIds,
+      role: ctx.session.role,
+      permissions: new Set(ctx.session.permissions as Permission[]),
+    };
+    const recipeRepository = new RecipeRepository(ctx.db, ctx.session.organizationId);
+    const menuItemRepository = new MenuItemRepository(ctx.db, ctx.session.organizationId);
+
+    const metricCtx: MarginMetricContext = {
+      db: ctx.db,
+      organizationId: ctx.session.organizationId,
+      storeIds: ctx.session.storeIds,
+      resolveRecipeUnitCost: async (_ctx, menuItemId, resolveCurrency) => {
+        const menuItem = await menuItemRepository.findById(menuItemId);
+        if (!menuItem) return 'unknown';
+        // Per-UNIT cost, not per-batch — see resolveRecipeUnitCost for why the yield division
+        // matters and how easily its absence hides.
+        return resolveRecipeUnitCost(
+          ctx.db,
+          ctx.session.organizationId,
+          recipeRepository,
+          menuItem.recipeGroupId,
+          resolveCurrency
+        );
+      },
+    };
+
+    const metricParams = { storeId: input.storeId, from, to };
     const dashboard = new DashboardRepository(ctx.db, ctx.session.organizationId);
-    const [salesLines, transactionCount, consumption, waste, soldMapped, unmappedSoldLines] =
-      await Promise.all([
-        dashboard.findSalesLines(input.storeId, from, to),
-        dashboard.countTransactions(input.storeId, from, to),
-        dashboard.findConsumption(input.storeId, from, to),
-        dashboard.findWaste(input.storeId, from, to),
-        dashboard.findSoldMappedItems(input.storeId, from, to),
-        dashboard.countUnmappedSoldLines(input.storeId, from, to),
-      ]);
 
-    /* -------------------------------------------------- revenue */
-
-    const netRevenue = computeNetRevenue(
-      salesLines.map((line) => money(line.lineTotal, currency)),
-      currency
-    );
+    const [
+      netRevenue,
+      transactionCount,
+      cogsActual,
+      cogsTheoretical,
+      costVariance,
+      contributionMargin,
+      foodCostPercentage,
+      contributionMarginPercentage,
+      salesLines,
+      waste,
+      consumption,
+      unmappedSoldLines,
+    ] = await Promise.all([
+      executeMetric('net_revenue', metricParams, auth, metricCtx),
+      dashboard.countTransactions(input.storeId, from, to),
+      executeMetric('cogs_actual', metricParams, auth, metricCtx),
+      executeMetric('cogs_theoretical', metricParams, auth, metricCtx),
+      executeMetric('cost_variance', metricParams, auth, metricCtx),
+      executeMetric('contribution_margin', metricParams, auth, metricCtx),
+      executeMetric('food_cost_percentage', metricParams, auth, metricCtx),
+      executeMetric('contribution_margin_percentage', metricParams, auth, metricCtx),
+      dashboard.findSalesLines(input.storeId, from, to),
+      dashboard.findWaste(input.storeId, from, to),
+      dashboard.findConsumption(input.storeId, from, to),
+      dashboard.countUnmappedSoldLines(input.storeId, from, to),
+    ]);
 
     const unitsSold = salesLines
       .reduce((sum, line) => sum.plus(new Decimal(line.quantity)), new Decimal(0))
       .toFixed(6);
+    const unknownCostConsumptionEvents = consumption.filter((row) => row.unitCost === null).length;
 
-    /* -------------------------------------------------- actual COGS (from real lot costs) */
-
-    const consumptionLines: ConsumptionLine[] = consumption.map((row) => {
-      const quantity = new Decimal(row.quantity).abs();
-      return {
-        productId: row.productId,
-        quantity: quantity.toFixed(6),
-        // A null unit cost on the ledger row is a genuine unknown and is passed through as one —
-        // never filtered out and never defaulted, either of which would understate COGS.
-        cost:
-          row.unitCost === null
-            ? ('unknown' as const)
-            : money(new Decimal(row.unitCost).times(quantity), currency),
-      };
-    });
-    const cogsActual = computeCogsActual(consumptionLines, currency);
-
-    /* -------------------------------------------------- theoretical COGS (from recipes) */
-
-    const menuItemRepository = new MenuItemRepository(ctx.db, ctx.session.organizationId);
-    const recipeRepository = new RecipeRepository(ctx.db, ctx.session.organizationId);
-
-    const soldItemLines: SoldItemLine[] = [];
-    for (const sold of soldMapped) {
-      const menuItem = await menuItemRepository.findById(sold.menuItemId);
-      if (!menuItem) {
-        soldItemLines.push({
-          menuItemId: sold.menuItemId,
-          quantitySold: sold.quantitySold,
-          unitRecipeCost: 'unknown',
-        });
-        continue;
-      }
-      // Per-UNIT cost, not per-batch — see resolveRecipeUnitCost for why the yield division
-      // matters and how easily its absence hides.
-      const unitRecipeCost = await resolveRecipeUnitCost(
-        ctx.db,
-        ctx.session.organizationId,
-        recipeRepository,
-        menuItem.recipeGroupId,
-        currency
-      );
-      soldItemLines.push({
-        menuItemId: sold.menuItemId,
-        quantitySold: sold.quantitySold,
-        unitRecipeCost,
-      });
-    }
-    const cogsTheoretical = computeCogsTheoretical(soldItemLines, currency);
-
-    /* -------------------------------------------------- derived metrics */
-
-    const costVariance = computeCostVariance(cogsActual, cogsTheoretical);
-    const contributionMargin = computeContributionMargin(netRevenue, cogsActual);
-    const foodCostPercentage = computeFoodCostPercentage(cogsActual, netRevenue);
-    const contributionMarginPercentage = computeContributionMarginPercentage(
-      contributionMargin,
-      netRevenue
-    );
-
+    // waste_value (the catalog metric) returns only a total; the per-reason breakdown isn't a
+    // registered metric of its own yet, so it's computed inline via the same pure function the
+    // catalog entry itself calls — never a second, independently-written aggregation.
     const wasteLines: WasteLine[] = waste.map((row) => {
       const quantity = new Decimal(row.quantity).abs();
       return {
@@ -155,25 +131,34 @@ export const dashboardRouter = router({
     return {
       period: { from: from.toISOString(), to: to.toISOString(), days: input.days },
       currency,
-      netRevenue: serializeMoney(netRevenue),
+      netRevenue: moneyOrNull(netRevenue.value, currency),
       transactionCount,
       unitsSold,
       averageTransactionValue:
-        transactionCount > 0
-          ? serializeMoney(money(netRevenue.amount.dividedBy(transactionCount), currency))
+        transactionCount > 0 && netRevenue.value !== 'unknown'
+          ? moneyOrNull(
+              new Decimal(netRevenue.value).dividedBy(transactionCount).toFixed(4),
+              currency
+            )
           : null,
-      cogsActual: serializeMoney(cogsActual),
-      cogsTheoretical: serializeMoney(cogsTheoretical),
+      cogsActual: moneyOrNull(cogsActual.value, currency),
+      cogsTheoretical: moneyOrNull(cogsTheoretical.value, currency),
       costVariance: {
-        value: serializeMoney(costVariance.variance),
-        direction: costVariance.direction,
+        value: moneyOrNull(costVariance.value, currency),
+        direction:
+          costVariance.value === 'unknown'
+            ? 'unknown'
+            : new Decimal(costVariance.value).isPositive() && !new Decimal(costVariance.value).isZero()
+              ? 'over'
+              : new Decimal(costVariance.value).isNegative()
+                ? 'under'
+                : 'exact',
       },
-      contributionMargin: serializeMoney(contributionMargin),
-      contributionMarginPercentage:
-        contributionMarginPercentage === 'unknown' ? null : contributionMarginPercentage,
-      foodCostPercentage: foodCostPercentage === 'unknown' ? null : foodCostPercentage,
+      contributionMargin: moneyOrNull(contributionMargin.value, currency),
+      contributionMarginPercentage: numberOrNull(contributionMarginPercentage.value),
+      foodCostPercentage: numberOrNull(foodCostPercentage.value),
       waste: {
-        total: serializeMoney(wasteBreakdown.total),
+        total: moneyOrNull(wasteBreakdown.total === 'unknown' ? 'unknown' : wasteBreakdown.total.amount.toFixed(4), currency),
         byReason: wasteBreakdown.byReason.map((entry) => ({
           reasonCode: entry.reasonCode,
           value: entry.value.amount.toFixed(4),
@@ -187,7 +172,7 @@ export const dashboardRouter = router({
        */
       completeness: {
         unmappedSoldLines,
-        unknownCostConsumptionEvents: consumptionLines.filter((l) => l.cost === 'unknown').length,
+        unknownCostConsumptionEvents,
       },
     };
   }),

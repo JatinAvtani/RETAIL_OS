@@ -1,0 +1,285 @@
+import { z } from 'zod';
+import Decimal from 'decimal.js';
+import { money, type CurrencyCode, type Money } from '@retailos/domain';
+import { DashboardRepository, MenuItemRepository } from '@retailos/db';
+import { defineMetric, type MetricResult } from '../catalog/index.js';
+import { computeContributionMarginPercentage, computeCogsActual, computeContributionMargin, computeNetRevenue } from './margin.js';
+import { computeMarginAttribution, computeMarginPerItem, computeTotalContribution, type AttributionItemPair } from './attribution.js';
+import { requireMarginContext, type MarginMetricContext } from './catalog-entries.js';
+
+/**
+ * The remaining spec 12 §C metrics — `margin_per_item`, `total_contribution`, `margin_trend`,
+ * `margin_attribution` (§12.3, the "why" engine). `contribution_margin`/`contribution_margin_pct`
+ * were already registered in 009-02's `catalog-entries.ts`; `menu_engineering_class` is explicitly
+ * V2 in the spec and is not built here.
+ *
+ * All four reuse `MarginMetricContext`'s injected `resolveRecipeUnitCost` — the same collaborator
+ * `cogs_theoretical` already depends on — since every metric here needs a menu item's per-unit
+ * recipe cost.
+ */
+
+const CURRENCY: CurrencyCode = 'USD';
+
+const singleItemParams = z.object({
+  storeId: z.string().uuid(),
+  menuItemId: z.string().uuid(),
+  from: z.coerce.date(),
+  to: z.coerce.date(),
+});
+type SingleItemParams = z.infer<typeof singleItemParams>;
+
+/**
+ * `resolveRecipeUnitCost` takes a `recipeGroupId`, not a `menuItemId` — a menu item is a distinct
+ * entity from the recipe it links to (spec 07 §7.3), so every metric here resolves the menu item's
+ * `recipeGroupId` first. A menu item that no longer exists (or was never linked to a real recipe)
+ * yields `'unknown'` here, never a thrown error that would blank the whole metric.
+ */
+const resolveMenuItemUnitCost = async (
+  ctx: MarginMetricContext,
+  menuItemId: string
+): Promise<Money | 'unknown'> => {
+  const menuItemRepository = new MenuItemRepository(ctx.db, ctx.organizationId);
+  const menuItem = await menuItemRepository.findById(menuItemId);
+  if (!menuItem) return 'unknown';
+  return ctx.resolveRecipeUnitCost(ctx, menuItem.recipeGroupId, CURRENCY);
+};
+
+const resolveItemFigures = async (
+  ctx: MarginMetricContext,
+  storeId: string,
+  menuItemId: string,
+  from: Date,
+  to: Date
+): Promise<{ avgUnitPrice: Money; unitCost: Money | 'unknown'; quantitySold: string } | null> => {
+  const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
+  const lines = await dashboard.findSoldMappedItemLines(storeId, from, to);
+  const line = lines.find((l) => l.menuItemId === menuItemId);
+  if (!line || new Decimal(line.quantitySold).isZero()) return null;
+
+  const quantity = new Decimal(line.quantitySold);
+  const avgUnitPrice = money(new Decimal(line.revenue).dividedBy(quantity), CURRENCY);
+  const unitCost = await resolveMenuItemUnitCost(ctx, menuItemId);
+  return { avgUnitPrice, unitCost, quantitySold: line.quantitySold };
+};
+
+export const marginPerItemMetric = defineMetric<SingleItemParams>({
+  id: 'margin_per_item',
+  description: 'Per-unit selling price minus unit cost for one menu item — the menu-engineering input.',
+  parameters: singleItemParams,
+  unit: 'CURRENCY',
+  requiredPermission: 'financial:read',
+  sources: ['sales_transaction_lines', 'pos_items', 'recipes'],
+  async execute(params, rawCtx): Promise<MetricResult> {
+    const ctx = requireMarginContext(rawCtx, 'margin_per_item');
+    const figures = await resolveItemFigures(ctx, params.storeId, params.menuItemId, params.from, params.to);
+    const now = new Date();
+    if (!figures) {
+      return {
+        metricId: 'margin_per_item',
+        value: 'unknown',
+        unit: 'CURRENCY',
+        period: { from: params.from, to: params.to },
+        computedAt: now,
+        freshness: now,
+        provenance: [{ table: 'sales_transaction_lines', rowCount: 0 }],
+        unknownReason: 'This menu item had no completed, mapped sales in the period.',
+      };
+    }
+    const marginPerItem = computeMarginPerItem(figures.avgUnitPrice, figures.unitCost);
+    return {
+      metricId: 'margin_per_item',
+      value: marginPerItem === 'unknown' ? 'unknown' : marginPerItem.amount.toFixed(4),
+      unit: 'CURRENCY',
+      period: { from: params.from, to: params.to },
+      computedAt: now,
+      freshness: now,
+      provenance: [{ table: 'sales_transaction_lines', rowCount: 1 }],
+      ...(marginPerItem === 'unknown' ? { unknownReason: 'The linked recipe has no fully-resolvable unit cost.' } : {}),
+    };
+  },
+});
+
+export const totalContributionMetric = defineMetric<SingleItemParams>({
+  id: 'total_contribution',
+  description: 'Margin per item times units sold for one menu item — ranks items by real dollar impact, not just margin rate.',
+  parameters: singleItemParams,
+  unit: 'CURRENCY',
+  requiredPermission: 'financial:read',
+  sources: ['sales_transaction_lines', 'pos_items', 'recipes'],
+  async execute(params, rawCtx): Promise<MetricResult> {
+    const ctx = requireMarginContext(rawCtx, 'total_contribution');
+    const figures = await resolveItemFigures(ctx, params.storeId, params.menuItemId, params.from, params.to);
+    const now = new Date();
+    if (!figures) {
+      return {
+        metricId: 'total_contribution',
+        value: 'unknown',
+        unit: 'CURRENCY',
+        period: { from: params.from, to: params.to },
+        computedAt: now,
+        freshness: now,
+        provenance: [{ table: 'sales_transaction_lines', rowCount: 0 }],
+        unknownReason: 'This menu item had no completed, mapped sales in the period.',
+      };
+    }
+    const marginPerItem = computeMarginPerItem(figures.avgUnitPrice, figures.unitCost);
+    const totalContribution = computeTotalContribution(marginPerItem, figures.quantitySold);
+    return {
+      metricId: 'total_contribution',
+      value: totalContribution === 'unknown' ? 'unknown' : totalContribution.amount.toFixed(4),
+      unit: 'CURRENCY',
+      period: { from: params.from, to: params.to },
+      computedAt: now,
+      freshness: now,
+      provenance: [{ table: 'sales_transaction_lines', rowCount: 1 }],
+      ...(totalContribution === 'unknown' ? { unknownReason: 'The linked recipe has no fully-resolvable unit cost.' } : {}),
+    };
+  },
+});
+
+const marginTrendParams = z.object({
+  storeId: z.string().uuid(),
+  /** Each period's own [from, to) boundary — the caller decides the window shape (daily/weekly/etc). */
+  periods: z.array(z.object({ label: z.string(), from: z.coerce.date(), to: z.coerce.date() })).min(1),
+});
+type MarginTrendParams = z.infer<typeof marginTrendParams>;
+
+export type MarginTrendMetricResult = MetricResult & {
+  points: Array<{ periodLabel: string; contributionMarginPercentage: string | 'unknown' }>;
+};
+
+export const marginTrendMetric = defineMetric<MarginTrendParams>({
+  id: 'margin_trend',
+  description: 'Contribution margin percentage over a rolling series of periods.',
+  parameters: marginTrendParams,
+  unit: 'PERCENTAGE',
+  requiredPermission: 'financial:read',
+  sources: ['sales_transaction_lines', 'stock_movements', 'recipes'],
+  async execute(params, rawCtx): Promise<MarginTrendMetricResult> {
+    const ctx = requireMarginContext(rawCtx, 'margin_trend');
+    const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
+
+    const points = await Promise.all(
+      params.periods.map(async (period) => {
+        const [salesLines, consumption] = await Promise.all([
+          dashboard.findSalesLines(params.storeId, period.from, period.to),
+          dashboard.findConsumption(params.storeId, period.from, period.to),
+        ]);
+        const netRevenue = computeNetRevenue(
+          salesLines.map((line) => money(line.lineTotal, CURRENCY)),
+          CURRENCY
+        );
+        const cogsActual = computeCogsActual(
+          consumption.map((row) => ({
+            productId: row.productId,
+            quantity: new Decimal(row.quantity).abs().toFixed(6),
+            cost:
+              row.unitCost === null
+                ? ('unknown' as const)
+                : money(new Decimal(row.unitCost).times(new Decimal(row.quantity).abs()), CURRENCY),
+          })),
+          CURRENCY
+        );
+        const contributionMargin = computeContributionMargin(netRevenue, cogsActual);
+        const pct = computeContributionMarginPercentage(contributionMargin, netRevenue);
+        return {
+          periodLabel: period.label,
+          contributionMarginPercentage: pct === 'unknown' ? ('unknown' as const) : pct.toFixed(2),
+        };
+      })
+    );
+
+    const now = new Date();
+    const lastKnown = [...points].reverse().find((p) => p.contributionMarginPercentage !== 'unknown');
+    return {
+      metricId: 'margin_trend',
+      value: lastKnown ? lastKnown.contributionMarginPercentage : 'unknown',
+      unit: 'PERCENTAGE',
+      period: { from: params.periods[0]!.from, to: params.periods[params.periods.length - 1]!.to },
+      computedAt: now,
+      freshness: now,
+      provenance: [{ table: 'sales_transaction_lines', rowCount: points.length }],
+      points,
+      ...(!lastKnown ? { unknownReason: 'No period in the requested series has a computable contribution margin.' } : {}),
+    };
+  },
+});
+
+const marginAttributionParams = z.object({
+  storeId: z.string().uuid(),
+  basePeriod: z.object({ from: z.coerce.date(), to: z.coerce.date() }),
+  comparisonPeriod: z.object({ from: z.coerce.date(), to: z.coerce.date() }),
+});
+type MarginAttributionParams = z.infer<typeof marginAttributionParams>;
+
+export type MarginAttributionMetricResult = MetricResult & {
+  priceEffect: string | 'unknown';
+  costEffect: string | 'unknown';
+  mixEffect: string | 'unknown';
+  volumeEffect: string | 'unknown';
+  excludedItemIds: string[];
+};
+
+/**
+ * `margin_attribution` (spec 12 §12.3) — see `attribution.ts`'s own header for the full formula
+ * and ADR-15 (docs/spec/18-engineering-decisions.md) for the deliberate, verified deviation from
+ * the spec's literal `Q₀`-weighted `price_effect`/`cost_effect` terms.
+ */
+export const marginAttributionMetric = defineMetric<MarginAttributionParams>({
+  id: 'margin_attribution',
+  description: 'Decomposes the change in contribution margin between two periods into price, cost, mix, and volume effects.',
+  parameters: marginAttributionParams,
+  unit: 'CURRENCY',
+  requiredPermission: 'financial:read',
+  sources: ['sales_transaction_lines', 'pos_items', 'recipes'],
+  async execute(params, rawCtx): Promise<MarginAttributionMetricResult> {
+    const ctx = requireMarginContext(rawCtx, 'margin_attribution');
+    const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
+
+    const [baseLines, comparisonLines] = await Promise.all([
+      dashboard.findSoldMappedItemLines(params.storeId, params.basePeriod.from, params.basePeriod.to),
+      dashboard.findSoldMappedItemLines(params.storeId, params.comparisonPeriod.from, params.comparisonPeriod.to),
+    ]);
+
+    const allMenuItemIds = new Set([...baseLines.map((l) => l.menuItemId), ...comparisonLines.map((l) => l.menuItemId)]);
+
+    const items: AttributionItemPair[] = [];
+    for (const menuItemId of allMenuItemIds) {
+      const baseLine = baseLines.find((l) => l.menuItemId === menuItemId);
+      const comparisonLine = comparisonLines.find((l) => l.menuItemId === menuItemId);
+      const unitCost = await resolveMenuItemUnitCost(ctx, menuItemId);
+
+      const toFigure = (line: typeof baseLine) =>
+        line && !new Decimal(line.quantitySold).isZero()
+          ? {
+              price: money(new Decimal(line.revenue).dividedBy(new Decimal(line.quantitySold)), CURRENCY),
+              cost: unitCost,
+              quantity: line.quantitySold,
+            }
+          : null;
+
+      items.push({ menuItemId, base: toFigure(baseLine), comparison: toFigure(comparisonLine) });
+    }
+
+    const result = computeMarginAttribution(items, CURRENCY);
+    const now = new Date();
+
+    return {
+      metricId: 'margin_attribution',
+      value: result.totalChange === 'unknown' ? 'unknown' : result.totalChange.amount.toFixed(4),
+      unit: 'CURRENCY',
+      period: { from: params.basePeriod.from, to: params.comparisonPeriod.to },
+      computedAt: now,
+      freshness: now,
+      provenance: [{ table: 'sales_transaction_lines', rowCount: baseLines.length + comparisonLines.length }],
+      priceEffect: result.priceEffect === 'unknown' ? 'unknown' : result.priceEffect.amount.toFixed(4),
+      costEffect: result.costEffect === 'unknown' ? 'unknown' : result.costEffect.amount.toFixed(4),
+      mixEffect: result.mixEffect === 'unknown' ? 'unknown' : result.mixEffect.amount.toFixed(4),
+      volumeEffect: result.volumeEffect === 'unknown' ? 'unknown' : result.volumeEffect.amount.toFixed(4),
+      excludedItemIds: result.excludedItemIds,
+      ...(result.totalChange === 'unknown'
+        ? { unknownReason: 'No item had a resolvable cost in both periods to attribute a change over.' }
+        : {}),
+    };
+  },
+});

@@ -488,4 +488,41 @@ export class StockCountService {
       )
     );
   }
+
+  /**
+   * `shrinkage_value`/`shrinkage_percentage`'s real input (spec 12 §E) — every line's already-
+   * frozen `varianceValue`/`varianceQuantity` from APPROVED counts whose T0 snapshot (`t0At`, the
+   * moment the physical count actually happened — NOT `approvedAt`, which can trail by days if
+   * review is delayed) falls within `[from, to)`. Deliberately reads the count's own `t0At` for the
+   * period filter rather than `approvedAt`, matching this project's bi-temporal convention
+   * (`occurred_at` is business time; when a count was later rubber-stamped is not). Only `APPROVED`
+   * counts are included — a `SUBMITTED`-but-not-yet-approved count's variance isn't real shrinkage
+   * yet, matching `approveCount`'s own reconciliation gate (variance only posts to the ledger on
+   * approval). A line with a `NULL` `varianceValue` (never actually counted, so no variance was ever
+   * computed) is simply excluded, not coerced to zero (I7) — the caller decides what an incomplete
+   * count means for its own metric.
+   */
+  async findApprovedVarianceLines(storeId: string, from: Date, to: Date) {
+    return this.db.transaction((tx) =>
+      withTenantContext(tx, this.organizationId, () =>
+        tx
+          .select({
+            varianceQuantity: stockCountLines.varianceQuantity,
+            varianceValue: stockCountLines.varianceValue,
+          })
+          .from(stockCountLines)
+          .innerJoin(stockCounts, eq(stockCounts.id, stockCountLines.stockCountId))
+          .where(
+            and(
+              eq(stockCountLines.organizationId, this.organizationId),
+              eq(stockCounts.organizationId, this.organizationId),
+              eq(stockCounts.storeId, storeId),
+              eq(stockCounts.status, 'APPROVED'),
+              sql`${stockCounts.t0At} >= ${from.toISOString()}::timestamptz`,
+              sql`${stockCounts.t0At} < ${to.toISOString()}::timestamptz`
+            )
+          )
+      )
+    );
+  }
 }

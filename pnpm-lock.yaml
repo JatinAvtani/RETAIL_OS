@@ -300,6 +300,9 @@ importers:
 
   packages/metrics:
     dependencies:
+      '@retailos/authz':
+        specifier: workspace:*
+        version: link:../authz
       '@retailos/db':
         specifier: workspace:*
         version: link:../db
@@ -309,10 +312,19 @@ importers:
       decimal.js:
         specifier: ^10.6.0
         version: 10.6.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
+      drizzle-orm:
+        specifier: ^0.36.4
+        version: 0.36.4(@types/react@19.2.18)(postgres@3.4.9)(react@19.2.8)
       fast-check:
         specifier: ^3.23.2
         version: 3.23.2
+      postgres:
+        specifier: ^3.4.5
+        version: 3.4.9
       typescript:
         specifier: ^5.7.0
         version: 5.9.3

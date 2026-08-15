@@ -147,4 +147,248 @@ export class StockLevelRepository extends TenantScopedRepository<typeof stockLev
       db.select().from(stockLevels).where(scopedWhere(eq(stockLevels.storeId, storeId)))
     );
   }
+
+  /**
+   * The trailing-`lookbackDays`-day average daily consumption per (product, variant) for one
+   * store — `SUM(-quantity) / lookbackDays` over `SALE_CONSUMPTION` movements, the exact formula
+   * `findExpiryQueue`/`findReorderSuggestions` each independently re-derived inline (009-06: a
+   * third caller needing the same number is what made extracting this the right call — see
+   * `packages/metrics/src/inventory/inventory.ts` for the metrics consuming it). Deliberately does
+   * NOT touch either of those two existing call sites — this is a new, additive read method, not a
+   * refactor of proven code.
+   *
+   * A product/variant with zero `SALE_CONSUMPTION` rows in the window is simply absent from the
+   * result (no zero-valued row) — the caller decides what "no consumption history" means for its
+   * own metric (I7: absence is not evidence of zero demand), matching `findExpiryQueue`'s own
+   * `COALESCE(..., 0)`-at-the-call-site convention rather than baking a default in here.
+   */
+  async findAverageDailyConsumption(storeId: string, lookbackDays: number, asOf: Date = new Date()) {
+    const asOfIso = asOf.toISOString();
+    const rows = await this.runScoped((db) =>
+      db.execute<{ product_id: string; variant_id: string; avg_daily_consumption: string }>(sql`
+        SELECT
+          product_id,
+          variant_id,
+          SUM(-quantity) / ${lookbackDays}::numeric AS avg_daily_consumption
+        FROM stock_movements
+        WHERE organization_id = ${this.organizationId}
+          AND store_id = ${storeId}
+          AND movement_type = 'SALE_CONSUMPTION'
+          AND occurred_at >= ${asOfIso}::timestamptz - (${lookbackDays} || ' days')::interval
+          AND occurred_at < ${asOfIso}::timestamptz
+        GROUP BY product_id, variant_id
+      `)
+    );
+    return rows.map((row) => ({
+      productId: row.product_id,
+      variantId: row.variant_id,
+      avgDailyConsumption: row.avg_daily_consumption,
+    }));
+  }
+
+  /**
+   * `stock_value`'s real input (spec 12 §D: `Σ remaining_qty × lot_cost`, store/category grain) —
+   * sums over `lots.remaining_quantity × lots.unit_cost` for `ACTIVE` lots, the SAME source
+   * `findExpiryQueue`'s `value_at_risk` reads from, deliberately NOT `stock_levels.avgUnitCost`
+   * (009-06 research: the spec's own "lot_cost" wording points at the lots table, and lot-level
+   * cost is the more granular, more correct source anyway — `stock_levels.avgUnitCost` is a
+   * blended average that exists for a different purpose). Grouped by `products.category_id`;
+   * `category_id IS NULL` groups under a real `categoryId: null` row rather than being dropped —
+   * the caller labels it "Uncategorized" (I7 — an uncategorized product's real value still counts
+   * toward the store's total cash tied up).
+   */
+  async findStockValueByCategory(storeId: string) {
+    const rows = await this.runScoped((db) =>
+      db.execute<{ category_id: string | null; total_value: string }>(sql`
+        SELECT
+          p.category_id,
+          SUM(l.remaining_quantity * l.unit_cost) AS total_value
+        FROM lots l
+        INNER JOIN products p ON p.id = l.product_id
+        WHERE l.organization_id = ${this.organizationId}
+          AND l.store_id = ${storeId}
+          AND l.status = 'ACTIVE'
+          AND l.remaining_quantity > 0
+        GROUP BY p.category_id
+      `)
+    );
+    return rows.map((row) => ({ categoryId: row.category_id, totalValue: row.total_value }));
+  }
+
+  /**
+   * `dead_stock_value`'s real input — products/variants at this store whose `stock_levels.
+   * last_movement_at` is older than `asOf - thresholdDays` (or has never moved at all,
+   * `last_movement_at IS NULL`, with real quantity on hand from a source this codebase can't
+   * currently attribute — e.g. a stocktake correction with no movement recorded, which is a real
+   * data-quality gap surfaced here, not hidden). Only rows with `quantity > 0` are candidates — a
+   * product at zero stock has no "dead" value to report regardless of how long it's been idle.
+   */
+  async findDeadStock(storeId: string, thresholdDays: number, asOf: Date = new Date()) {
+    const asOfIso = asOf.toISOString();
+    const rows = await this.runScoped((db) =>
+      db.execute<{
+        product_id: string;
+        variant_id: string;
+        quantity: string;
+        avg_unit_cost: string | null;
+        last_movement_at: string | null;
+      }>(sql`
+        SELECT product_id, variant_id, quantity, avg_unit_cost, last_movement_at
+        FROM stock_levels
+        WHERE organization_id = ${this.organizationId}
+          AND store_id = ${storeId}
+          AND quantity > 0
+          AND (
+            last_movement_at IS NULL
+            OR last_movement_at < ${asOfIso}::timestamptz - (${thresholdDays} || ' days')::interval
+          )
+      `)
+    );
+    return rows.map((row) => ({
+      productId: row.product_id,
+      variantId: row.variant_id,
+      quantity: row.quantity,
+      avgUnitCost: row.avg_unit_cost,
+      lastMovementAt: row.last_movement_at,
+    }));
+  }
+
+  /**
+   * `stockout_events`/`stockout_revenue_impact`'s real input — reconstructs each (product,
+   * variant)'s running stock balance from the real ledger via a window function, then finds every
+   * DAY where that balance was `<= 0` AND at least one `SALE_CONSUMPTION` movement occurred that
+   * same day (spec's own "at zero WITH PRIOR DEMAND" qualifier — a product sitting at zero with no
+   * one trying to buy it is not a lost-sale event, just an empty shelf nobody noticed).
+   *
+   * The running balance is computed as a cumulative sum of EVERY movement's `quantity` up to and
+   * including each day (movements are already signed: consumption/waste are negative, receipts are
+   * positive), then the day's CLOSING balance (the running sum after the day's last movement) is
+   * what determines whether that day counts as a stockout day.
+   */
+  async findStockoutDays(storeId: string, from: Date, to: Date) {
+    const fromIso = from.toISOString();
+    const toIso = to.toISOString();
+    const rows = await this.runScoped((db) =>
+      db.execute<{
+        product_id: string;
+        variant_id: string;
+        stockout_date: string;
+        consumption_quantity: string;
+      }>(sql`
+        WITH daily_movements AS (
+          SELECT
+            product_id,
+            variant_id,
+            occurred_at::date AS movement_date,
+            SUM(quantity) AS net_quantity,
+            SUM(CASE WHEN movement_type = 'SALE_CONSUMPTION' THEN -quantity ELSE 0 END) AS consumption_quantity
+          FROM stock_movements
+          WHERE organization_id = ${this.organizationId}
+            AND store_id = ${storeId}
+            AND occurred_at < ${toIso}::timestamptz
+          GROUP BY product_id, variant_id, occurred_at::date
+        ),
+        running_balance AS (
+          SELECT
+            product_id,
+            variant_id,
+            movement_date,
+            consumption_quantity,
+            SUM(net_quantity) OVER (
+              PARTITION BY product_id, variant_id ORDER BY movement_date
+            ) AS closing_balance
+          FROM daily_movements
+        )
+        SELECT product_id, variant_id, movement_date AS stockout_date, consumption_quantity
+        FROM running_balance
+        WHERE closing_balance <= 0
+          AND consumption_quantity > 0
+          AND movement_date >= ${fromIso}::date
+          AND movement_date < ${toIso}::date
+        ORDER BY product_id, variant_id, movement_date
+      `)
+    );
+    return rows.map((row) => ({
+      productId: row.product_id,
+      variantId: row.variant_id,
+      stockoutDate: row.stockout_date,
+      consumptionQuantity: row.consumption_quantity,
+    }));
+  }
+
+  /**
+   * `expiry_risk_value`'s real input — a tenant-scoped equivalent of `findExpiryQueue`
+   * (`packages/db/src/expiry-queue.ts`), which is deliberately a CROSS-tenant sweep requiring an
+   * admin-equivalent connection (its own docstring). `MetricContext.db` is always the normal
+   * app-role tenant connection, so this catalog entry cannot call that function directly — the
+   * same real SQL shape (already proven correct in `findExpiryQueue`'s own tests), scoped to one
+   * store via the app role's normal `organization_id`/RLS path instead of scanning every tenant.
+   */
+  async findExpiringLots(storeId: string, asOf: Date = new Date()) {
+    const asOfIso = asOf.toISOString();
+    const rows = await this.runScoped((db) =>
+      db.execute<{
+        lot_id: string;
+        days_to_expiry: number;
+        remaining_quantity: string;
+        unit_cost: string;
+        value_at_risk: string;
+      }>(sql`
+        WITH consumption AS (
+          SELECT store_id, product_id, variant_id, SUM(-quantity) / 30::numeric AS avg_daily_consumption
+          FROM stock_movements
+          WHERE organization_id = ${this.organizationId}
+            AND store_id = ${storeId}
+            AND movement_type = 'SALE_CONSUMPTION'
+            AND occurred_at >= ${asOfIso}::timestamptz - INTERVAL '30 days'
+            AND occurred_at < ${asOfIso}::timestamptz
+          GROUP BY store_id, product_id, variant_id
+        )
+        SELECT
+          l.id AS lot_id,
+          (l.expiry_date - ${asOfIso}::date) AS days_to_expiry,
+          l.remaining_quantity,
+          l.unit_cost,
+          (l.remaining_quantity * l.unit_cost) AS value_at_risk
+        FROM lots l
+        LEFT JOIN consumption c
+          ON c.store_id = l.store_id AND c.product_id = l.product_id AND c.variant_id = l.variant_id
+        WHERE l.organization_id = ${this.organizationId}
+          AND l.store_id = ${storeId}
+          AND l.status = 'ACTIVE'
+          AND l.remaining_quantity > 0
+          AND l.expiry_date IS NOT NULL
+          AND (
+            COALESCE(c.avg_daily_consumption, 0) = 0
+            OR (l.remaining_quantity / c.avg_daily_consumption) > (l.expiry_date - ${asOfIso}::date)
+          )
+      `)
+    );
+    return rows.map((row) => ({
+      lotId: row.lot_id,
+      daysToExpiry: Number(row.days_to_expiry),
+      remainingQuantity: row.remaining_quantity,
+      unitCost: row.unit_cost,
+      valueAtRisk: row.value_at_risk,
+    }));
+  }
+
+  /**
+   * `negative_stock_incidents`'s real input — a tenant-scoped equivalent of `findNegativeStock`
+   * (`packages/db/src/negative-stock.ts`), same reasoning as `findExpiringLots` above: the
+   * original is a deliberate cross-tenant sweep needing an admin connection, this is the one-store,
+   * app-role-scoped version this catalog entry can actually call.
+   */
+  async findNegativeStockForStore(storeId: string) {
+    const rows = await this.runScoped((db) =>
+      db.execute<{ product_id: string; variant_id: string; quantity: string }>(sql`
+        SELECT product_id, variant_id, quantity
+        FROM stock_levels
+        WHERE organization_id = ${this.organizationId}
+          AND store_id = ${storeId}
+          AND quantity < 0
+      `)
+    );
+    return rows.map((row) => ({ productId: row.product_id, variantId: row.variant_id, quantity: row.quantity }));
+  }
 }

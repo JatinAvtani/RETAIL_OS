@@ -179,7 +179,10 @@ report HIGH I3 "Mutation of an append-only table" \
 # on money flows through it. "Cost" is the only accurate word for what is being counted (events
 # with an unknown COST), so renaming to dodge the regex would make the field less clear rather
 # than more correct. Every genuine money value in that file is a real `Money`.
-r=$(search '[A-Za-z_]*([Pp]rice|[Cc]ost|[Aa]mount|[Tt]otal|[Rr]evenue|[Mm]argin|[Qq]uantity|[Qq]ty)[A-Za-z_]*[[:space:]]*:[[:space:]]*number\b' 'apps/api/src/integrations/csv-import\.ts|packages/db/src/repositories/csv-import-repository\.ts|packages/metrics/src/margin/margin\.ts' '*.ts')
+# inventory.ts excluded for the identical reason: `unknownCostLineCount` (dead-stock lines with an
+# unknown average cost) is the same event-count pattern as margin.ts's `unknownCostEventCount`, not
+# a monetary value.
+r=$(search '[A-Za-z_]*([Pp]rice|[Cc]ost|[Aa]mount|[Tt]otal|[Rr]evenue|[Mm]argin|[Qq]uantity|[Qq]ty)[A-Za-z_]*[[:space:]]*:[[:space:]]*number\b' 'apps/api/src/integrations/csv-import\.ts|packages/db/src/repositories/csv-import-repository\.ts|packages/metrics/src/margin/margin\.ts|packages/metrics/src/inventory/inventory\.ts' '*.ts')
 report HIGH I5 "Money or quantity typed as \`number\`" \
   "Float arithmetic on money loses precision silently. Use Money / Quantity<Unit>." "$r"
 
@@ -213,7 +216,14 @@ report HIGH I5 "Float column in a monetary/quantity path" \
 # MORE has now arrived; it never feeds a cost/price calculation. unitCost is resolved completely
 # separately in the same function and throws UnknownReceiptCostError rather than defaulting to 0
 # when it can't be determined (I7 applied to the actual money value, not this quantity accumulator).
-r=$(search '(\?\?|\|\|)[[:space:]]*0\b|COALESCE\([^,]+,[[:space:]]*0\)' 'format|display|/ui/|reconciliation\.ts|expiry-queue\.ts|reorder-suggestions\.ts|goods-receipt-repository\.ts' '' \
+# stock-level-repository.ts (findExpiringLots) excluded: its COALESCE(c.avg_daily_consumption, 0) is
+# the identical expiry-queue.ts LEFT JOIN idiom above, adapted for a tenant-scoped equivalent of
+# that same query (009-06) - a lot with zero SALE_CONSUMPTION rows in the trailing-30-day window
+# genuinely has no matching join row. The zero is never fed into value_at_risk (computed straight
+# from lots.remaining_quantity * lots.unit_cost); it only decides at-risk classification, and a
+# zero-consumption lot is deliberately treated as AT RISK - the opposite of the "looks safe" failure
+# this check exists to catch.
+r=$(search '(\?\?|\|\|)[[:space:]]*0\b|COALESCE\([^,]+,[[:space:]]*0\)' 'format|display|/ui/|reconciliation\.ts|expiry-queue\.ts|reorder-suggestions\.ts|goods-receipt-repository\.ts|stock-level-repository\.ts' '' \
    | grep -Ei 'cost|price|margin|revenue|cogs|consumption|qty|quantity|yield' || true)
 report HIGH I7 "Null-to-zero coercion in a costing path" \
   "\`?? 0\` looks defensive; in costing it silently inflates margin to 100%. Degrade to unknown." "$r"
