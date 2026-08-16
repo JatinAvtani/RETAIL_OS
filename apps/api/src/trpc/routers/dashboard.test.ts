@@ -115,10 +115,19 @@ describe('dashboard.summary', () => {
     const userId = generateId();
     createdUserIds.push(userId);
     // dashboard.summary now resolves every figure through the metric catalog (009-02), which
-    // enforces each metric's requiredPermission ('financial:read' for every margin metric) before
-    // executing — a real OWNER session carries this via ROLE_PERMISSIONS, so the fixture must too.
+    // enforces each metric's requiredPermission before executing. 009-14 added metrics needing
+    // inventory:read (stock_value, the exception feed's inventory-domain cards) and documents:read
+    // (documents_pending_review) alongside the original financial:read set — a real OWNER session
+    // carries ALL_PERMISSIONS via ROLE_PERMISSIONS, so this fixture grants the same real set rather
+    // than a narrowed one that would silently make tryMetric's graceful-omit path fire for every test.
     const { token } = await sessionStore.create(
-      { userId, organizationId, storeIds: 'ALL', role: 'OWNER', permissions: ['financial:read'] },
+      {
+        userId,
+        organizationId,
+        storeIds: 'ALL',
+        role: 'OWNER',
+        permissions: ['financial:read', 'inventory:read', 'documents:read', 'purchasing:read'],
+      },
       '127.0.0.1',
       'test-agent'
     );
@@ -499,6 +508,179 @@ describe('dashboard.summary', () => {
     // 7 portions x $2.00 per portion = $14.00.
     // The bug produced 7 x $20.00 = $140.00 — a 10x overstatement, exactly the yield factor.
     expect(Number(body.cogsTheoretical.amount)).toBe(14);
+  });
+
+  it('stockValue, deltas, trends, exceptions, and itemsByContribution are present and honest for an org with no data', async () => {
+    const { organizationId, storeId } = await setUpOrg();
+    const cookie = await issueSession(organizationId);
+
+    const body = JSON.parse((await fetchSummary(storeId, cookie)).body).result.data;
+
+    // Real, knowable zero for stock value with no lots at all.
+    expect(Number(body.stockValue.amount)).toBe(0);
+    // net_revenue is a real, knowable 0 for a fully empty period (not 'unknown' — see this file's
+    // very first test), so both current and prior periods are genuinely 0 -> a real 'flat'
+    // direction, not null. null is reserved for when either side is genuinely 'unknown' (e.g.
+    // food_cost_percentage, which IS unknown at zero revenue — asserted separately below).
+    expect(body.deltas.netRevenue.direction).toBe('flat');
+    expect(body.deltas.foodCostPercentage.direction).toBeNull();
+    // 12 real points, every one a real 0 (not unknown) -- an empty period has a genuinely known
+    // zero net revenue, matching the "real zero" precedent this file already established above.
+    expect(body.trends.netRevenue).toHaveLength(12);
+    expect(body.trends.netRevenue.every((v: number | null) => v === 0)).toBe(true);
+    // No exceptions with no data at all -- an empty exception feed on an empty org, not a fabricated warning.
+    expect(body.exceptions).toEqual([]);
+    // A real, empty list -- the metric genuinely ran (the caller has financial:read) and genuinely
+    // found no sold items, which is different from `null` (a permission gap, tested separately).
+    expect(body.itemsByContribution).toEqual([]);
+  });
+
+  it('deltas report a real up direction from a genuine period-over-period revenue increase', async () => {
+    const { organizationId, storeId } = await setUpOrg();
+    const salesRepo = new SalesTransactionRepository(db, organizationId);
+    // Prior 7-day window (days 14-7 ago): $10. Current 7-day window (days 7-0 ago): $50.
+    await salesRepo.recordIfNew({
+      storeId,
+      source: 'square',
+      externalId: `DASH-DELTA-PRIOR-${organizationId}`,
+      occurredAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
+      subtotal: '10.0000',
+      discount: '0.0000',
+      tax: '0.0000',
+      total: '10.0000',
+      currency: 'USD',
+      lines: [{ quantity: '1.000000', unitPrice: '10.0000', discount: '0.0000', lineTotal: '10.0000' }],
+    });
+    await salesRepo.recordIfNew({
+      storeId,
+      source: 'square',
+      externalId: `DASH-DELTA-CURRENT-${organizationId}`,
+      occurredAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+      subtotal: '50.0000',
+      discount: '0.0000',
+      tax: '0.0000',
+      total: '50.0000',
+      currency: 'USD',
+      lines: [{ quantity: '1.000000', unitPrice: '50.0000', discount: '0.0000', lineTotal: '50.0000' }],
+    });
+
+    const cookie = await issueSession(organizationId);
+    const body = JSON.parse((await fetchSummary(storeId, cookie, 7)).body).result.data;
+
+    expect(Number(body.netRevenue.amount)).toBe(50);
+    expect(body.deltas.netRevenue.direction).toBe('up');
+  });
+
+  it('exceptions surfaces a real negative-stock incident as a danger-severity card', async () => {
+    const { organizationId, storeId } = await setUpOrg();
+    const [eachUnit] = await db.select({ id: units.id }).from(units).where(eq(units.code, 'each'));
+    const productId = generateId();
+    await db.insert(products).values({
+      id: productId,
+      organizationId,
+      sku: `DASH-NEG-${productId}`,
+      name: 'Negative Stock Test Ingredient',
+      baseUnitId: eachUnit!.id,
+      type: 'INGREDIENT',
+    });
+    const variantId = generateId();
+    await db.insert(productVariants).values({ id: variantId, productId, name: 'Default', isDefault: true });
+
+    const lotRepo = new LotRepository(db, organizationId);
+    const lot = await lotRepo.receive({
+      id: generateId(),
+      storeId,
+      productId,
+      variantId,
+      receivedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
+      initialQuantity: '5.000000',
+      unitCost: '1.0000',
+      currency: 'USD',
+    });
+    const movements = new MovementService(db, organizationId);
+    await movements.postMovement({
+      storeId,
+      productId,
+      variantId,
+      lotId: lot.id,
+      movementType: 'RECEIPT',
+      quantity: '5.000000',
+      unitCost: '1.0000',
+      currency: 'USD',
+      occurredAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
+      sourceType: 'test',
+    });
+    // A correction that drives the projection negative — matches this project's own "negative stock
+    // is a signal, not an error" established precedent.
+    await movements.postMovement({
+      storeId,
+      productId,
+      variantId,
+      lotId: lot.id,
+      movementType: 'COUNT_ADJUSTMENT',
+      quantity: '-8.000000',
+      unitCost: '1.0000',
+      currency: 'USD',
+      occurredAt: new Date(),
+      sourceType: 'test',
+    });
+
+    const cookie = await issueSession(organizationId);
+    const body = JSON.parse((await fetchSummary(storeId, cookie)).body).result.data;
+
+    const negativeStockException = body.exceptions.find((e: { id: string }) => e.id === 'negative_stock_incidents');
+    expect(negativeStockException).toBeDefined();
+    expect(negativeStockException.severity).toBe('danger');
+  });
+
+  it('itemsByContribution ranks a real sold menu item by real dollar contribution', async () => {
+    const { organizationId, storeId } = await setUpOrg();
+    const menuItemId = generateId();
+    const recipeGroupId = generateId();
+    const posItemId = generateId();
+    await db.insert(menuItems).values({
+      id: menuItemId,
+      organizationId,
+      name: 'Contribution Test Item',
+      recipeGroupId,
+      price: '10.0000',
+      priceValidFrom: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000),
+    });
+    await db.insert(posItems).values({
+      id: posItemId,
+      organizationId,
+      storeId,
+      source: 'square',
+      externalId: `DASH-ITEM-${posItemId}`,
+      name: 'Contribution Test Item',
+      mappingStatus: 'MAPPED',
+      menuItemId,
+    });
+    const salesRepo = new SalesTransactionRepository(db, organizationId);
+    await salesRepo.recordIfNew({
+      storeId,
+      source: 'square',
+      externalId: `DASH-ITEM-SALE-${organizationId}`,
+      occurredAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
+      subtotal: '100.0000',
+      discount: '0.0000',
+      tax: '0.0000',
+      total: '100.0000',
+      currency: 'USD',
+      lines: [{ posItemId, quantity: '10.000000', unitPrice: '10.0000', discount: '0.0000', lineTotal: '100.0000' }],
+    });
+
+    const cookie = await issueSession(organizationId);
+    const body = JSON.parse((await fetchSummary(storeId, cookie)).body).result.data;
+
+    // No confirmed recipe cost for this item -> resolveRecipeUnitCost returns 'unknown' ->
+    // totalContribution is 'unknown', a real, honest null rather than a fabricated dollar figure —
+    // the item still appears in the ranked list (I7 at the ranking-list level: unresolvable cost
+    // doesn't silently drop a real sold item from the list).
+    expect(body.itemsByContribution).toHaveLength(1);
+    expect(body.itemsByContribution[0].menuItemId).toBe(menuItemId);
+    expect(body.itemsByContribution[0].menuItemName).toBe('Contribution Test Item');
+    expect(body.itemsByContribution[0].totalContribution).toBeNull();
   });
 
   it("one org's data never appears in another org's dashboard", async () => {

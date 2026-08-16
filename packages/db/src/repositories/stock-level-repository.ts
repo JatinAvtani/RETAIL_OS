@@ -391,4 +391,50 @@ export class StockLevelRepository extends TenantScopedRepository<typeof stockLev
     );
     return rows.map((row) => ({ productId: row.product_id, variantId: row.variant_id, quantity: row.quantity }));
   }
+
+  /**
+   * `stock_projection_drift`'s real input — a tenant-scoped equivalent of `findStockLevelDrift`
+   * (`packages/db/src/reconciliation.ts`), same reasoning as `findExpiringLots`/
+   * `findNegativeStockForStore` above: the original is a deliberate cross-tenant admin sweep, this
+   * is the one-org, app-role-scoped version this catalog entry can actually call. Same
+   * `FULL OUTER JOIN` shape (a `stock_levels` row with no matching ledger rows at all would be
+   * invisible to a plain `LEFT JOIN` from `stock_movements`), narrowed to this organization.
+   */
+  async findDriftForOrg() {
+    const rows = await this.runScoped((db) =>
+      db.execute<{
+        store_id: string;
+        product_id: string;
+        variant_id: string;
+        ledger_sum: string;
+        projection_quantity: string;
+      }>(sql`
+        SELECT
+          COALESCE(m.store_id, sl.store_id) AS store_id,
+          COALESCE(m.product_id, sl.product_id) AS product_id,
+          COALESCE(m.variant_id, sl.variant_id) AS variant_id,
+          COALESCE(SUM(m.quantity), 0) AS ledger_sum,
+          COALESCE(MAX(sl.quantity), 0) AS projection_quantity
+        FROM stock_movements m
+        FULL OUTER JOIN stock_levels sl
+          ON sl.store_id = m.store_id
+         AND sl.product_id = m.product_id
+         AND sl.variant_id = m.variant_id
+         AND sl.organization_id = ${this.organizationId}
+        WHERE COALESCE(m.organization_id, sl.organization_id) = ${this.organizationId}
+        GROUP BY
+          COALESCE(m.store_id, sl.store_id),
+          COALESCE(m.product_id, sl.product_id),
+          COALESCE(m.variant_id, sl.variant_id)
+        HAVING COALESCE(SUM(m.quantity), 0) <> COALESCE(MAX(sl.quantity), 0)
+      `)
+    );
+    return rows.map((row) => ({
+      storeId: row.store_id,
+      productId: row.product_id,
+      variantId: row.variant_id,
+      ledgerSum: row.ledger_sum,
+      projectionQuantity: row.projection_quantity,
+    }));
+  }
 }

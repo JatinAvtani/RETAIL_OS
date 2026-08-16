@@ -565,6 +565,79 @@ describe('registered inventory metrics', () => {
     expect(result.unknownReason).toBeDefined();
   });
 
+  it('stock_projection_drift is a real zero when the projection matches the ledger, never a false positive', async () => {
+    const { organizationId, storeId } = await setUpOrg();
+    const { productId, variantId } = await makeProduct(organizationId);
+    const lotId = generateId();
+    const lotRepo = new LotRepository(db, organizationId);
+    await lotRepo.receive({
+      id: lotId,
+      storeId,
+      productId,
+      variantId,
+      receivedAt: new Date(),
+      initialQuantity: '12.000000',
+      unitCost: '1.0000',
+      currency: 'USD',
+    });
+    const movements = new MovementService(db, organizationId);
+    await movements.postMovement({
+      storeId,
+      productId,
+      variantId,
+      lotId,
+      movementType: 'RECEIPT',
+      quantity: '12.000000',
+      unitCost: '1.0000',
+      currency: 'USD',
+      occurredAt: new Date(),
+      sourceType: 'test',
+    });
+
+    const result = await executeMetric('stock_projection_drift', {}, auth(), plainCtx(organizationId));
+    expect(result.value).toBe('0');
+  });
+
+  it('stock_projection_drift counts a real drifted row when stock_levels is hand-edited out of sync with the ledger', async () => {
+    const { organizationId, storeId } = await setUpOrg();
+    const { productId, variantId } = await makeProduct(organizationId);
+    const lotId = generateId();
+    const lotRepo = new LotRepository(db, organizationId);
+    await lotRepo.receive({
+      id: lotId,
+      storeId,
+      productId,
+      variantId,
+      receivedAt: new Date(),
+      initialQuantity: '12.000000',
+      unitCost: '1.0000',
+      currency: 'USD',
+    });
+    const movements = new MovementService(db, organizationId);
+    await movements.postMovement({
+      storeId,
+      productId,
+      variantId,
+      lotId,
+      movementType: 'RECEIPT',
+      quantity: '12.000000',
+      unitCost: '1.0000',
+      currency: 'USD',
+      occurredAt: new Date(),
+      sourceType: 'test',
+    });
+    // Directly corrupt the projection, bypassing MovementService entirely — the exact bug class
+    // `findDriftForOrg` exists to catch (a code path that writes stock_levels without also writing
+    // the matching ledger row).
+    await adminDb
+      .update(stockLevels)
+      .set({ quantity: '999.000000' })
+      .where(eq(stockLevels.organizationId, organizationId));
+
+    const result = await executeMetric('stock_projection_drift', {}, auth(), plainCtx(organizationId));
+    expect(result.value).toBe('1');
+  });
+
   it('executeMetric refuses a caller without inventory:read for an inventory metric', async () => {
     const { organizationId, storeId } = await setUpOrg();
     await expect(executeMetric('stock_value', { storeId }, auth([]), plainCtx(organizationId))).rejects.toThrow(

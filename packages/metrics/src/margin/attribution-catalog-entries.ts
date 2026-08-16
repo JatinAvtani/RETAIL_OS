@@ -137,6 +137,79 @@ export const totalContributionMetric = defineMetric<SingleItemParams>({
   },
 });
 
+const storeItemsParams = z.object({ storeId: z.string().uuid(), from: z.coerce.date(), to: z.coerce.date() });
+type StoreItemsParams = z.infer<typeof storeItemsParams>;
+
+export type ItemContributionRow = { menuItemId: string; menuItemName: string; totalContribution: string | 'unknown' };
+export type ItemsByContributionMetricResult = MetricResult & { items: ItemContributionRow[] };
+
+/**
+ * `items_by_contribution` (spec 12 §12.5's owner-dashboard "top/bottom items by total
+ * contribution") — genuinely new: `total_contribution` above only ever computes ONE menu item per
+ * call, with no existing catalog entry ranking every item sold in a period. Reuses
+ * `findSoldMappedItemLines` (already `margin_attribution`'s own source for "which menu items sold")
+ * and `computeMarginPerItem`/`computeTotalContribution` (the exact same formulas
+ * `total_contribution` calls) rather than a third, independently-written ranking calculation — one
+ * formula, computed once per item here instead of requiring N separate `total_contribution` calls
+ * from every caller that wants a ranked view.
+ */
+export const itemsByContributionMetric = defineMetric<StoreItemsParams>({
+  id: 'items_by_contribution',
+  description: 'Every menu item sold in the period, ranked by total dollar contribution — highest and lowest performers.',
+  parameters: storeItemsParams,
+  unit: 'CURRENCY',
+  requiredPermission: 'financial:read',
+  sources: ['sales_transaction_lines', 'pos_items', 'recipes'],
+  async execute(params, rawCtx): Promise<ItemsByContributionMetricResult> {
+    const ctx = requireMarginContext(rawCtx, 'items_by_contribution');
+    const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
+    const menuItemRepository = new MenuItemRepository(ctx.db, ctx.organizationId);
+    const now = new Date();
+
+    const lines = await dashboard.findSoldMappedItemLines(params.storeId, params.from, params.to);
+    const items = await Promise.all(
+      lines
+        .filter((line) => !new Decimal(line.quantitySold).isZero())
+        .map(async (line): Promise<ItemContributionRow> => {
+          const menuItem = await menuItemRepository.findById(line.menuItemId);
+          const quantity = new Decimal(line.quantitySold);
+          const avgUnitPrice = money(new Decimal(line.revenue).dividedBy(quantity), CURRENCY);
+          const unitCost = await resolveMenuItemUnitCost(ctx, line.menuItemId);
+          const marginPerItem = computeMarginPerItem(avgUnitPrice, unitCost);
+          const totalContribution = computeTotalContribution(marginPerItem, line.quantitySold);
+          return {
+            menuItemId: line.menuItemId,
+            menuItemName: menuItem?.name ?? 'Unknown item',
+            totalContribution: totalContribution === 'unknown' ? 'unknown' : totalContribution.amount.toFixed(4),
+          };
+        })
+    );
+
+    items.sort((a, b) => {
+      if (a.totalContribution === 'unknown') return 1;
+      if (b.totalContribution === 'unknown') return -1;
+      return new Decimal(b.totalContribution).comparedTo(new Decimal(a.totalContribution));
+    });
+
+    const knownTotal = items.reduce(
+      (sum, item) => (item.totalContribution === 'unknown' ? sum : sum.plus(new Decimal(item.totalContribution))),
+      new Decimal(0)
+    );
+
+    return {
+      metricId: 'items_by_contribution',
+      value: items.length === 0 ? 'unknown' : knownTotal.toFixed(4),
+      unit: 'CURRENCY',
+      period: { from: params.from, to: params.to },
+      computedAt: now,
+      freshness: now,
+      provenance: [{ table: 'sales_transaction_lines', rowCount: items.length }],
+      items,
+      ...(items.length === 0 ? { unknownReason: 'No mapped menu items sold in the period.' } : {}),
+    };
+  },
+});
+
 const marginTrendParams = z.object({
   storeId: z.string().uuid(),
   /** Each period's own [from, to) boundary — the caller decides the window shape (daily/weekly/etc). */

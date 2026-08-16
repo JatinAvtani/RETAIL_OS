@@ -179,3 +179,18 @@ export const computeStockoutRevenueImpact = (
 
 /** `negative_stock_incidents` — registered as a live snapshot count (see this file's own header for the confirmed scope deviation). A plain count of the rows `findNegativeStock` already returns. */
 export const computeNegativeStockIncidentCount = (rows: unknown[]): number => rows.length;
+
+/* ------------------------------------------------------------------ stock_projection_drift */
+
+/**
+ * `stock_projection_drift` (spec 12 §H, spec 08 §8.6's "bug detector") — registered as a COUNT of
+ * drifted product/variant rows, not a summed `|projection − ledger sum|` magnitude: the underlying
+ * quantities are in each product's own base unit (I6), so adding an apple's drift to a liter of
+ * milk's drift would produce a meaningless mixed-unit number. A count of "how many rows disagree"
+ * is the honest, unit-safe reading of "is the bug detector finding anything right now" — the same
+ * live-snapshot-count framing `negative_stock_incidents` above already established for a real-time
+ * data-quality signal. Any row `StockLevelRepository.findDriftForOrg` returns is, by construction,
+ * already a genuine drift (its own `HAVING` clause only returns disagreeing rows) — this function
+ * doesn't recompute the comparison, only counts.
+ */
+export const computeStockProjectionDriftCount = (rows: unknown[]): number => rows.length;

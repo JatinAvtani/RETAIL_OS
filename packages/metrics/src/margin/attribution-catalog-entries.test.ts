@@ -18,6 +18,7 @@ import {
   SalesTransactionRepository,
 } from '@retailos/db';
 import { executeMetric } from '../catalog/index.js';
+import type { MetricResult } from '../catalog/index.js';
 import type { MarginMetricContext } from './catalog-entries.js';
 import type { MarginAttributionMetricResult, MarginTrendMetricResult } from './attribution-catalog-entries.js';
 import './attribution-catalog-entries.js';
@@ -253,6 +254,39 @@ describe('registered margin attribution metrics', () => {
     // (margin_trend reads real stock_movements for actual COGS, not the injected recipe-cost resolver.)
     expect(result.points[1]!.periodLabel).toBe('B');
     expect(result.points[1]!.contributionMarginPercentage).toBe('unknown'); // no sales at all in period B
+  });
+
+  it('items_by_contribution ranks a real sold item by its real total contribution, highest first', async () => {
+    const { organizationId, storeId, menuItemId, recipeGroupId, posItemId } = await setUpOrgWithMenuItem();
+    const to = new Date();
+    const from = new Date(to.getTime() - 7 * 24 * 60 * 60 * 1000);
+    await sellUnits(organizationId, storeId, posItemId, `ITEMS-${organizationId}`, new Date(to.getTime() - 24 * 60 * 60 * 1000), '10', '10.0000');
+
+    const ctx = ctxWithFixedUnitCost(organizationId, '4.0000', recipeGroupId);
+    const result = (await executeMetric(
+      'items_by_contribution',
+      { storeId, from, to },
+      auth(),
+      ctx
+    )) as MetricResult & { items: { menuItemId: string; menuItemName: string; totalContribution: string | 'unknown' }[] };
+
+    // 10 units @ $10.00, unit cost $4.00 -> margin per item $6.00, total contribution $60.00.
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]!.menuItemId).toBe(menuItemId);
+    expect(result.items[0]!.menuItemName).toBe('Attribution Test Item');
+    expect(result.items[0]!.totalContribution).toBe('60.0000');
+    expect(result.value).toBe('60.0000');
+  });
+
+  it('items_by_contribution is unknown with no mapped items sold, never a fabricated empty-but-real total', async () => {
+    const { organizationId, storeId } = await setUpOrgWithMenuItem();
+    const to = new Date();
+    const from = new Date(to.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const ctx = ctxWithFixedUnitCost(organizationId, '4.0000');
+
+    const result = await executeMetric('items_by_contribution', { storeId, from, to }, auth(), ctx);
+    expect(result.value).toBe('unknown');
+    expect(result.unknownReason).toBeDefined();
   });
 
   it('executeMetric refuses a caller without financial:read for margin_attribution', async () => {

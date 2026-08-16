@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import * as schema from '../schema/index';
 import { menuItems } from '../schema/index';
@@ -35,6 +35,35 @@ export class MenuItemRepository extends TenantScopedRepository<typeof menuItems>
         .select()
         .from(menuItems)
         .where(scopedWhere(eq(menuItems.recipeGroupId, recipeGroupId)))
+    );
+  }
+
+  /**
+   * `menu_items_without_recipe`'s real input. `recipeGroupId` is `NOT NULL` on `menuItems` but has
+   * deliberately no FK (see this file's header comment), so "no recipe" can never mean
+   * `recipeGroupId IS NULL` — it means no `recipes` row with that `recipeGroupId` is currently
+   * valid (`validFrom <= asOf AND (validTo IS NULL OR validTo > asOf)`), the same "current version"
+   * definition `RecipeRepository.findVersionAsOf` already uses. `recipes` is queried directly
+   * (raw SQL, not `RecipeRepository`) since this needs a `NOT EXISTS` correlated to every menu item
+   * at once, not a per-recipeGroupId lookup.
+   */
+  async findWithoutValidRecipe(asOf: Date = new Date()) {
+    const asOfIso = asOf.toISOString();
+    return this.runScoped((db, scopedWhere) =>
+      db
+        .select()
+        .from(menuItems)
+        .where(
+          scopedWhere(
+            sql`NOT EXISTS (
+              SELECT 1 FROM recipes r
+              WHERE r.recipe_group_id = ${menuItems.recipeGroupId}
+                AND r.organization_id = ${this.organizationId}
+                AND r.valid_from <= ${asOfIso}::timestamptz
+                AND (r.valid_to IS NULL OR r.valid_to > ${asOfIso}::timestamptz)
+            )`
+          )
+        )
     );
   }
 

@@ -9,6 +9,7 @@ import {
   computeExpiryRiskValue,
   computeInventoryTurnover,
   computeNegativeStockIncidentCount,
+  computeStockProjectionDriftCount,
   computeStockValueByCategory,
   computeStockoutEventCount,
   computeStockoutRevenueImpact,
@@ -40,6 +41,9 @@ const CONSUMPTION_LOOKBACK_DAYS = 30;
 
 const storeParams = z.object({ storeId: z.string().uuid() });
 type StoreParams = z.infer<typeof storeParams>;
+
+const orgParams = z.object({});
+type OrgParams = z.infer<typeof orgParams>;
 
 const productParams = z.object({
   storeId: z.string().uuid(),
@@ -412,6 +416,32 @@ export const stockoutRevenueImpactMetric = defineMetric<MenuItemStockoutParams>(
       ...(result.estimatedImpact === 'unknown'
         ? { unknownReason: 'No sales history for this menu item in the period, so a selling rate/price cannot be estimated.' }
         : {}),
+    };
+  },
+});
+
+/* ------------------------------------------------------------------ stock_projection_drift */
+
+export const stockProjectionDriftMetric = defineMetric<OrgParams>({
+  id: 'stock_projection_drift',
+  description: 'Count of product/variant rows where the stock_levels projection disagrees with the stock_movements ledger sum — a bug detector, not a business number.',
+  parameters: orgParams,
+  unit: 'COUNT',
+  requiredPermission: 'inventory:read',
+  sources: ['stock_movements', 'stock_levels'],
+  async execute(_params, ctx: MetricContext): Promise<MetricResult> {
+    const stockLevelRepository = new StockLevelRepository(ctx.db, ctx.organizationId);
+    const rows = await stockLevelRepository.findDriftForOrg();
+    const count = computeStockProjectionDriftCount(rows);
+    const now = new Date();
+    return {
+      metricId: 'stock_projection_drift',
+      value: String(count),
+      unit: 'COUNT',
+      period: { from: now, to: now },
+      computedAt: now,
+      freshness: now,
+      provenance: [{ table: 'stock_levels', rowCount: rows.length }],
     };
   },
 });

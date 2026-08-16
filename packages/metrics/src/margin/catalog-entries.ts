@@ -45,7 +45,7 @@ const marginMetricParams = z.object({
   to: z.coerce.date(),
 });
 
-type MarginMetricParams = z.infer<typeof marginMetricParams>;
+export type MarginMetricParams = z.infer<typeof marginMetricParams>;
 
 export type RecipeUnitCostResolver = (
   ctx: MetricContext,
@@ -75,7 +75,7 @@ const serialize = (value: Money | 'unknown'): string | 'unknown' =>
 
 const period = (params: MarginMetricParams) => ({ from: params.from, to: params.to });
 
-const fetchConsumptionLines = async (
+export const fetchConsumptionLines = async (
   dashboard: DashboardRepository,
   params: MarginMetricParams
 ): Promise<ConsumptionLine[]> => {

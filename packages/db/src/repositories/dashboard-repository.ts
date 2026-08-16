@@ -271,4 +271,123 @@ export class DashboardRepository extends TenantScopedRepository<typeof salesTran
         )
     );
   }
+
+  /**
+   * `sales_anomaly`'s real input (009-11, spec 12 §12.4) — one row per real calendar day with
+   * completed gross revenue in `[from, to)`, using the SAME `subtotal`-is-authoritative convention
+   * `findTransactions` already established (never recomputed from lines). A day with zero completed
+   * sales simply has no row — the anomaly detector's own decomposition only ever sees days that
+   * genuinely occurred, never a fabricated zero-revenue day for a store that was closed or a period
+   * with a real gap.
+   */
+  async findDailyGrossRevenue(storeId: string, from: Date, to: Date) {
+    const rows = await this.runScoped((db) =>
+      db.execute<{ revenue_date: string; total_subtotal: string }>(sql`
+        SELECT
+          occurred_at::date AS revenue_date,
+          SUM(subtotal) AS total_subtotal
+        FROM sales_transactions
+        WHERE organization_id = ${this.organizationId}
+          AND store_id = ${storeId}
+          AND status = 'COMPLETED'
+          AND occurred_at >= ${from.toISOString()}::timestamptz
+          AND occurred_at < ${to.toISOString()}::timestamptz
+        GROUP BY occurred_at::date
+        ORDER BY occurred_at::date
+      `)
+    );
+    return rows.map((row) => ({ date: row.revenue_date, totalSubtotal: row.total_subtotal }));
+  }
+
+  /**
+   * `waste_spike`'s real input (009-11) — one row per real calendar day with waste in `[from, to)`,
+   * `quantity * unitCost` summed per day. A `WASTE` movement with a `null` unitCost (I7 — cost
+   * unknown, never coerced to zero) is EXCLUDED from this specific day's total rather than treated
+   * as zero-value waste, matching every other waste-value compute function's own established
+   * unknown-cost handling (`computeWasteValueForReason`, `margin.ts`'s `computeWasteValue`) — a
+   * day's total is a real sum of only the lines with a known cost, not silently understated by
+   * folding an unknown into zero.
+   */
+  async findDailyWasteValue(storeId: string, from: Date, to: Date) {
+    const rows = await this.runScoped((db) =>
+      db.execute<{ waste_date: string; total_value: string }>(sql`
+        SELECT
+          occurred_at::date AS waste_date,
+          SUM(ABS(quantity) * unit_cost) AS total_value
+        FROM stock_movements
+        WHERE organization_id = ${this.organizationId}
+          AND store_id = ${storeId}
+          AND movement_type = 'WASTE'
+          AND unit_cost IS NOT NULL
+          AND occurred_at >= ${from.toISOString()}::timestamptz
+          AND occurred_at < ${to.toISOString()}::timestamptz
+        GROUP BY occurred_at::date
+        ORDER BY occurred_at::date
+      `)
+    );
+    return rows.map((row) => ({ date: row.waste_date, totalValue: row.total_value }));
+  }
+
+  /**
+   * `consumption_anomaly`'s real ACTUAL-COGS half (009-11) — one row per real calendar day with
+   * `SALE_CONSUMPTION` movement in `[from, to)`, `ABS(quantity) * unit_cost` summed. Confirmed with
+   * the user: this signal compares actual vs. theoretical COGS in DOLLARS per day (reusing
+   * `computeCogsActual`'s existing formula, applied once per day), not a raw ingredient quantity —
+   * a genuine per-day theoretical QUANTITY series would need per-day recipe explosion across every
+   * sold item, real N+1 risk this task deliberately avoids. A movement with a `null` unit_cost (I7)
+   * is excluded from that day's sum, matching `findDailyWasteValue`'s identical convention above.
+   */
+  async findDailyConsumptionCost(storeId: string, from: Date, to: Date) {
+    const rows = await this.runScoped((db) =>
+      db.execute<{ consumption_date: string; total_cost: string }>(sql`
+        SELECT
+          occurred_at::date AS consumption_date,
+          SUM(ABS(quantity) * unit_cost) AS total_cost
+        FROM stock_movements
+        WHERE organization_id = ${this.organizationId}
+          AND store_id = ${storeId}
+          AND movement_type = 'SALE_CONSUMPTION'
+          AND unit_cost IS NOT NULL
+          AND occurred_at >= ${from.toISOString()}::timestamptz
+          AND occurred_at < ${to.toISOString()}::timestamptz
+        GROUP BY occurred_at::date
+        ORDER BY occurred_at::date
+      `)
+    );
+    return rows.map((row) => ({ date: row.consumption_date, totalCost: row.total_cost }));
+  }
+
+  /**
+   * `consumption_anomaly`'s real THEORETICAL-COGS half (009-11) — the SAME day-grouped shape as
+   * `findSoldMappedItems` above, with `occurred_at::date` added to the GROUP BY. Deliberately
+   * returns raw per-day (`menuItemId`, `quantitySold`) pairs rather than a resolved dollar figure —
+   * the caller resolves each DISTINCT menu item's unit recipe cost exactly ONCE for the whole window
+   * (menu item costs rarely change mid-window) and reuses it across every day that item sold, rather
+   * than calling the resolver once per day per item, which would multiply resolver calls by the
+   * number of days in the window for no real benefit.
+   */
+  async findDailySoldMappedItems(storeId: string, from: Date, to: Date) {
+    const rows = await this.runScoped((db) =>
+      db.execute<{ sale_date: string; menu_item_id: string; quantity_sold: string }>(sql`
+        SELECT
+          st.occurred_at::date AS sale_date,
+          pi.menu_item_id,
+          SUM(stl.quantity) AS quantity_sold
+        FROM sales_transaction_lines stl
+        JOIN sales_transactions st ON st.id = stl.transaction_id
+        JOIN pos_items pi ON pi.id = stl.pos_item_id
+        WHERE stl.organization_id = ${this.organizationId}
+          AND st.organization_id = ${this.organizationId}
+          AND st.store_id = ${storeId}
+          AND st.status = 'COMPLETED'
+          AND st.occurred_at >= ${from.toISOString()}::timestamptz
+          AND st.occurred_at < ${to.toISOString()}::timestamptz
+          AND pi.mapping_status = 'MAPPED'
+          AND pi.menu_item_id IS NOT NULL
+        GROUP BY st.occurred_at::date, pi.menu_item_id
+        ORDER BY st.occurred_at::date
+      `)
+    );
+    return rows.map((row) => ({ date: row.sale_date, menuItemId: row.menu_item_id, quantitySold: row.quantity_sold }));
+  }
 }

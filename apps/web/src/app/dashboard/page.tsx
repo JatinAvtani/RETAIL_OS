@@ -34,6 +34,10 @@ const fmt = (m: { amount: string; currency: string } | null): string | null =>
 
 const humanize = (value: string) => value.toLowerCase().replace(/_/g, ' ');
 
+/** Only a fully-real series makes a real sparkline — one unknown point in the series and we show none, rather than a line with a fabricated gap. Returns an empty props object (not `{ trendPoints: undefined }`) so the JSX spread never explicitly assigns `undefined` to an optional prop under `exactOptionalPropertyTypes`. */
+const trendProp = (points: (number | null)[]): { trendPoints: number[] } | Record<string, never> =>
+  points.every((v) => v !== null) ? { trendPoints: points as number[] } : {};
+
 export default function DashboardPage() {
   const { stores, selectedStoreId, setSelectedStoreId, loading: storesLoading } = useStores();
   const [days, setDays] = useState(30);
@@ -98,33 +102,29 @@ export default function DashboardPage() {
 
       {!loading && !error && summary && (
         <>
-          {/* The headline row: what came in, what it cost, what's left. */}
+          {/* The headline row (spec 12 §12.5): net revenue, contribution margin %, food cost %, stock value — each with delta + sparkline where a real trend exists. */}
           <div className="mb-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <StatTile
               label="Net revenue"
               value={fmt(summary.netRevenue)}
               hint={`${summary.transactionCount} transactions`}
-            />
-            <StatTile
-              label="Actual COGS"
-              value={fmt(summary.cogsActual)}
-              hint="From the lots stock was really drawn from"
-              unknownReason={
-                summary.completeness.unknownCostConsumptionEvents > 0
-                  ? `${summary.completeness.unknownCostConsumptionEvents} consumption events have no known lot cost`
-                  : 'Some consumed stock has no recorded cost'
-              }
+              {...trendProp(summary.trends.netRevenue)}
+              delta={{ direction: summary.deltas.netRevenue.direction, label: `vs prior ${summary.period.days} days`, higherIsBetter: true }}
             />
             <StatTile
               label="Contribution margin"
-              value={fmt(summary.contributionMargin)}
-              tone="positive"
-              hint={
-                summary.contributionMarginPercentage !== null
-                  ? `${summary.contributionMarginPercentage}% of revenue`
-                  : 'Excludes rent, labour and tax'
+              value={
+                summary.contributionMarginPercentage !== null ? String(summary.contributionMarginPercentage) : null
               }
+              unit="%"
+              tone="positive"
+              hint="Excludes rent, labour and tax"
               unknownReason="Actual COGS could not be determined"
+              delta={{
+                direction: summary.deltas.contributionMarginPercentage.direction,
+                label: `vs prior ${summary.period.days} days`,
+                higherIsBetter: true,
+              }}
             />
             <StatTile
               label="Food cost"
@@ -132,8 +132,83 @@ export default function DashboardPage() {
               unit="%"
               hint="COGS as a share of revenue"
               unknownReason="Needs both COGS and revenue"
+              {...trendProp(summary.trends.foodCostPercentage)}
+              delta={{ direction: summary.deltas.foodCostPercentage.direction, label: `vs prior ${summary.period.days} days`, higherIsBetter: false }}
+            />
+            <StatTile
+              label="Stock value"
+              value={fmt(summary.stockValue)}
+              hint="Cash tied up in on-hand stock, right now"
+              unknownReason="You need inventory:read to see this"
             />
           </div>
+
+          {/* The exception feed (spec 12 §12.5) — deterministic, no AI narration yet (EPIC-010). */}
+          {summary.exceptions.length > 0 && (
+            <Card className="mb-6">
+              <CardHeader title="Needs attention" />
+              <ul className="divide-y divide-border">
+                {summary.exceptions.map((exception) => (
+                  <li key={exception.id} className="flex items-center gap-3 px-5 py-3">
+                    <Badge tone={exception.severity === 'danger' ? 'danger' : 'warning'}>
+                      {exception.severity === 'danger' ? 'Urgent' : 'Review'}
+                    </Badge>
+                    <span className="text-sm text-content">{exception.label}</span>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
+
+          {summary.itemsByContribution !== null && summary.itemsByContribution.length > 0 && (
+            <div className="mb-6 grid gap-6 lg:grid-cols-2">
+              <Card>
+                <CardHeader title="Top items by contribution" />
+                <Table>
+                  <thead>
+                    <tr>
+                      <Th>Item</Th>
+                      <Th align="right">Total contribution</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {summary.itemsByContribution.slice(0, 5).map((item) => (
+                      <Tr key={item.menuItemId}>
+                        <Td>{item.menuItemName}</Td>
+                        <Td align="right" className="tabular">
+                          {fmt(item.totalContribution) ?? 'Unknown'}
+                        </Td>
+                      </Tr>
+                    ))}
+                  </tbody>
+                </Table>
+              </Card>
+              <Card>
+                <CardHeader title="Bottom items by contribution" />
+                <Table>
+                  <thead>
+                    <tr>
+                      <Th>Item</Th>
+                      <Th align="right">Total contribution</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...summary.itemsByContribution]
+                      .reverse()
+                      .slice(0, 5)
+                      .map((item) => (
+                        <Tr key={item.menuItemId}>
+                          <Td>{item.menuItemName}</Td>
+                          <Td align="right" className="tabular">
+                            {fmt(item.totalContribution) ?? 'Unknown'}
+                          </Td>
+                        </Tr>
+                      ))}
+                  </tbody>
+                </Table>
+              </Card>
+            </div>
+          )}
 
           {/* Cost variance gets its own panel — it's the number almost nobody else can compute. */}
           <Card className="mb-6 overflow-hidden">

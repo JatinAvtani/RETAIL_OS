@@ -119,6 +119,8 @@ export const StatTile = ({
   hint,
   tone = 'neutral',
   unknownReason,
+  trendPoints,
+  delta,
 }: {
   label: string;
   value: string | null;
@@ -126,6 +128,10 @@ export const StatTile = ({
   hint?: string;
   tone?: 'neutral' | 'positive' | 'warning' | 'danger';
   unknownReason?: string;
+  /** Optional 12-point trend series (dataviz figure contract). Omit entirely when no real history exists — never pass a fabricated flat series. */
+  trendPoints?: number[];
+  /** Optional signed period-over-period delta, rendered next to the sparkline via `TrendBadge`. */
+  delta?: { direction: 'up' | 'down' | 'flat' | null; label: string; higherIsBetter?: boolean };
 }) => {
   const toneClass =
     tone === 'positive'
@@ -146,14 +152,101 @@ export const StatTile = ({
         </>
       ) : (
         <>
-          <p className={cx('tabular mt-1.5 text-2xl font-semibold tracking-tight', toneClass)}>
-            {value}
-            {unit && <span className="ml-1 text-base font-medium text-content-muted">{unit}</span>}
-          </p>
-          {hint && <p className="mt-1 text-xs text-content-subtle">{hint}</p>}
+          <div className="mt-1.5 flex items-end justify-between gap-3">
+            <p className={cx('tabular text-2xl font-semibold tracking-tight', toneClass)}>
+              {value}
+              {unit && <span className="ml-1 text-base font-medium text-content-muted">{unit}</span>}
+            </p>
+            {trendPoints && trendPoints.length >= 2 && <Sparkline points={trendPoints} />}
+          </div>
+          {(hint || delta) && (
+            <div className="mt-1 flex items-center gap-2">
+              {delta && <TrendBadge direction={delta.direction} label={delta.label} higherIsBetter={delta.higherIsBetter ?? true} />}
+              {hint && <p className="text-xs text-content-subtle">{hint}</p>}
+            </div>
+          )}
         </>
       )}
     </div>
+  );
+};
+
+/**
+ * A signed period-over-period delta badge (dataviz skill: "delta — signed, vs a named period;
+ * color = direction × whether up is good"). `higherIsBetter` decouples the raw direction from its
+ * meaning — a rising food cost % is bad, a rising contribution margin % is good, so the SAME
+ * up-arrow must be colored oppositely depending on which metric it's attached to. `direction: null`
+ * (no comparison basis available, e.g. the prior period itself is unknown) renders neutrally rather
+ * than fabricating a verdict from an incomplete comparison — the same I7 discipline `StatTile`
+ * already applies to its own headline value.
+ */
+export const TrendBadge = ({
+  direction,
+  label,
+  higherIsBetter = true,
+}: {
+  direction: 'up' | 'down' | 'flat' | null;
+  label: string;
+  higherIsBetter?: boolean;
+}) => {
+  if (direction === null) {
+    return <span className="text-xs text-content-subtle">{label}</span>;
+  }
+  const isGood = direction === 'flat' ? null : direction === 'up' ? higherIsBetter : !higherIsBetter;
+  const toneClass = isGood === null ? 'text-content-subtle' : isGood ? 'text-positive' : 'text-danger';
+  const arrow = direction === 'up' ? '↑' : direction === 'down' ? '↓' : '→';
+  return (
+    <span className={cx('inline-flex items-center gap-1 text-xs font-medium', toneClass)}>
+      <span aria-hidden="true">{arrow}</span>
+      {label}
+    </span>
+  );
+};
+
+/**
+ * A 12-point trend line for a `StatTile` (dataviz skill's own figure contract: "trend — optional;
+ * 12-point sparkline in the de-emphasis hue, current period in the accent"). Deliberately the
+ * simplest possible mark — a single 2px polyline, no axes/gridlines/legend (a single-series
+ * micro-chart needs none, per the marks-and-anatomy reference) — since this rides inside a stat
+ * tile, not a standalone chart. Renders nothing (not a flat/misleading line) when fewer than 2 real
+ * points exist, matching I7's "insufficient data says so" rule rather than drawing a fabricated flat
+ * line across a gap.
+ */
+export const Sparkline = ({ points, width = 96, height = 28 }: { points: number[]; width?: number; height?: number }) => {
+  const real = points.filter((p) => Number.isFinite(p));
+  if (real.length < 2) return null;
+
+  const min = Math.min(...real);
+  const max = Math.max(...real);
+  const range = max - min;
+  const stepX = width / (points.length - 1);
+  const coords = points.map((p, i) => {
+    const x = i * stepX;
+    const y = range === 0 ? height / 2 : height - ((p - min) / range) * height;
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  });
+  const lastCoord = coords[coords.length - 1]!.split(',').map(Number) as [number, number];
+
+  return (
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Trend over the period">
+      <polyline
+        points={coords.slice(0, -1).join(' ')}
+        fill="none"
+        stroke="var(--color-content-subtle)"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <polyline
+        points={`${coords[coords.length - 2] ?? coords[0]} ${coords[coords.length - 1]}`}
+        fill="none"
+        stroke="var(--color-accent)"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx={lastCoord[0]} cy={lastCoord[1]} r={3} fill="var(--color-accent)" stroke="var(--color-surface-raised, #fff)" strokeWidth={2} />
+    </svg>
   );
 };
 
