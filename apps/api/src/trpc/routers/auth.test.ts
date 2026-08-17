@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { createDb, users, verificationTokens } from '@retailos/db';
+import { createDb, memberships, organizations, stores, users, verificationTokens } from '@retailos/db';
 import { buildServer } from '../../server';
 import type { FastifyInstance } from 'fastify';
 
@@ -59,6 +59,16 @@ describe('auth router', () => {
       const rows = await db.select().from(users).where(eq(users.email, email));
       for (const user of rows) {
         await db.delete(verificationTokens).where(eq(verificationTokens.userId, user.id));
+        // signup now also creates a real organization/store/OWNER-membership
+        // (createOrganizationWithOwner) — must be cleaned up before the users delete below
+        // (memberships.user_id -> users.id), the same recurring FK-teardown-order bug class this
+        // project's memory has documented many times.
+        const userMemberships = await db.select().from(memberships).where(eq(memberships.userId, user.id));
+        for (const membership of userMemberships) {
+          await db.delete(memberships).where(eq(memberships.id, membership.id));
+          await db.delete(stores).where(eq(stores.organizationId, membership.organizationId));
+          await db.delete(organizations).where(eq(organizations.id, membership.organizationId));
+        }
       }
       await db.delete(users).where(eq(users.email, email));
     }
@@ -78,6 +88,9 @@ describe('auth router', () => {
     const { status, body } = await rpc(app, 'auth.signup', {
       email,
       password: 'a-genuinely-long-password-123',
+      organizationName: 'Signup Test Org',
+      storeName: 'Main Store',
+      storeTimezone: 'America/New_York',
     });
 
     expect(status).toBe(200);
@@ -90,10 +103,19 @@ describe('auth router', () => {
     const email = uniqueEmail('dupe');
     createdEmails.push(email);
 
-    await rpc(app, 'auth.signup', { email, password: 'a-genuinely-long-password-123' });
+    await rpc(app, 'auth.signup', {
+      email,
+      password: 'a-genuinely-long-password-123',
+      organizationName: 'Dupe Test Org',
+      storeName: 'Main Store',
+      storeTimezone: 'America/New_York',
+    });
     const { status, body } = await rpc(app, 'auth.signup', {
       email,
       password: 'a-totally-different-password-456',
+      organizationName: 'Dupe Test Org Attempt Two',
+      storeName: 'Second Store',
+      storeTimezone: 'America/New_York',
     });
 
     expect(status).toBe(200);
@@ -106,6 +128,9 @@ describe('auth router', () => {
     const { status, body } = await rpc(app, 'auth.signup', {
       email: uniqueEmail('badpw'),
       password: 'short',
+      organizationName: 'Bad Password Org',
+      storeName: 'Main Store',
+      storeTimezone: 'America/New_York',
     });
 
     expect(status).toBe(400);
@@ -118,6 +143,9 @@ describe('auth router', () => {
     const { status, body } = await rpc(app, 'auth.signup', {
       email: 'not-an-email',
       password: 'a-genuinely-long-password-123',
+      organizationName: 'Bad Email Org',
+      storeName: 'Main Store',
+      storeTimezone: 'America/New_York',
     });
 
     expect(status).toBe(400);
@@ -131,6 +159,9 @@ describe('auth router', () => {
     const signupResult = await rpc(app, 'auth.signup', {
       email,
       password: 'a-genuinely-long-password-123',
+      organizationName: 'Verify Test Org',
+      storeName: 'Main Store',
+      storeTimezone: 'America/New_York',
     });
     const token = asSuccess(signupResult.body)._devOnlyVerificationToken;
 
@@ -161,6 +192,9 @@ describe('auth router', () => {
     const signupResult = await rpc(app, 'auth.signup', {
       email,
       password: 'a-genuinely-long-password-123',
+      organizationName: 'Reuse Test Org',
+      storeName: 'Main Store',
+      storeTimezone: 'America/New_York',
     });
     const token = asSuccess(signupResult.body)._devOnlyVerificationToken;
 

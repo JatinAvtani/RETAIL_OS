@@ -1,19 +1,25 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { trpc } from '@/lib/trpc';
 import { ThemeToggle } from './theme-toggle';
+import { CommandPalette } from './command-palette';
 import { cx } from './ui';
 
 const NAV = [
   { href: '/dashboard', label: 'Overview' },
+  { href: '/dashboard/manager', label: 'Manager view' },
   { href: '/products', label: 'Products' },
+  { href: '/categories', label: 'Categories' },
+  { href: '/suppliers', label: 'Suppliers' },
   { href: '/recipes', label: 'Recipes' },
   { href: '/inventory', label: 'Inventory' },
   { href: '/documents', label: 'Documents' },
+  { href: '/integrations', label: 'Integrations' },
   { href: '/pos-items', label: 'POS mapping' },
+  { href: '/sales-import', label: 'Sales import' },
   { href: '/purchase-orders/suggestions', label: 'Reorder suggestions' },
   { href: '/purchase-orders/variance-queue', label: 'Variance queue' },
   { href: '/purchase-orders/supplier-scorecard', label: 'Supplier scorecard' },
@@ -23,6 +29,11 @@ const NAV = [
 export const AppShell = ({ children }: { children: ReactNode }) => {
   const pathname = usePathname();
   const router = useRouter();
+  const [isMac, setIsMac] = useState(false);
+
+  useEffect(() => {
+    setIsMac(navigator.platform.toLowerCase().includes('mac'));
+  }, []);
 
   const logout = async () => {
     try {
@@ -47,7 +58,15 @@ export const AppShell = ({ children }: { children: ReactNode }) => {
 
           <nav className="flex items-center gap-1">
             {NAV.map((item) => {
-              const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+              // Exact match only for the two /dashboard routes — both are real, sibling top-level
+              // destinations (Overview vs. Manager view) that happen to share a Next.js layout for
+              // AuthGuard, not a parent/child relationship; the prefix-match below would otherwise
+              // highlight "Overview" while genuinely on "Manager view" (/dashboard/manager starts
+              // with /dashboard/).
+              const active =
+                item.href === '/dashboard'
+                  ? pathname === '/dashboard'
+                  : pathname === item.href || pathname.startsWith(`${item.href}/`);
               return (
                 <Link
                   key={item.href}
@@ -66,6 +85,16 @@ export const AppShell = ({ children }: { children: ReactNode }) => {
           </nav>
 
           <div className="ml-auto flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new Event('retailos:open-search'))}
+              className="flex items-center gap-2 rounded-lg border border-border-strong bg-surface-raised px-3 py-1.5 text-sm text-content-muted transition-colors hover:bg-surface-sunken hover:text-content"
+            >
+              Search
+              <kbd className="rounded border border-border px-1 py-0.5 text-[10px] font-medium text-content-subtle">
+                {isMac ? '⌘K' : 'Ctrl+K'}
+              </kbd>
+            </button>
             <ThemeToggle />
             <button
               type="button"
@@ -79,6 +108,7 @@ export const AppShell = ({ children }: { children: ReactNode }) => {
       </header>
 
       <main className="mx-auto max-w-6xl px-6 py-8">{children}</main>
+      <CommandPalette />
     </div>
   );
 };

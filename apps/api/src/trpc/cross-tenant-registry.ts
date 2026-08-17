@@ -4,6 +4,7 @@ import {
   documentExtractions,
   documents,
   lots,
+  memberships,
   menuItems,
   posConnections,
   posItems,
@@ -19,10 +20,12 @@ import {
   suppliers,
   supplierProducts,
   units,
+  users,
   StockCountService,
   PurchaseOrderRepository,
   GoodsReceiptRepository,
   InvoiceMatchRepository,
+  InvitationRepository,
 } from '@retailos/db';
 import { eq } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
@@ -96,6 +99,36 @@ const seedCategory = async (db: Db, organizationId: string): Promise<string> => 
     path: `/${categoryId}`,
   });
   return categoryId;
+};
+
+/** Seeds a real pending invitation via the actual repository method (not a raw insert) — the invitation.revoke entry's real resource. */
+const seedInvitation = async (db: Db, organizationId: string): Promise<string> => {
+  const invitationRepository = new InvitationRepository(db, organizationId);
+  const inviterId = generateId();
+  await db.insert(users).values({ id: inviterId, email: `cross-tenant-probe-inviter-${inviterId}@example.test` });
+  const { invitationId } = await invitationRepository.create({
+    email: `cross-tenant-probe-invitee-${generateId()}@example.test`,
+    role: 'STAFF',
+    storeIds: null,
+    invitedBy: inviterId,
+  });
+  return invitationId;
+};
+
+/** Seeds a real accepted membership — a real, second user joined to the org, the shape `invitations.updateRole`/`removeMember` operate on. */
+const seedMembership = async (db: Db, organizationId: string): Promise<string> => {
+  const userId = generateId();
+  await db.insert(users).values({ id: userId, email: `cross-tenant-probe-member-${userId}@example.test` });
+  const membershipId = generateId();
+  await db.insert(memberships).values({
+    id: membershipId,
+    organizationId,
+    userId,
+    role: 'STAFF',
+    storeIds: null,
+    acceptedAt: new Date(),
+  });
+  return membershipId;
 };
 
 /** Seeds a real store — the same shape as the `stores.get` entry below, factored out since 005-16's endpoints are all store-scoped too. */
@@ -636,6 +669,28 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     buildInput: (resourceId) => ({ id: resourceId }),
   },
   {
+    // Team management — found while building the UI catch-up pass. The real risk: tenant B revoking
+    // tenant A's real pending invitation by guessing/reusing an invitationId.
+    path: 'invitations.revoke',
+    type: 'mutation',
+    seedResource: seedInvitation,
+    buildInput: (resourceId) => ({ invitationId: resourceId }),
+  },
+  {
+    // The real risk: tenant B changing tenant A's real member's role by guessing a membershipId.
+    path: 'invitations.updateRole',
+    type: 'mutation',
+    seedResource: seedMembership,
+    buildInput: (resourceId) => ({ membershipId: resourceId, role: 'MANAGER' }),
+  },
+  {
+    // The real risk: tenant B removing tenant A's real member by guessing a membershipId.
+    path: 'invitations.removeMember',
+    type: 'mutation',
+    seedResource: seedMembership,
+    buildInput: (resourceId) => ({ membershipId: resourceId }),
+  },
+  {
     path: 'products.get',
     type: 'query',
     seedResource: seedProduct,
@@ -1066,6 +1121,22 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     buildInput: (resourceId) => ({ storeId: resourceId, days: 30 }),
   },
   {
+    // 009-15, same store-scoped shape as dashboard.summary — the manager dashboard's own
+    // store-ownership check runs first, before any of its metrics/repository queries.
+    path: 'dashboard.managerSummary',
+    type: 'query',
+    seedResource: seedStore,
+    buildInput: (resourceId) => ({ storeId: resourceId, days: 30 }),
+  },
+  {
+    // 009-16, same store-scoped shape as dashboard.summary — the real risk is tenant B passing
+    // tenant A's real storeId to read its source rows behind a figure.
+    path: 'dashboard.drillThrough',
+    type: 'query',
+    seedResource: seedStore,
+    buildInput: (resourceId) => ({ storeId: resourceId, figure: 'net_revenue', from: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), to: new Date() }),
+  },
+  {
     // requestUpload is store-scoped, not documentId-scoped (no document row exists yet at this
     // point in the flow) — same shape as csvImport.requestUpload.
     path: 'documents.requestUpload',
@@ -1329,6 +1400,24 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
       return supplierId;
     },
     buildInput: (resourceId) => ({ supplierId: resourceId }),
+  },
+  {
+    path: 'suppliers.get',
+    type: 'query',
+    seedResource: async (db, organizationId) => {
+      const { supplierId } = await seedStoreSupplierAndSupplierProduct(db, organizationId);
+      return supplierId;
+    },
+    buildInput: (resourceId) => ({ id: resourceId }),
+  },
+  {
+    path: 'suppliers.update',
+    type: 'mutation',
+    seedResource: async (db, organizationId) => {
+      const { supplierId } = await seedStoreSupplierAndSupplierProduct(db, organizationId);
+      return supplierId;
+    },
+    buildInput: (resourceId) => ({ id: resourceId, name: 'Renamed by cross-tenant probe' }),
   },
   {
     // Id-scoped by supplierId — the real risk is tenant B reading tenant A's real supplier

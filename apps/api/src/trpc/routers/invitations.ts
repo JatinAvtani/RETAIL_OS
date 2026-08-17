@@ -4,6 +4,7 @@ import {
   acceptInvitationByTokenHash,
   findInvitationByTokenHash,
   InvitationRepository,
+  MembershipListRepository,
   UserRepository,
 } from '@retailos/db';
 import { protectedProcedure, router } from '../trpc';
@@ -17,6 +18,26 @@ const createInput = z.object({
 const acceptInput = z.object({
   token: z.string(),
 });
+
+const revokeInput = z.object({
+  invitationId: z.string().uuid(),
+});
+
+const updateRoleInput = z.object({
+  membershipId: z.string().uuid(),
+  role: z.enum(['OWNER', 'MANAGER', 'STAFF', 'VIEWER_FINANCE']),
+});
+
+const removeMemberInput = z.object({
+  membershipId: z.string().uuid(),
+});
+
+/** Same plain-array-check shape `documents.ts`'s own `requirePermission` established. */
+const requireUsersManage = (permissions: readonly string[]) => {
+  if (!permissions.includes('users:manage')) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'You do not have permission to manage team members.' });
+  }
+};
 
 export const invitationsRouter = router({
   /**
@@ -80,5 +101,87 @@ export const invitationsRouter = router({
     }
 
     return { message: 'Invitation accepted.', organizationId: result.organizationId };
+  }),
+
+  /**
+   * The team-management page's real read surface — genuinely missing until now (found while
+   * building the UI: `invitations.create` existed with zero way to see who's already on the team
+   * or who's still pending). Two separate lists, not one merged view — an accepted member and a
+   * pending invitation are different real entities (a `memberships` row vs. an `invitations` row)
+   * with different available actions (change role/remove vs. revoke), and conflating them would
+   * blur that distinction in the UI.
+   */
+  listMembers: protectedProcedure.query(async ({ ctx }) => {
+    requireUsersManage(ctx.session.permissions);
+    const membershipListRepository = new MembershipListRepository(ctx.db, ctx.session.organizationId);
+    return membershipListRepository.listAcceptedMembers();
+  }),
+
+  listPending: protectedProcedure.query(async ({ ctx }) => {
+    requireUsersManage(ctx.session.permissions);
+    const invitationRepository = new InvitationRepository(ctx.db, ctx.session.organizationId);
+    return invitationRepository.listPending();
+  }),
+
+  revoke: protectedProcedure.input(revokeInput).mutation(async ({ ctx, input }) => {
+    requireUsersManage(ctx.session.permissions);
+    const invitationRepository = new InvitationRepository(ctx.db, ctx.session.organizationId);
+    const revoked = await invitationRepository.revoke(input.invitationId);
+    // NOT_FOUND, not BAD_REQUEST: revoke() is org-scoped (runScoped), so a cross-tenant invitationId
+    // and an already-accepted/revoked one both come back null and are indistinguishable here — the
+    // former must read as "not found," never as "bad state," or a cross-tenant call over-discloses
+    // that the id exists at all (matches updateRole/removeMember's own NOT_FOUND convention below).
+    if (!revoked) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Invitation not found.' });
+    }
+    return { message: 'Invitation revoked.' };
+  }),
+
+  /**
+   * Refuses to demote the organization's LAST owner — a real guard, not cosmetic: an org with zero
+   * accepted OWNER memberships has no one left who can invite, manage roles, or do anything
+   * `users:manage` gates, a genuinely unrecoverable state through the UI (and close to it via the
+   * API too, short of a manual DB fix).
+   */
+  updateRole: protectedProcedure.input(updateRoleInput).mutation(async ({ ctx, input }) => {
+    requireUsersManage(ctx.session.permissions);
+    const membershipListRepository = new MembershipListRepository(ctx.db, ctx.session.organizationId);
+
+    if (input.role !== 'OWNER') {
+      const members = await membershipListRepository.listAcceptedMembers();
+      const target = members.find((m) => m.membershipId === input.membershipId);
+      if (target?.role === 'OWNER') {
+        const ownerCount = await membershipListRepository.countAcceptedOwners();
+        if (ownerCount <= 1) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Cannot change the role of the organization’s only owner.' });
+        }
+      }
+    }
+
+    const updated = await membershipListRepository.updateRole(input.membershipId, input.role);
+    if (!updated) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found.' });
+    }
+    return { message: 'Role updated.' };
+  }),
+
+  removeMember: protectedProcedure.input(removeMemberInput).mutation(async ({ ctx, input }) => {
+    requireUsersManage(ctx.session.permissions);
+    const membershipListRepository = new MembershipListRepository(ctx.db, ctx.session.organizationId);
+
+    const members = await membershipListRepository.listAcceptedMembers();
+    const target = members.find((m) => m.membershipId === input.membershipId);
+    if (target?.role === 'OWNER') {
+      const ownerCount = await membershipListRepository.countAcceptedOwners();
+      if (ownerCount <= 1) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Cannot remove the organization’s only owner.' });
+      }
+    }
+
+    const removed = await membershipListRepository.removeMember(input.membershipId);
+    if (!removed) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found.' });
+    }
+    return { message: 'Member removed.' };
   }),
 });

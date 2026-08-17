@@ -73,6 +73,45 @@ export class SupplierRepository extends TenantScopedRepository<typeof suppliers>
   }
 
   /**
+   * The team-management-style "real editable record" gap the UI audit found: `create` existed,
+   * but nothing let a caller change a supplier's contacts/terms/status after creation — every
+   * field below is a real, spec'd column (07 §7.5), not new scope. `leadTimeDaysContracted` is
+   * editable here (the negotiated promise); `leadTimeDaysMeasured` deliberately is not — it's
+   * derived from real receipts (see `recordMeasuredLeadTime`), never hand-edited.
+   */
+  async update(
+    id: string,
+    input: {
+      name?: string;
+      contacts?: { name: string; email?: string | undefined; phone?: string | undefined; role?: string | undefined }[] | null;
+      paymentTerms?: string | null;
+      leadTimeDaysContracted?: number | null;
+      deliveryDays?: number[] | null;
+      orderCutoffTime?: string | null;
+      minOrderValue?: string | null;
+      status?: 'active' | 'inactive';
+    }
+  ) {
+    const rows = await this.runScoped((db, scopedWhere) =>
+      db
+        .update(suppliers)
+        .set({
+          ...(input.name !== undefined && { name: input.name }),
+          ...(input.contacts !== undefined && { contacts: input.contacts }),
+          ...(input.paymentTerms !== undefined && { paymentTerms: input.paymentTerms }),
+          ...(input.leadTimeDaysContracted !== undefined && { leadTimeDaysContracted: input.leadTimeDaysContracted }),
+          ...(input.deliveryDays !== undefined && { deliveryDays: input.deliveryDays }),
+          ...(input.orderCutoffTime !== undefined && { orderCutoffTime: input.orderCutoffTime }),
+          ...(input.minOrderValue !== undefined && { minOrderValue: input.minOrderValue }),
+          ...(input.status !== undefined && { status: input.status }),
+        })
+        .where(scopedWhere(and(eq(suppliers.id, id), isNull(suppliers.deletedAt))))
+        .returning()
+    );
+    return rows[0] ?? null;
+  }
+
+  /**
    * `leadTimeDaysMeasured` is reality, distinct from the contracted promise — updated separately
    * as real receipts accumulate (EPIC-006+), never derived from `leadTimeDaysContracted`.
    */

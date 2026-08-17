@@ -6,6 +6,26 @@ import { protectedProcedure, router } from '../trpc';
 
 const createInput = z.object({ name: z.string().min(1) });
 const confirmedProductsInput = z.object({ supplierId: z.string().uuid() });
+const getInput = z.object({ id: z.string().uuid() });
+
+const contactInput = z.object({
+  name: z.string().min(1),
+  email: z.string().email().optional(),
+  phone: z.string().optional(),
+  role: z.string().optional(),
+});
+
+const updateInput = z.object({
+  id: z.string().uuid(),
+  name: z.string().min(1).optional(),
+  contacts: z.array(contactInput).nullable().optional(),
+  paymentTerms: z.string().nullable().optional(),
+  leadTimeDaysContracted: z.number().int().nonnegative().nullable().optional(),
+  deliveryDays: z.array(z.number().int().min(1).max(7)).nullable().optional(),
+  orderCutoffTime: z.string().nullable().optional(),
+  minOrderValue: z.string().nullable().optional(),
+  status: z.enum(['active', 'inactive']).optional(),
+});
 
 /**
  * 007-10: the review screen's correction flow needs to resolve an extracted supplier name to a
@@ -22,6 +42,37 @@ export const suppliersRouter = router({
   create: protectedProcedure.input(createInput).mutation(async ({ ctx, input }) => {
     const supplierRepository = new SupplierRepository(ctx.db, ctx.session.organizationId);
     return supplierRepository.create({ id: generateId(), name: input.name });
+  }),
+
+  /** The detail/edit screen's read side — genuinely missing until now (found by the UI audit: `create`/`list` existed, nothing let a caller open a single supplier). */
+  get: protectedProcedure.input(getInput).query(async ({ ctx, input }) => {
+    const supplierRepository = new SupplierRepository(ctx.db, ctx.session.organizationId);
+    const supplier = await supplierRepository.findById(input.id);
+    if (!supplier) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Supplier not found.' });
+    }
+    return supplier;
+  }),
+
+  /** Every field here is a real, spec'd column (07 §7.5) — contacts/terms/lead-time/delivery schedule/status all existed in the schema with no way to edit them after creation. */
+  update: protectedProcedure.input(updateInput).mutation(async ({ ctx, input }) => {
+    const supplierRepository = new SupplierRepository(ctx.db, ctx.session.organizationId);
+    const updated = await supplierRepository.update(input.id, {
+      ...(input.name !== undefined && { name: input.name }),
+      ...(input.contacts !== undefined && { contacts: input.contacts }),
+      ...(input.paymentTerms !== undefined && { paymentTerms: input.paymentTerms }),
+      ...(input.leadTimeDaysContracted !== undefined && { leadTimeDaysContracted: input.leadTimeDaysContracted }),
+      ...(input.deliveryDays !== undefined && { deliveryDays: input.deliveryDays }),
+      ...(input.orderCutoffTime !== undefined && { orderCutoffTime: input.orderCutoffTime }),
+      ...(input.minOrderValue !== undefined && { minOrderValue: input.minOrderValue }),
+      ...(input.status !== undefined && { status: input.status }),
+    });
+    if (!updated) {
+      // NOT_FOUND, not BAD_REQUEST — matches products.update/stores.get's own convention: from
+      // this org's perspective a cross-tenant or nonexistent id is indistinguishable.
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Supplier not found.' });
+    }
+    return updated;
   }),
 
   /**

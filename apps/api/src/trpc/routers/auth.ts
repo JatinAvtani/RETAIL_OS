@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
-import { checkPasswordPolicy, hashPassword, UserRepository, verifyPassword } from '@retailos/db';
+import { checkPasswordPolicy, createOrganizationWithOwner, hashPassword, UserRepository, verifyPassword } from '@retailos/db';
 import {
   establishSessionForUser,
   SESSION_COOKIE_NAME,
@@ -20,6 +20,9 @@ import { protectedProcedure, publicProcedure, router } from '../trpc';
 const signupInput = z.object({
   email: z.string().email(),
   password: z.string(),
+  organizationName: z.string().min(1).max(200),
+  storeName: z.string().min(1).max(200),
+  storeTimezone: z.string().min(1),
 });
 
 const verifyEmailInput = z.object({
@@ -100,7 +103,22 @@ export const authRouter = router({
     }
 
     const passwordHash = await hashPassword(input.password);
-    const { token } = await userRepository.createWithVerificationToken(input.email, passwordHash);
+    const { userId, token } = await userRepository.createWithVerificationToken(input.email, passwordHash);
+
+    // The real "create your workspace" step — previously missing entirely (only seed-demo.mts, a
+    // raw offline script, ever created an organization). Runs in the SAME call as user creation,
+    // not deferred to email verification: signup already only reaches this branch for a genuinely
+    // new email (the `existing` check above), so there's no enumeration concern in doing real work
+    // here — the enumeration-safety property is about the RESPONSE being identical, not about
+    // whether the org gets created server-side. The account still can't LOG IN until email
+    // verification succeeds (auth.login's own existing emailVerifiedAt check), so an unverified
+    // signup can't use the org it was given, matching the product's existing security posture.
+    await createOrganizationWithOwner(ctx.db, {
+      organizationName: input.organizationName,
+      storeName: input.storeName,
+      storeTimezone: input.storeTimezone,
+      userId,
+    });
 
     return {
       message: 'Check your email to verify your account.',

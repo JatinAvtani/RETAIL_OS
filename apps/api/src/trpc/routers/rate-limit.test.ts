@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { eq } from 'drizzle-orm';
-import { createDb, hashPassword, memberships, organizations, users, verificationTokens } from '@retailos/db';
+import { eq, like } from 'drizzle-orm';
+import { createDb, hashPassword, memberships, organizations, stores, users, verificationTokens } from '@retailos/db';
 import { createRedisClient } from '@retailos/session';
 import { generateId } from '@retailos/domain';
 import { buildServer } from '../../server';
@@ -73,6 +73,23 @@ describe('rate limiting on auth endpoints', () => {
     for (const orgId of createdOrgIds) {
       await db.delete(organizations).where(eq(organizations.id, orgId));
     }
+    // auth.signup now also creates a real organization/store/OWNER-membership
+    // (createOrganizationWithOwner) — the 'locks out signup attempts' test drives real signups
+    // whose users are never pushed to createdUserIds (only tracked via usedEmails, for the
+    // rate-limit Redis key), so their cascaded org/store/membership rows are cleaned up here by
+    // the same distinctive email prefix, in FK-dependency order (memberships -> stores/users,
+    // stores -> organizations).
+    const signupLockoutUsers = await db.select().from(users).where(like(users.email, 'signup-lockout-%'));
+    for (const user of signupLockoutUsers) {
+      const userMemberships = await db.select().from(memberships).where(eq(memberships.userId, user.id));
+      for (const membership of userMemberships) {
+        await db.delete(memberships).where(eq(memberships.id, membership.id));
+        await db.delete(stores).where(eq(stores.organizationId, membership.organizationId));
+        await db.delete(organizations).where(eq(organizations.id, membership.organizationId));
+      }
+      await db.delete(verificationTokens).where(eq(verificationTokens.userId, user.id));
+    }
+    await db.delete(users).where(like(users.email, 'signup-lockout-%'));
     for (const ip of usedIps) {
       await redis.del(`rate-limit:auth-ip:${ip}`);
     }
@@ -209,7 +226,13 @@ describe('rate limiting on auth endpoints', () => {
       const { status } = await rpc(
         app,
         'auth.signup',
-        { email, password: 'a-genuinely-long-password-123' },
+        {
+          email,
+          password: 'a-genuinely-long-password-123',
+          organizationName: `Signup Lockout Org ${i}`,
+          storeName: 'Main Store',
+          storeTimezone: 'America/New_York',
+        },
         ip
       );
       expect(status).toBe(200);
@@ -218,7 +241,13 @@ describe('rate limiting on auth endpoints', () => {
     const { status, body } = await rpc(
       app,
       'auth.signup',
-      { email: uniqueEmail('signup-lockout-final'), password: 'a-genuinely-long-password-123' },
+      {
+        email: uniqueEmail('signup-lockout-final'),
+        password: 'a-genuinely-long-password-123',
+        organizationName: 'Signup Lockout Final Org',
+        storeName: 'Main Store',
+        storeTimezone: 'America/New_York',
+      },
       ip
     );
 

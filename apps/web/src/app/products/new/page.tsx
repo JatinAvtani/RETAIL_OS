@@ -105,7 +105,17 @@ export default function NewProductPage() {
               </Select>
             </Field>
 
-            <Field label="Category" hint="Optional.">
+            <Field
+              label="Category"
+              hint={
+                <>
+                  Optional.{' '}
+                  <Link href="/categories" className="font-medium text-accent hover:underline">
+                    Manage categories
+                  </Link>
+                </>
+              }
+            >
               <Select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
                 <option value="">None</option>
                 {categories.map((category) => (

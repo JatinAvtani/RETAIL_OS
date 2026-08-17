@@ -101,7 +101,14 @@ export default function EditProductPage() {
               <Input type="text" value={name} onChange={(e) => setName(e.target.value)} required />
             </Field>
 
-            <Field label="Category">
+            <Field
+              label="Category"
+              hint={
+                <Link href="/categories" className="font-medium text-accent hover:underline">
+                  Manage categories
+                </Link>
+              }
+            >
               <Select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
                 <option value="">None</option>
                 {categories.map((category) => (

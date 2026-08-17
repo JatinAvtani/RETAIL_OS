@@ -338,7 +338,7 @@ export const Field = ({
   children,
 }: {
   label: string;
-  hint?: string;
+  hint?: ReactNode;
   children: ReactNode;
 }) => (
   <label className="block">

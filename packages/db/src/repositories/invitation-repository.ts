@@ -1,4 +1,4 @@
-import { sql } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { generateId } from '@retailos/domain';
 import * as schema from '../schema/index';
@@ -74,6 +74,44 @@ export class InvitationRepository extends TenantScopedRepository<typeof invitati
     );
 
     return { invitationId, token };
+  }
+
+  /** Every real PENDING invitation for this org — not yet accepted, not revoked, not expired. The team-management UI's "invited, waiting" list; genuinely missing until now (found while building it). */
+  async listPending() {
+    return this.runScoped((db, scopedWhere) =>
+      db
+        .select({
+          id: invitations.id,
+          email: invitations.email,
+          role: invitations.role,
+          storeIds: invitations.storeIds,
+          expiresAt: invitations.expiresAt,
+          createdAt: invitations.createdAt,
+        })
+        .from(invitations)
+        .where(
+          scopedWhere(
+            and(isNull(invitations.acceptedAt), isNull(invitations.revokedAt), gt(invitations.expiresAt, new Date()))
+          )
+        )
+        .orderBy(desc(invitations.createdAt))
+    );
+  }
+
+  /** Revokes a pending invitation — the invitee's token stops working immediately (`accept` checks `revokedAt IS NULL`). Refuses an already-accepted/revoked/expired invitation (returns null) rather than silently no-op-succeeding, so the caller knows nothing changed. */
+  async revoke(invitationId: string) {
+    const rows = await this.runScoped((db, scopedWhere) =>
+      db
+        .update(invitations)
+        .set({ revokedAt: new Date() })
+        .where(
+          scopedWhere(
+            and(eq(invitations.id, invitationId), isNull(invitations.acceptedAt), isNull(invitations.revokedAt))
+          )
+        )
+        .returning()
+    );
+    return rows[0] ?? null;
   }
 }
 

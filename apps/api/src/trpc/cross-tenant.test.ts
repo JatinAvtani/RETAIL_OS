@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { eq, like } from 'drizzle-orm';
 import {
   auditLogs,
   createDb,
@@ -10,6 +10,7 @@ import {
   goodsReceiptLines,
   goodsReceipts,
   hashPassword,
+  invitations,
   invoiceMatchLines,
   invoiceMatches,
   supplierPerformanceEvents,
@@ -164,6 +165,16 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
       await db.delete(purchaseOrders).where(eq(purchaseOrders.organizationId, orgId));
     }
 
+    for (const orgId of createdOrgIds) {
+      // invitations.invitedBy references users, and invitations.organizationId references
+      // organizations — must be cleaned up before EITHER the users loop below or the
+      // organizations delete further down. Found while adding invitations.revoke/updateRole/
+      // removeMember's own cross-tenant registry entries — the same recurring "a shared fixture
+      // never imported/cleaned up a table no prior entry ever exercised" class this project's
+      // memory has documented many times.
+      await db.delete(invitations).where(eq(invitations.organizationId, orgId));
+    }
+
     for (const userId of createdUserIds) {
       const tokens = await redis.smembers(`user-sessions:${userId}`);
       if (tokens.length > 0) {
@@ -172,6 +183,21 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
       await db.delete(memberships).where(eq(memberships.userId, userId));
       await db.delete(users).where(eq(users.id, userId));
     }
+    // seedInvitation/seedMembership (cross-tenant-registry.ts) each create an EXTRA real user row
+    // (an inviter, a second member) that never goes through setUpRealTenant, so it's never pushed
+    // to createdUserIds above. Cleaned up by their own real, distinctive email prefix instead of
+    // threading a second id list through seedResource's single-string-return contract.
+    // seedMembership additionally inserts a real memberships row for that same probe user
+    // (memberships.user_id -> users.id) — must be gone before the users delete below, the same
+    // recurring FK-teardown-order bug class this shared fixture has hit repeatedly. A first version
+    // of this cleanup deleted the probe users directly and hit a real
+    // `memberships_user_id_users_id_fk` violation, which — because afterEach itself threw —
+    // cascaded into failures on unrelated entries in the same run.
+    const probeUsers = await db.select({ id: users.id }).from(users).where(like(users.email, 'cross-tenant-probe-%'));
+    for (const probeUser of probeUsers) {
+      await db.delete(memberships).where(eq(memberships.userId, probeUser.id));
+    }
+    await db.delete(users).where(like(users.email, 'cross-tenant-probe-%'));
     for (const orgId of createdOrgIds) {
       await db.delete(stockLevels).where(eq(stockLevels.organizationId, orgId));
       // goods_receipts/goods_receipt_lines and the lots.goods_receipt_line_id <-> mutual FK cycle
