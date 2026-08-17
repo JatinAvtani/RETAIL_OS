@@ -4,3 +4,7 @@ export * from './gemini-extraction-provider';
 export * from './tesseract-extraction-provider';
 export * from './circuit-breaker-extraction-provider';
 export * from './embedding-provider';
+export * from './chat-provider';
+export * from './gemini-chat-provider';
+export * from './model-config';
+export * from './intent-classification';

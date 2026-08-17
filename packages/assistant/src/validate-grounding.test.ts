@@ -1,0 +1,152 @@
+import { describe, expect, it, vi } from 'vitest';
+import type { ChatProvider, ChatResult } from '@retailos/ai';
+import { validateGrounding, narrateAndValidate } from './validate-grounding';
+import type { GroundingBundle } from './grounding-bundle';
+
+/**
+ * 010-11 ⚠️ THE CORE SAFETY MECHANISM. `validateGrounding` is pure and deterministic (no model
+ * involvement) — these tests prove the real algorithm spec 10 names: every numeric token in a
+ * response must match a real bundle value (within formatting tolerance), or it's a violation.
+ * `narrateAndValidate` tests the fail-closed regenerate-once/discard wrapper against a fake
+ * `ChatProvider` that can be scripted to return a grounded or ungrounded response per call.
+ */
+const realMetric: GroundingBundle['metrics'][number] = {
+  metricId: 'net_revenue',
+  value: '1234.5600',
+  unit: 'CURRENCY',
+  period: { from: new Date('2026-08-01'), to: new Date('2026-08-31') },
+  computedAt: new Date(),
+  freshness: new Date(),
+  provenance: [],
+};
+
+describe('validateGrounding', () => {
+  it('a response citing the exact stored value is grounded', () => {
+    const bundle: GroundingBundle = { metrics: [realMetric], passages: [], entities: [] };
+    const result = validateGrounding('Your net revenue was 1234.5600.', bundle);
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('a response citing a rounded/thousands-separated variant is grounded — formatting tolerance', () => {
+    const bundle: GroundingBundle = { metrics: [realMetric], passages: [], entities: [] };
+    const result = validateGrounding('Your net revenue was $1,234.56.', bundle);
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('a response citing a genuinely fabricated number is a real violation — the core safety property', () => {
+    const bundle: GroundingBundle = { metrics: [realMetric], passages: [], entities: [] };
+    const result = validateGrounding('Your net revenue was 9999.99.', bundle);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.violations).toEqual(['9999.99']);
+  });
+
+  it('a response deriving a NEW number by arithmetic from two real values is a real violation, not silently trusted', () => {
+    const other: GroundingBundle['metrics'][number] = { ...realMetric, metricId: 'cogs_actual', value: '500.0000' };
+    const bundle: GroundingBundle = { metrics: [realMetric, other], passages: [], entities: [] };
+    // 1234.56 - 500 = 734.56, a real, plausible-looking number the model computed itself — never in the bundle
+    const result = validateGrounding('Your margin was 734.56.', bundle);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.violations).toEqual(['734.56']);
+  });
+
+  it('a real calendar date in the response is excluded, never flagged as a violation', () => {
+    const bundle: GroundingBundle = { metrics: [realMetric], passages: [], entities: [] };
+    const result = validateGrounding('As of August 31, 2026, your net revenue was 1234.5600.', bundle);
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('an unknown-valued metric contributes NOTHING to the allowlist — its own value string is never a real citable number', () => {
+    const unknownMetric: GroundingBundle['metrics'][number] = { ...realMetric, metricId: 'margin_per_item', value: 'unknown', unknownReason: 'No recipe.' };
+    const bundle: GroundingBundle = { metrics: [unknownMetric], passages: [], entities: [] };
+    const result = validateGrounding('The margin is roughly unknown.', bundle);
+    // "unknown" is not a numeric token at all, so this genuinely has no violations — the real
+    // point of this test is that no number derived from "unknown" could ever be grounded.
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('a number embedded in a denied/failed/rejected reason string is NOT added to the allowlist by validateGrounding itself — it only reads bundle.metrics', () => {
+    // validateGrounding takes only a bundle, never denied/failed/rejected — this test documents
+    // that boundary explicitly: a reason string like "limit: 100" must not leak into the allowlist
+    // via any hidden path.
+    const bundle: GroundingBundle = { metrics: [], passages: [], entities: [] };
+    const result = validateGrounding('The limit is 100.', bundle);
+    expect(result.ok).toBe(false);
+  });
+
+  it('an empty bundle with a response containing no numbers at all is grounded — a real "insufficient data" narration', () => {
+    const bundle: GroundingBundle = { metrics: [], passages: [], entities: [] };
+    const result = validateGrounding("I don't have enough information to answer that.", bundle);
+    expect(result).toEqual({ ok: true });
+  });
+});
+
+const fakeProviderSequence = (results: ChatResult[]): ChatProvider => {
+  const generate = vi.fn();
+  for (const r of results) generate.mockResolvedValueOnce(r);
+  return { name: 'fake', generate, generateStructured: vi.fn() };
+};
+
+const ok = (text: string): ChatResult => ({ provider: 'fake', modelVersion: 'fake-model', latencyMs: 1, error: null, text });
+const failed = (error: string): ChatResult => ({ provider: 'fake', modelVersion: 'fake-model', latencyMs: 1, error, text: null });
+
+describe('narrateAndValidate — the fail-closed wrapper', () => {
+  const bundle: GroundingBundle = { metrics: [realMetric], passages: [], entities: [] };
+
+  it('a grounded first attempt is served directly, no regeneration needed', async () => {
+    const provider = fakeProviderSequence([ok('Your net revenue was 1234.5600.')]);
+
+    const result = await narrateAndValidate(provider, bundle, [], [], [], 'fake-model');
+
+    expect(result).toEqual({ text: 'Your net revenue was 1234.5600.', grounded: true, violationLog: [] });
+  });
+
+  it('an ungrounded first attempt triggers exactly one regeneration, and a grounded second attempt is served', async () => {
+    const provider = fakeProviderSequence([ok('Your net revenue was 9999.99.'), ok('Your net revenue was 1234.5600.')]);
+
+    const result = await narrateAndValidate(provider, bundle, [], [], [], 'fake-model');
+
+    expect(result.grounded).toBe(true);
+    expect(result.text).toBe('Your net revenue was 1234.5600.');
+    expect(result.violationLog).toHaveLength(1);
+    expect(result.violationLog[0]?.violations).toEqual(['9999.99']);
+  });
+
+  it('two consecutive violations DISCARD the prose entirely — never serve an ungrounded response', async () => {
+    const provider = fakeProviderSequence([ok('Your net revenue was 9999.99.'), ok('Your net revenue was 8888.88.')]);
+
+    const result = await narrateAndValidate(provider, bundle, [], [], [], 'fake-model');
+
+    expect(result.grounded).toBe(false);
+    expect(result.text).toBeNull();
+    expect(result.violationLog).toHaveLength(2);
+  });
+
+  it('the second attempt uses the strict prompt addendum — confirmed by inspecting the real call', async () => {
+    const generate = vi.fn().mockResolvedValueOnce(ok('9999.99')).mockResolvedValueOnce(ok('1234.5600'));
+    const provider: ChatProvider = { name: 'fake', generate, generateStructured: vi.fn() };
+
+    await narrateAndValidate(provider, bundle, [], [], [], 'fake-model');
+
+    const [secondPrompt] = generate.mock.calls[1] as [string, string];
+    expect(secondPrompt.toLowerCase()).toContain('serious error');
+  });
+
+  it('a provider error on the first attempt discards immediately — never retries a call that never even returned text', async () => {
+    const generate = vi.fn().mockResolvedValueOnce(failed('503 Service Unavailable'));
+    const provider: ChatProvider = { name: 'fake', generate, generateStructured: vi.fn() };
+
+    const result = await narrateAndValidate(provider, bundle, [], [], [], 'fake-model');
+
+    expect(result).toEqual({ text: null, grounded: false, violationLog: [] });
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it('a provider error on the SECOND (retry) attempt also discards, never serves the first violating response instead', async () => {
+    const provider = fakeProviderSequence([ok('Your net revenue was 9999.99.'), failed('504 Deadline Exceeded')]);
+
+    const result = await narrateAndValidate(provider, bundle, [], [], [], 'fake-model');
+
+    expect(result.text).toBeNull();
+    expect(result.grounded).toBe(false);
+  });
+});

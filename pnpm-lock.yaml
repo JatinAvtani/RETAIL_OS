@@ -214,6 +214,40 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.1)(lightningcss@1.32.0)
 
+  packages/assistant:
+    dependencies:
+      '@retailos/ai':
+        specifier: workspace:*
+        version: link:../ai
+      '@retailos/authz':
+        specifier: workspace:*
+        version: link:../authz
+      '@retailos/db':
+        specifier: workspace:*
+        version: link:../db
+      '@retailos/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@retailos/metrics':
+        specifier: workspace:*
+        version: link:../metrics
+      decimal.js:
+        specifier: ^10.6.0
+        version: 10.6.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      drizzle-orm:
+        specifier: ^0.36.4
+        version: 0.36.4(@types/react@19.2.18)(postgres@3.4.9)(react@19.2.8)
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)(lightningcss@1.32.0)
+
   packages/authz:
     dependencies:
       '@retailos/domain':
