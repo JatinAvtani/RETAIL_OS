@@ -4,9 +4,13 @@ import Decimal from 'decimal.js';
 import {
   DashboardRepository,
   MenuItemRepository,
+  ParLevelRepository,
   PosConnectionRepository,
+  PurchaseOrderRepository,
   RecipeRepository,
   StoreRepository,
+  StockLevelRepository,
+  type PurchaseOrderStatus,
 } from '@retailos/db';
 import { canAccessStore, type AuthContext, type Permission } from '@retailos/authz';
 import { money } from '@retailos/domain';
@@ -21,7 +25,7 @@ import {
   type WasteLine,
 } from '@retailos/metrics';
 import { protectedProcedure, router } from '../trpc';
-import { resolveRecipeUnitCost } from '../../metrics/recipe-cost-resolver';
+import { resolveRecipeUnitCost } from '@retailos/metrics';
 
 /** `numeric > numeric` compares as strings otherwise — never string-compare a decimal figure. */
 type TrendDirection = 'up' | 'down' | 'flat';
@@ -55,6 +59,38 @@ const summaryInput = z.object({
   days: z.number().int().min(1).max(365).default(30),
 });
 
+/**
+ * 009-16 — the finite set of owner/manager dashboard figures with a real drill-through source.
+ * Not every registered metric is here (67 exist, most have no dashboard presence yet) — confirmed
+ * with the user: this covers exactly the figures `summary`/`managerSummary` currently render.
+ * `items_by_contribution`/`below_reorder_point`/`expiry_queue` are deliberately absent — each
+ * already carries a real entity id per row (`menuItemId`/`productId`/`lotId`) straight from
+ * `summary`/`managerSummary` themselves, so they need no separate drill-through call at all.
+ */
+const drillThroughFigures = [
+  'net_revenue',
+  'transaction_count',
+  'average_transaction_value',
+  'cogs_actual',
+  'cogs_theoretical',
+  'cost_variance',
+  'contribution_margin',
+  'food_cost_percentage',
+  'stock_value',
+  'waste_total',
+  'waste_by_reason',
+] as const;
+type DrillThroughFigure = (typeof drillThroughFigures)[number];
+
+const drillThroughInput = z.object({
+  storeId: z.string().uuid(),
+  figure: z.enum(drillThroughFigures),
+  from: z.coerce.date(),
+  to: z.coerce.date(),
+  /** Only meaningful for `waste_by_reason` — which reason's rows to return. Ignored otherwise. */
+  reasonCode: z.string().optional(),
+});
+
 const numberOrNull = (value: string | 'unknown'): number | null =>
   value === 'unknown' ? null : Number(value);
 
@@ -68,9 +104,10 @@ const moneyOrNull = (value: string | 'unknown', currency: string) =>
  * own acceptance criterion) true by construction: both call the same registered function, not two
  * independently-written code paths that happen to agree today.
  *
- * `resolveRecipeUnitCost` lives in `apps/api` (it throws `TRPCError`), so it's injected onto
- * `MarginMetricContext` here rather than imported into `packages/metrics` — see
- * `catalog-entries.ts`'s own header for why crossing that boundary the other way would be wrong.
+ * `resolveRecipeUnitCost` (009-01, `@retailos/metrics`) is still injected onto `MarginMetricContext`
+ * here rather than called directly inside the catalog entry — see `catalog-entries.ts`'s own header:
+ * the catalog module stays free of concrete DB-repository wiring, taking its collaborators as
+ * parameters instead, the same pattern `PostingService`/`MovementService` already use.
  */
 export const dashboardRouter = router({
   summary: protectedProcedure.input(summaryInput).query(async ({ ctx, input }) => {
@@ -133,6 +170,7 @@ export const dashboardRouter = router({
     const [
       netRevenue,
       transactionCount,
+      averageTransactionValue,
       cogsActual,
       cogsTheoretical,
       costVariance,
@@ -152,7 +190,8 @@ export const dashboardRouter = router({
       itemsByContribution,
     ] = await Promise.all([
       executeMetric('net_revenue', metricParams, auth, metricCtx),
-      dashboard.countTransactions(input.storeId, from, to),
+      executeMetric('transaction_count', metricParams, auth, metricCtx),
+      executeMetric('average_transaction_value', metricParams, auth, metricCtx),
       executeMetric('cogs_actual', metricParams, auth, metricCtx),
       executeMetric('cogs_theoretical', metricParams, auth, metricCtx),
       executeMetric('cost_variance', metricParams, auth, metricCtx),
@@ -273,15 +312,11 @@ export const dashboardRouter = router({
       period: { from: from.toISOString(), to: to.toISOString(), days: input.days },
       currency,
       netRevenue: moneyOrNull(netRevenue.value, currency),
-      transactionCount,
+      // transaction_count's own catalog entry is a plain COUNT(*) — always a real number, never
+      // 'unknown' (an absence of transactions is a real zero, not a missing fact).
+      transactionCount: Number(transactionCount.value),
       unitsSold,
-      averageTransactionValue:
-        transactionCount > 0 && netRevenue.value !== 'unknown'
-          ? moneyOrNull(
-              new Decimal(netRevenue.value).dividedBy(transactionCount).toFixed(4),
-              currency
-            )
-          : null,
+      averageTransactionValue: moneyOrNull(averageTransactionValue.value, currency),
       cogsActual: moneyOrNull(cogsActual.value, currency),
       cogsTheoretical: moneyOrNull(cogsTheoretical.value, currency),
       costVariance: {
@@ -348,5 +383,215 @@ export const dashboardRouter = router({
         unknownCostConsumptionEvents,
       },
     };
+  }),
+
+  /**
+   * The manager dashboard's read surface (spec 12 §12.5): "items below reorder point · expiry
+   * queue by value at risk · pending receipts · documents awaiting review · today's sales vs.
+   * forecast/average · open PO status." Same `executeMetric`/`tryMetric` discipline as `summary` —
+   * every real number comes from the registered catalog, never computed ad hoc here.
+   *
+   * `forecast` is deliberately NOT built — confirmed with the user: no forecasting capability
+   * exists anywhere in this codebase, and spec 00 §00-overview states explicitly "No forecasts in
+   * MVP. Ships with forecasting in V2." This surfaces "today vs. trailing average" only, the
+   * honest, buildable half of the spec's own wording — not a silent substitution.
+   *
+   * "Items below reorder point" uses the SIMPLE literal `quantity <= reorder_point` check
+   * (`ParLevelRepository.findBelowReorderPointForStore`), confirmed with the user as distinct from
+   * `suggestReorder`'s richer supplier-grouped suggestion engine (already its own page,
+   * `/purchase-orders/suggestions`) — this is a "needs attention" count, not "here's what to order."
+   */
+  managerSummary: protectedProcedure.input(summaryInput).query(async ({ ctx, input }) => {
+    const storeRepository = new StoreRepository(ctx.db, ctx.session.organizationId);
+    const store = await storeRepository.findById(input.storeId);
+    if (!store || !canAccessStore(ctx.session, input.storeId)) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Store not found.' });
+    }
+
+    const to = new Date();
+    const from = new Date(to.getTime() - input.days * 24 * 60 * 60 * 1000);
+    const todayStart = new Date(to.getTime() - 24 * 60 * 60 * 1000);
+    const currency = 'USD' as const;
+
+    const auth: AuthContext = {
+      userId: ctx.session.userId,
+      organizationId: ctx.session.organizationId,
+      storeIds: ctx.session.storeIds,
+      role: ctx.session.role,
+      permissions: new Set(ctx.session.permissions as Permission[]),
+    };
+    const metricCtx = { db: ctx.db, organizationId: ctx.session.organizationId, storeIds: ctx.session.storeIds };
+
+    const parLevelRepository = new ParLevelRepository(ctx.db, ctx.session.organizationId);
+    const stockLevelRepository = new StockLevelRepository(ctx.db, ctx.session.organizationId);
+    const purchaseOrderRepository = new PurchaseOrderRepository(ctx.db, ctx.session.organizationId);
+
+    // "Open" excludes the three terminal states (RECEIVED/CLOSED/CANCELLED) — a PO that has fully
+    // arrived or been closed out isn't something a manager needs to act on today.
+    const OPEN_STATUSES: PurchaseOrderStatus[] = ['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'SENT', 'PARTIALLY_RECEIVED'];
+
+    const [
+      belowReorderPoint,
+      expiringLots,
+      pendingReceiptsCount,
+      openPoCounts,
+      documentsPendingReview,
+      documentsPendingReviewOldestAge,
+      todayNetRevenue,
+      trailingNetRevenue,
+    ] = await Promise.all([
+      parLevelRepository.findBelowReorderPointForStore(input.storeId),
+      stockLevelRepository.findExpiringLots(input.storeId),
+      purchaseOrderRepository.countPendingReceipts(input.storeId),
+      Promise.all(OPEN_STATUSES.map((status) => purchaseOrderRepository.countByStatus(input.storeId, status))),
+      tryMetric(() => executeMetric('documents_pending_review', { storeId: input.storeId }, auth, metricCtx)),
+      tryMetric(() => executeMetric('documents_pending_review_oldest_age_days', { storeId: input.storeId }, auth, metricCtx)),
+      tryMetric(() => executeMetric('net_revenue', { storeId: input.storeId, from: todayStart, to }, auth, metricCtx)),
+      tryMetric(() => executeMetric('net_revenue', { storeId: input.storeId, from, to }, auth, metricCtx)),
+    ]);
+
+    const trailingDailyAverage =
+      trailingNetRevenue && trailingNetRevenue.value !== 'unknown'
+        ? new Decimal(trailingNetRevenue.value).dividedBy(input.days)
+        : null;
+    const todayValue = todayNetRevenue && todayNetRevenue.value !== 'unknown' ? new Decimal(todayNetRevenue.value) : null;
+
+    return {
+      period: { from: from.toISOString(), to: to.toISOString(), days: input.days },
+      currency,
+      belowReorderPoint: {
+        count: belowReorderPoint.length,
+        items: belowReorderPoint.map((row) => ({
+          productId: row.productId,
+          variantId: row.variantId,
+          quantityOnHand: row.quantityOnHand,
+          reorderPoint: row.reorderPoint,
+        })),
+      },
+      expiryQueue: {
+        totalValueAtRisk: expiringLots
+          .reduce((sum, lot) => sum.plus(new Decimal(lot.valueAtRisk)), new Decimal(0))
+          .toFixed(4),
+        lots: expiringLots.map((lot) => ({
+          lotId: lot.lotId,
+          daysToExpiry: lot.daysToExpiry,
+          remainingQuantity: lot.remainingQuantity,
+          valueAtRisk: lot.valueAtRisk,
+        })),
+      },
+      pendingReceipts: { count: pendingReceiptsCount },
+      openPurchaseOrders: OPEN_STATUSES.map((status, i) => ({ status, count: openPoCounts[i]! })),
+      documentsAwaitingReview: {
+        count: documentsPendingReview && documentsPendingReview.value !== 'unknown' ? Number(documentsPendingReview.value) : null,
+        oldestAgeDays:
+          documentsPendingReviewOldestAge && documentsPendingReviewOldestAge.value !== 'unknown'
+            ? Number(documentsPendingReviewOldestAge.value)
+            : null,
+      },
+      /**
+       * "Today's sales vs. trailing average" — the honest, buildable half of spec 12 §12.5's
+       * "vs. forecast/average" (no forecasting capability exists, see this procedure's own header).
+       * `direction: null` when either side is unknown — never a fabricated verdict.
+       */
+      todayVsAverage: {
+        today: moneyOrNull(todayNetRevenue?.value ?? 'unknown', currency),
+        trailingDailyAverage: trailingDailyAverage ? moneyOrNull(trailingDailyAverage.toFixed(4), currency) : null,
+        direction: numericDelta(
+          todayValue ? todayValue.toNumber() : null,
+          trailingDailyAverage ? trailingDailyAverage.toNumber() : null
+        ),
+      },
+    };
+  }),
+
+  /**
+   * 009-16 — the real source rows behind a dashboard figure (spec 12 §12.5: "every number is
+   * drillable to source rows"). Deliberately a SEPARATE query, not carried on `summary`'s own
+   * response — most figures are never expanded, and fetching every drill-through row set on every
+   * dashboard load would multiply the query cost of a page most sessions only summarize, not audit.
+   * `figure` is a closed enum (`drillThroughFigures` above), not a free-text table/column name —
+   * an open string would let a caller probe arbitrary tables, a real I4-adjacent risk this endpoint
+   * exists specifically to avoid. Every branch is period+store-bounded through the SAME
+   * `DashboardRepository`/`StockLevelRepository` this router's other procedures already use.
+   */
+  drillThrough: protectedProcedure.input(drillThroughInput).query(async ({ ctx, input }) => {
+    const storeRepository = new StoreRepository(ctx.db, ctx.session.organizationId);
+    const store = await storeRepository.findById(input.storeId);
+    if (!store || !canAccessStore(ctx.session, input.storeId)) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Store not found.' });
+    }
+
+    const dashboard = new DashboardRepository(ctx.db, ctx.session.organizationId);
+    const figure: DrillThroughFigure = input.figure;
+
+    switch (figure) {
+      case 'net_revenue':
+      case 'transaction_count':
+      case 'average_transaction_value': {
+        const rows = await dashboard.findSalesLinesForDrillThrough(input.storeId, input.from, input.to);
+        return {
+          figure,
+          rows: rows.map((row) => ({
+            id: row.id,
+            occurredAt: row.occurredAt.toISOString(),
+            label: row.menuItemName ?? 'Unmapped item',
+            amount: { amount: row.lineTotal, currency: row.currency },
+            quantity: row.quantity,
+          })),
+        };
+      }
+      case 'cogs_actual': {
+        const rows = await dashboard.findConsumptionForDrillThrough(input.storeId, input.from, input.to);
+        return {
+          figure,
+          rows: rows.map((row) => ({
+            id: row.id,
+            occurredAt: row.occurredAt.toISOString(),
+            label: row.productName ?? 'Unknown product',
+            amount: row.unitCost === null ? null : { amount: new Decimal(row.unitCost).times(new Decimal(row.quantity).abs()).toFixed(4), currency: row.currency ?? 'USD' },
+            quantity: new Decimal(row.quantity).abs().toString(),
+          })),
+        };
+      }
+      // These four are composite figures — no single source table backs them beyond the same
+      // sales+consumption rows `cogs_actual`/`net_revenue` already expose. Rather than a fourth
+      // near-duplicate fetch, they point the caller at the two real underlying figures.
+      case 'cogs_theoretical':
+      case 'cost_variance':
+      case 'contribution_margin':
+      case 'food_cost_percentage': {
+        return { figure, rows: [], relatedFigures: ['net_revenue', 'cogs_actual'] as const };
+      }
+      case 'stock_value': {
+        const stockLevelRepository = new StockLevelRepository(ctx.db, ctx.session.organizationId);
+        const rows = await stockLevelRepository.findStockValueForDrillThrough(input.storeId);
+        return {
+          figure,
+          rows: rows.map((row) => ({
+            id: row.id,
+            label: row.productName,
+            amount: { amount: new Decimal(row.remainingQuantity).times(row.unitCost).toFixed(4), currency: row.currency },
+            quantity: row.remainingQuantity,
+            expiryDate: row.expiryDate,
+          })),
+        };
+      }
+      case 'waste_total':
+      case 'waste_by_reason': {
+        const rows = await dashboard.findWasteForDrillThrough(input.storeId, input.from, input.to);
+        const filtered = figure === 'waste_by_reason' && input.reasonCode ? rows.filter((row) => row.reasonCode === input.reasonCode) : rows;
+        return {
+          figure,
+          rows: filtered.map((row) => ({
+            id: row.id,
+            occurredAt: row.occurredAt.toISOString(),
+            label: row.productName ?? 'Unknown product',
+            amount: row.unitCost === null ? null : { amount: new Decimal(row.unitCost).times(new Decimal(row.quantity).abs()).toFixed(4), currency: row.currency ?? 'USD' },
+            quantity: new Decimal(row.quantity).abs().toString(),
+            reasonCode: row.reasonCode,
+          })),
+        };
+      }
+    }
   }),
 });

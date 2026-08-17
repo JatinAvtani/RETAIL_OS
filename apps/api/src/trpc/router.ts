@@ -19,6 +19,7 @@ import { goodsReceiptsRouter } from './routers/goods-receipts';
 import { invoiceMatchesRouter } from './routers/invoice-matches';
 import { settingsRouter } from './routers/settings';
 import { supplierPerformanceRouter } from './routers/supplier-performance';
+import { searchRouter } from './routers/search';
 
 export const appRouter = router({
   auth: authRouter,
@@ -41,6 +42,7 @@ export const appRouter = router({
   invoiceMatches: invoiceMatchesRouter,
   settings: settingsRouter,
   supplierPerformance: supplierPerformanceRouter,
+  search: searchRouter,
 });
 
 export type AppRouter = typeof appRouter;

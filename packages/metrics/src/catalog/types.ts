@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import type { Redis } from 'ioredis';
 import type { createDb } from '@retailos/db';
 import type { Permission } from '@retailos/authz';
 
@@ -36,6 +37,13 @@ export type MetricContext = {
   db: Db;
   organizationId: string;
   storeIds: string[] | 'ALL';
+  /**
+   * Optional cache client (009-12). When present, `executeMetric` serves a cache hit and
+   * single-flights a miss instead of calling `execute` directly. Omitted entirely, this context
+   * behaves exactly as it always has — a plain live query every call, matching every existing
+   * caller (test files, any consumer not yet updated to pass a Redis client).
+   */
+  cache?: Redis;
 };
 
 /** One source table (or fact table, once 009-01 exists) a metric reads — powers provenance. */

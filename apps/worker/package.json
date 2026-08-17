@@ -15,6 +15,7 @@
     "@retailos/domain": "workspace:*",
     "@retailos/db": "workspace:*",
     "@retailos/ai": "workspace:*",
+    "@retailos/metrics": "workspace:*",
     "@retailos/queue": "workspace:*",
     "@retailos/storage": "workspace:*",
     "bullmq": "6.0.8",

@@ -15,6 +15,7 @@
     "@retailos/db": "workspace:*",
     "@retailos/domain": "workspace:*",
     "decimal.js": "^10.6.0",
+    "ioredis": "^5.4.2",
     "zod": "^4.4.3"
   },
   "devDependencies": {

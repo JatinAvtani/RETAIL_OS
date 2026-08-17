@@ -2,7 +2,7 @@ import { bigint, integer, jsonb, numeric, pgEnum, pgTable, text, timestamp, uniq
 import { organizations } from './organizations';
 import { stores } from './stores';
 import { users } from './users';
-import { idColumn, softDelete, timestamps } from './columns';
+import { idColumn, softDelete, timestamps, vector } from './columns';
 
 /**
  * EPIC-007 (plan.md Phase 1): supplier documents (mostly invoices) — the origin of the costing
@@ -110,6 +110,31 @@ export const documentExtractions = pgTable('document_extractions', {
   validation: jsonb('validation').notNull(), // ValidationResult — issues[], canAutoApprove
   overallConfidence: numeric('overall_confidence', { precision: 5, scale: 4 }),
   extractedAt: timestamp('extracted_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * 009-18 (spec 11 §11.5) — one row per document, embedding a synthetic descriptive text assembled
+ * from its already-approved extracted fields (`buildDocumentEmbeddingText`, `@retailos/domain`) —
+ * no raw OCR full-text is persisted anywhere in this schema (confirmed with the user before
+ * building this), so this is the real, honest corpus. `embedding` is declared via the `vector`
+ * customType (migration `0042_document_embeddings.sql`) — application code never reads/writes it
+ * through Drizzle's typed builder (raw `sql` handles every real write/similarity query, since
+ * pgvector's operators have no builder representation either); it's declared here purely so
+ * `drizzle-kit`'s own schema introspection stays aware of the column. `documentId` is UNIQUE — one
+ * embedding per document, re-generated (not appended) on re-approval.
+ */
+export const documentEmbeddings = pgTable('document_embeddings', {
+  id: idColumn(),
+  organizationId: uuid('organization_id')
+    .notNull()
+    .references(() => organizations.id),
+  documentId: uuid('document_id')
+    .notNull()
+    .references(() => documents.id),
+  model: text('model').notNull(),
+  sourceText: text('source_text').notNull(),
+  embedding: vector('embedding', 768).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 /**

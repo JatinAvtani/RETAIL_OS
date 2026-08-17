@@ -1,4 +1,3 @@
-import { TRPCError } from '@trpc/server';
 import { Decimal } from 'decimal.js';
 import {
   ProductRepository,
@@ -23,27 +22,43 @@ import {
   type RecipeResolver,
   type Unit,
 } from '@retailos/domain';
-import { computeRecipeCost, type RecipeCostLine } from '@retailos/metrics';
+import { computeRecipeCost, type RecipeCostLine } from './recipe-cost.js';
 
 type Db = ReturnType<typeof createDb>['db'];
 
 /**
- * Resolving a recipe's cost is genuinely involved — recursive explosion, per-ingredient supplier
- * price lookup, cheapest-confirmed-price selection, and unit conversion into the unit the price is
- * expressed in. It lives here, shared, rather than inside one router, because two callers now need
- * it (the recipe detail page and the dashboard's theoretical COGS). Two copies of this logic would
- * eventually disagree, and a recipe costing $1.25 on one screen and $1.27 on another destroys
- * confidence in every number the product shows.
+ * The REAL, production recipe-cost resolver (009-01) — moved here from
+ * `apps/api/src/metrics/recipe-cost-resolver.ts` so BOTH `apps/api` (the dashboard's own injected
+ * `resolveRecipeUnitCost`) and `apps/worker` (the fact-aggregation job's real theoretical-COGS
+ * need) can share the identical implementation, rather than each app maintaining its own copy —
+ * confirmed with the user over stubbing theoretical COGS as permanently unknown in the worker
+ * context, since two real consumers needing the same recipe-resolution logic is exactly the
+ * situation I2 exists to prevent from drifting into two independently-maintained formulas.
  *
- * Note the division of responsibility: this module RESOLVES inputs (lookup, conversion, choosing
- * a price) and hands them to `computeRecipeCost` in the metric catalog, which is the only place
- * they are summed.
+ * Recipe cost resolution is genuinely involved — recursive explosion, per-ingredient supplier
+ * price lookup, cheapest-confirmed-price selection, and unit conversion into the unit the price is
+ * expressed in. Division of responsibility unchanged from the original: this module RESOLVES
+ * inputs (lookup, conversion, choosing a price) and hands them to `computeRecipeCost` (this same
+ * package), which is the only place they are summed.
+ *
+ * The one real change from the `apps/api` original: `RecipeNotFoundError`/`RecipeResolutionError`
+ * (plain `Error` subclasses) replace `TRPCError` throws — `packages/metrics` has no dependency on
+ * `@trpc/server` and must not gain one just for this; `apps/api`'s own call site is responsible for
+ * catching these and mapping them to its own `TRPCError` shape at its own boundary, matching every
+ * other packages/metrics function's "throws plain errors, the HTTP layer translates them" contract.
  */
+
+export class RecipeNotFoundError extends Error {
+  constructor(recipeGroupId: string) {
+    super(`Recipe '${recipeGroupId}' not found.`);
+    this.name = 'RecipeNotFoundError';
+  }
+}
 
 /**
  * Recursively loads every recipe version reachable from `recipeGroupId` into `preloaded` — a plain
- * per-request local `Map`, never a persistent/shared cache, so there is no cross-tenant collision
- * surface: it is garbage collected the moment the calling request finishes. Named `preloaded`
+ * per-call local `Map`, never a persistent/shared cache, so there is no cross-tenant collision
+ * surface: it is garbage collected the moment the calling request/job finishes. Named `preloaded`
  * rather than `cache` to keep that legible.
  *
  * `explodeRecipe` is pure/no-I/O by design, so every row it might need must be fetched BEFORE
@@ -72,10 +87,7 @@ export const preloadRecipeTree = async (
   const components: RecipeComponent[] = componentRows.map((row): RecipeComponent => {
     const unit = unitCodeById.get(row.unitId);
     if (!unit) {
-      throw new TRPCError({
-        code: 'INTERNAL_SERVER_ERROR',
-        message: `Unknown unit id '${row.unitId}' on a recipe component.`,
-      });
+      throw new Error(`Unknown unit id '${row.unitId}' on a recipe component.`);
     }
     return row.componentType === 'PRODUCT'
       ? {
@@ -96,10 +108,7 @@ export const preloadRecipeTree = async (
 
   const yieldUnit = unitCodeById.get(version.yieldUnitId);
   if (!yieldUnit) {
-    throw new TRPCError({
-      code: 'INTERNAL_SERVER_ERROR',
-      message: `Unknown yield unit id '${version.yieldUnitId}' on a recipe.`,
-    });
+    throw new Error(`Unknown yield unit id '${version.yieldUnitId}' on a recipe.`);
   }
 
   preloaded.set(recipeKey, {
@@ -111,28 +120,17 @@ export const preloadRecipeTree = async (
 
   for (const row of componentRows) {
     if (row.componentType === 'RECIPE' && row.subRecipeGroupId) {
-      await preloadRecipeTree(
-        recipeRepository,
-        unitCodeById,
-        preloaded,
-        row.subRecipeGroupId,
-        asOf,
-        depth + 1
-      );
+      await preloadRecipeTree(recipeRepository, unitCodeById, preloaded, row.subRecipeGroupId, asOf, depth + 1);
     }
   }
 };
 
 /**
- * Full cost breakdown for one recipe group, as of now. Throws `NOT_FOUND`-shaped errors for a
- * missing recipe so a router can surface them directly.
+ * Full cost breakdown for one recipe group, as of now. Throws `RecipeNotFoundError` for a missing
+ * recipe, or a plain `Error` for a malformed component/yield unit — the caller (an `apps/api`
+ * router, the fact-aggregation job) maps these to its own boundary's error shape.
  */
-export const resolveRecipeCostBreakdown = async (
-  db: Db,
-  organizationId: string,
-  recipeGroupId: string,
-  currency: CurrencyCode
-) => {
+export const resolveRecipeCostBreakdown = async (db: Db, organizationId: string, recipeGroupId: string, currency: CurrencyCode) => {
   const recipeRepository = new RecipeRepository(db, organizationId);
   const productRepository = new ProductRepository(db, organizationId);
   const supplierProductRepository = new SupplierProductRepository(db, organizationId);
@@ -150,32 +148,24 @@ export const resolveRecipeCostBreakdown = async (
 
   const rootRecipe = preloaded.get(`${recipeGroupId}::${asOf.toISOString()}`);
   if (!rootRecipe) {
-    throw new TRPCError({ code: 'NOT_FOUND', message: 'Recipe not found.' });
+    throw new RecipeNotFoundError(recipeGroupId);
   }
 
-  const resolver: RecipeResolver = (groupId, forAsOf) =>
-    preloaded.get(`${groupId}::${forAsOf.toISOString()}`) ?? null;
+  const resolver: RecipeResolver = (groupId, forAsOf) => preloaded.get(`${groupId}::${forAsOf.toISOString()}`) ?? null;
 
   let exploded;
   try {
-    exploded = explodeRecipe(
-      rootRecipe,
-      quantity(rootRecipe.yieldQuantity, rootRecipe.yieldUnit),
-      asOf,
-      resolver
-    );
+    exploded = explodeRecipe(rootRecipe, quantity(rootRecipe.yieldQuantity, rootRecipe.yieldUnit), asOf, resolver);
   } catch (err) {
     if (err instanceof RecipeDepthExceededError || err instanceof RecipeVersionNotFoundError) {
-      throw new TRPCError({ code: 'BAD_REQUEST', message: err.message });
+      throw err;
     }
     throw err;
   }
 
   const lines: RecipeCostLine[] = [];
   for (const ingredient of exploded) {
-    const confirmedMappings = await supplierProductRepository.findConfirmedForProduct(
-      ingredient.productId
-    );
+    const confirmedMappings = await supplierProductRepository.findConfirmedForProduct(ingredient.productId);
     const withCurrentPrice = (
       await Promise.all(
         confirmedMappings.map(async (mapping) => ({
@@ -189,11 +179,7 @@ export const resolveRecipeCostBreakdown = async (
       ): entry is {
         mapping: (typeof confirmedMappings)[number];
         price: NonNullable<Awaited<ReturnType<typeof supplierPriceRepository.findCurrent>>>;
-      } =>
-        entry.price !== null &&
-        entry.price.currency === currency &&
-        entry.mapping.conversionToBase !== null &&
-        entry.mapping.packUnitId !== null
+      } => entry.price !== null && entry.price.currency === currency && entry.mapping.conversionToBase !== null && entry.mapping.packUnitId !== null
     );
 
     if (withCurrentPrice.length === 0) {
@@ -201,9 +187,7 @@ export const resolveRecipeCostBreakdown = async (
       continue;
     }
 
-    const cheapest = withCurrentPrice.reduce((min, entry) =>
-      Number(entry.price.unitPrice) < Number(min.price.unitPrice) ? entry : min
-    );
+    const cheapest = withCurrentPrice.reduce((min, entry) => (Number(entry.price.unitPrice) < Number(min.price.unitPrice) ? entry : min));
 
     const product = await productRepository.findById(ingredient.productId);
     const ingredientUnitId = unitIdByCode.get(ingredient.unit);
@@ -218,20 +202,9 @@ export const resolveRecipeCostBreakdown = async (
     }
 
     try {
-      const factorRow = await unitConversionRepository.findFactor(
-        ingredientUnitId,
-        product.baseUnitId,
-        ingredient.productId
-      );
+      const factorRow = await unitConversionRepository.findFactor(ingredientUnitId, product.baseUnitId, ingredient.productId);
       const conversionTable = factorRow
-        ? [
-            {
-              fromUnitId: ingredientUnitId,
-              toUnitId: product.baseUnitId,
-              productId: factorRow.productId,
-              factor: factorRow.factor,
-            },
-          ]
+        ? [{ fromUnitId: ingredientUnitId, toUnitId: product.baseUnitId, productId: factorRow.productId, factor: factorRow.factor }]
         : [];
 
       const qtyInBaseUnit = resolveQuantity(
@@ -243,18 +216,10 @@ export const resolveRecipeCostBreakdown = async (
         ingredient.productId
       );
 
-      // unitPrice is per PACK as purchased (e.g. $30 for a 25kg sack); conversionToBase says how
-      // many base units one pack equals (25). Price per base unit = unitPrice / conversionToBase
-      // ($1.20/kg); line cost = that rate * the quantity actually needed. The whole chain stays in
-      // Decimal precision, never dropping into a plain JS number.
       const conversionToBase = cheapest.mapping.conversionToBase!;
-      const lineCost = money(
-        qtyInBaseUnit.amount.times(cheapest.price.unitPrice).dividedBy(conversionToBase),
-        currency
-      );
+      const lineCost = money(qtyInBaseUnit.amount.times(cheapest.price.unitPrice).dividedBy(conversionToBase), currency);
       lines.push({ productId: ingredient.productId, cost: lineCost });
     } catch {
-      // Conversion failure of any kind resolves to unknown, never a guessed factor.
       lines.push({ productId: ingredient.productId, cost: 'unknown' });
     }
   }
@@ -263,16 +228,13 @@ export const resolveRecipeCostBreakdown = async (
 };
 
 /**
- * The cost of ONE unit of a recipe's output — what the dashboard needs per sold menu item.
- *
- * `resolveRecipeCostBreakdown` returns the cost of a whole BATCH: a croissant recipe that yields 12
- * reports the cost of making all 12. Multiplying that by units sold would overstate theoretical
- * COGS by the yield factor, so the batch cost is divided by `yieldQuantity` here. This division is
- * the difference between a plausible-looking number and a correct one, and it is exactly the kind
- * of error that is invisible on screen — the figure still looks like money.
- *
- * A recipe whose cost can't be fully resolved returns `'unknown'`, which propagates rather than
- * being silently dropped from the total.
+ * The cost of ONE unit of a recipe's output. `resolveRecipeCostBreakdown` returns the cost of a
+ * whole BATCH; dividing by `yieldQuantity` is the difference between a plausible-looking number and
+ * a correct one (see `retailos-recipe-cost-is-per-batch` project memory). A recipe whose cost can't
+ * be fully resolved, or has no real version as of now, returns `'unknown'` rather than throwing —
+ * this is the one function in this file callers treat as a soft failure (a menu item with an
+ * unresolvable recipe should not blank an entire dashboard/fact row), matching the original
+ * `apps/api` resolver's exact same contract.
  */
 export const resolveRecipeUnitCost = async (
   db: Db,
@@ -289,14 +251,10 @@ export const resolveRecipeUnitCost = async (
     if (!version) return 'unknown';
 
     const yieldQuantity = new Decimal(version.yieldQuantity);
-    // A zero or negative yield is nonsensical rather than zero-cost — refuse to divide instead of
-    // producing an infinity that would render as a real figure.
     if (yieldQuantity.lessThanOrEqualTo(0)) return 'unknown';
 
     return money(batch.total.amount.dividedBy(yieldQuantity), currency);
   } catch {
-    // A missing or unresolvable recipe is an unknown cost for dashboard purposes, not a failed
-    // request — one bad recipe must not blank the entire dashboard.
     return 'unknown';
   }
 };

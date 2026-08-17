@@ -216,6 +216,43 @@ export class StockLevelRepository extends TenantScopedRepository<typeof stockLev
   }
 
   /**
+   * 009-16 (drill-through) — the real per-lot rows behind `stock_value`'s total, WITH each lot's
+   * own id and the product's name, backing the dashboard's stock-value drill-through. Same
+   * ACTIVE/remaining-quantity-positive filter as `findStockValueByCategory`, so the two figures
+   * always reconcile — a human drilling in sees exactly the lots that summed to the number shown.
+   */
+  async findStockValueForDrillThrough(storeId: string, limit = 50) {
+    const rows = await this.runScoped((db) =>
+      db.execute<{
+        id: string;
+        product_name: string;
+        remaining_quantity: string;
+        unit_cost: string;
+        currency: string;
+        expiry_date: string | null;
+      }>(sql`
+        SELECT l.id, p.name AS product_name, l.remaining_quantity, l.unit_cost, l.currency, l.expiry_date
+        FROM lots l
+        INNER JOIN products p ON p.id = l.product_id
+        WHERE l.organization_id = ${this.organizationId}
+          AND l.store_id = ${storeId}
+          AND l.status = 'ACTIVE'
+          AND l.remaining_quantity > 0
+        ORDER BY (l.remaining_quantity * l.unit_cost) DESC
+        LIMIT ${limit}
+      `)
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      productName: row.product_name,
+      remainingQuantity: row.remaining_quantity,
+      unitCost: row.unit_cost,
+      currency: row.currency,
+      expiryDate: row.expiry_date,
+    }));
+  }
+
+  /**
    * `dead_stock_value`'s real input — products/variants at this store whose `stock_levels.
    * last_movement_at` is older than `asOf - thresholdDays` (or has never moved at all,
    * `last_movement_at IS NULL`, with real quantity on hand from a source this codebase can't
@@ -435,6 +472,56 @@ export class StockLevelRepository extends TenantScopedRepository<typeof stockLev
       variantId: row.variant_id,
       ledgerSum: row.ledger_sum,
       projectionQuantity: row.projection_quantity,
+    }));
+  }
+
+  /**
+   * `fact_daily_stock_value`'s real input (009-01) — one row per (productId, variantId) with any
+   * real ACTIVE lot remaining at this store, as of `asOf` (the resolved end of the store-local day
+   * being aggregated, matching `findExpiringLots`'s own precedent for an "as of" snapshot query).
+   * `value` is `null` (I7) the moment even ONE contributing lot has an unresolvable cost — `lots.
+   * unit_cost` is NOT NULL at the schema level (a lot's whole purpose is carrying a known cost
+   * basis, per `LotRepository.receive`'s own doc comment), so in practice this never actually fires,
+   * but the aggregation still checks explicitly rather than assuming the constraint always holds.
+   * `lotsExpiring7d` counts real ACTIVE lots whose `expiry_date` falls within the 7 days following
+   * `asOf` — the spec's own literal `lots_expiring_7d` column, computed directly here rather than
+   * reusing `findExpiringLots` (that function's consumption-velocity join is real overhead this
+   * fact table's simpler "how many lots expire soon" count doesn't need).
+   */
+  async findStockValueForFactAggregation(storeId: string, asOf: Date) {
+    const asOfIso = asOf.toISOString();
+    const rows = await this.runScoped((db) =>
+      db.execute<{
+        product_id: string;
+        variant_id: string;
+        qty_on_hand: string;
+        value: string | null;
+        lots_expiring_7d: string;
+      }>(sql`
+        SELECT
+          product_id,
+          variant_id,
+          SUM(remaining_quantity) AS qty_on_hand,
+          SUM(remaining_quantity * unit_cost) AS value,
+          COUNT(*) FILTER (
+            WHERE expiry_date IS NOT NULL
+              AND expiry_date >= ${asOfIso}::date
+              AND expiry_date < (${asOfIso}::date + INTERVAL '7 days')
+          ) AS lots_expiring_7d
+        FROM lots
+        WHERE organization_id = ${this.organizationId}
+          AND store_id = ${storeId}
+          AND status = 'ACTIVE'
+          AND remaining_quantity > 0
+        GROUP BY product_id, variant_id
+      `)
+    );
+    return rows.map((row) => ({
+      productId: row.product_id,
+      variantId: row.variant_id,
+      qtyOnHand: row.qty_on_hand,
+      value: row.value,
+      lotsExpiring7d: Number(row.lots_expiring_7d),
     }));
   }
 }

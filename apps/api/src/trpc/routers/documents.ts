@@ -6,7 +6,7 @@ import { computeExtractionAutoApprovalRate, computeValidationIssueFrequency } fr
 import { DocumentRepository, InvoiceMatchRepository, PostingService, StoreRepository, SupplierProductRepository, SupplierRepository } from '@retailos/db';
 import { canAccessStore } from '@retailos/authz';
 import { classifyDocument } from '@retailos/ai';
-import { enqueueExtractionJob } from '@retailos/queue';
+import { enqueueExtractionJob, enqueueEmbeddingJob } from '@retailos/queue';
 import {
   buildDocumentKey,
   createPresignedDownloadUrl,
@@ -17,7 +17,7 @@ import {
   validateDocumentUpload,
 } from '@retailos/storage';
 import { protectedProcedure, router } from '../trpc';
-import { storageClient, DOCUMENTS_BUCKET, extractionQueue } from '../context';
+import { storageClient, DOCUMENTS_BUCKET, extractionQueue, embeddingQueue } from '../context';
 
 const requestUploadInput = z.object({ storeId: z.string().uuid() });
 const confirmUploadInput = z.object({ storeId: z.string().uuid(), key: z.string() });
@@ -294,6 +294,15 @@ export const documentsRouter = router({
           console.warn(`Three-way match failed for document ${input.documentId}:`, err);
         }
       }
+    }
+
+    // 009-18 — enqueued AFTER approve/posting genuinely succeeded, never inside the same
+    // transaction as either (a failed embedding job must not roll back a real approval). A
+    // best-effort enqueue: a Redis hiccup here must not fail an approval that already committed.
+    try {
+      await enqueueEmbeddingJob(embeddingQueue, { documentId: input.documentId, organizationId: ctx.session.organizationId });
+    } catch (err) {
+      console.warn(`Failed to enqueue embedding job for document ${input.documentId}:`, err);
     }
 
     const posted = await documentRepository.findById(input.documentId);

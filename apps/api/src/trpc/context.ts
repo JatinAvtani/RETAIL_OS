@@ -1,9 +1,9 @@
 import { createDb } from '@retailos/db';
 import { createRedisClient, SessionStore } from '@retailos/session';
 import { createStorageClient } from '@retailos/storage';
-import { createExtractionQueue, createQueueRedisConnection } from '@retailos/queue';
+import { createExtractionQueue, createEmbeddingQueue, createQueueRedisConnection } from '@retailos/queue';
 import type { Queue } from 'bullmq';
-import type { ExtractionJobData } from '@retailos/queue';
+import type { ExtractionJobData, EmbeddingJobData } from '@retailos/queue';
 import type { S3Client } from '@aws-sdk/client-s3';
 import type { CreateFastifyContextOptions } from '@trpc/server/adapters/fastify';
 import { createAuthRateLimiters } from '../auth/rate-limit';
@@ -55,6 +55,11 @@ export const storageClient: S3Client = createStorageClient({
  * session store's unrelated fast-fail expectations.
  */
 export const extractionQueue: Queue<ExtractionJobData> = createExtractionQueue(
+  createQueueRedisConnection(process.env.REDIS_URL ?? 'redis://localhost:6379')
+);
+
+/** 009-18 — a real, separate connection matching `extractionQueue`'s own reasoning above; the embedding job's failure/backoff profile is genuinely distinct from extraction's. */
+export const embeddingQueue: Queue<EmbeddingJobData> = createEmbeddingQueue(
   createQueueRedisConnection(process.env.REDIS_URL ?? 'redis://localhost:6379')
 );
 

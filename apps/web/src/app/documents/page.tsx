@@ -179,15 +179,20 @@ export default function DocumentsPage() {
         title="Documents"
         description="Upload supplier invoices — PDF or a photo. Each one is classified automatically; nothing is extracted or posted yet."
         actions={
-          !storesLoading && stores.length > 0 ? (
-            <Select value={selectedStoreId} onChange={(event) => setSelectedStoreId(event.target.value)} className="w-auto">
-              {stores.map((store) => (
-                <option key={store.id} value={store.id}>
-                  {store.name}
-                </option>
-              ))}
-            </Select>
-          ) : null
+          <>
+            <Link href="/documents/search" className="text-sm font-medium text-accent hover:underline">
+              Search across all stores
+            </Link>
+            {!storesLoading && stores.length > 0 && (
+              <Select value={selectedStoreId} onChange={(event) => setSelectedStoreId(event.target.value)} className="w-auto">
+                {stores.map((store) => (
+                  <option key={store.id} value={store.id}>
+                    {store.name}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </>
         }
       />
 

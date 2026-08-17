@@ -540,4 +540,66 @@ export class PurchaseOrderRepository extends TenantScopedRepository<typeof purch
     const row = rows[0];
     return { poCount: row ? Number(row.poCount) : 0, totalSpend: row?.totalSpend ?? null };
   }
+
+  /** POs SENT to a supplier but not yet fully received — `pending_receipts_count`'s real input (009-15). `PARTIALLY_RECEIVED` counts too: a PO in that state still has real outstanding lines awaiting a further delivery. */
+  private static readonly PENDING_RECEIPT_STATUSES: PurchaseOrderStatus[] = ['SENT', 'PARTIALLY_RECEIVED'];
+
+  async countPendingReceipts(storeId: string): Promise<number> {
+    const rows = await this.runScoped((db, scopedWhere) =>
+      db
+        .select({ count: sql<string>`COUNT(*)` })
+        .from(purchaseOrders)
+        .where(scopedWhere(and(eq(purchaseOrders.storeId, storeId), inArray(purchaseOrders.status, PurchaseOrderRepository.PENDING_RECEIPT_STATUSES))))
+    );
+    return Number(rows[0]?.count ?? 0);
+  }
+
+  /**
+   * `open_po_count`'s real input (009-15) — a count of POs at ONE given status for a store, matching
+   * this codebase's established one-call-per-dimension precedent (`spend_by_category`/
+   * `waste_by_reason`) for a metric that would otherwise need to return a breakdown the catalog's
+   * fixed scalar `MetricResult` contract can't carry.
+   */
+  async countByStatus(storeId: string, status: PurchaseOrderStatus): Promise<number> {
+    const rows = await this.runScoped((db, scopedWhere) =>
+      db
+        .select({ count: sql<string>`COUNT(*)` })
+        .from(purchaseOrders)
+        .where(scopedWhere(and(eq(purchaseOrders.storeId, storeId), eq(purchaseOrders.status, status))))
+    );
+    return Number(rows[0]?.count ?? 0);
+  }
+
+  /**
+   * `fact_purchase_lines`'s real input (009-01) — every real PO line whose PARENT PO was CREATED
+   * within the resolved local day (`date` = PO `createdAt`, confirmed with the user over the
+   * goods-receipt date, matching `total_spend`/`spend_by_category`'s own already-established
+   * `createdAt`-based period convention, 009-08). Deliberately NOT filtered to
+   * approved-or-later status — a real order line placed and later rejected/cancelled is still a
+   * real purchasing event that happened on this day, and `total_spend`'s own status filter is that
+   * metric's separate, later decision about which lines count as committed spend, not a fact this
+   * table should pre-decide. `poId` is the SINGLE PO a line came from — a day with multiple POs to
+   * the same supplier/product produces multiple fact rows, never merged, so drill-through (009-16)
+   * always has one real source to point at.
+   */
+  async findLinesForFactAggregation(storeId: string, from: Date, to: Date) {
+    return this.runScoped((db, scopedWhere) =>
+      db
+        .select({
+          supplierId: purchaseOrders.supplierId,
+          poId: purchaseOrders.id,
+          productId: purchaseOrderLines.productId,
+          qty: purchaseOrderLines.quantityBaseUnits,
+          unitPrice: purchaseOrderLines.unitPrice,
+          lineTotal: purchaseOrderLines.lineTotal,
+        })
+        .from(purchaseOrderLines)
+        .innerJoin(purchaseOrders, eq(purchaseOrderLines.purchaseOrderId, purchaseOrders.id))
+        .where(
+          scopedWhere(
+            and(eq(purchaseOrders.storeId, storeId), gte(purchaseOrders.createdAt, from), lt(purchaseOrders.createdAt, to))
+          )
+        )
+    );
+  }
 }

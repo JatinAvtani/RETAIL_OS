@@ -1,8 +1,11 @@
+import { alias } from 'drizzle-orm/pg-core';
 import { and, eq, gte, isNotNull, lt, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import * as schema from '../schema/index';
-import { posItems, salesTransactionLines, salesTransactions, stockMovements } from '../schema/index';
+import { menuItems, posItems, products, salesTransactionLines, salesTransactions, stockMovements } from '../schema/index';
 import { TenantScopedRepository } from '../tenant-repository';
+
+const originalSalesTransactions = alias(salesTransactions, 'original_sales_transactions');
 
 /**
  * The read layer behind the owner dashboard. Deliberately fetches ROWS and hands them to the
@@ -389,5 +392,255 @@ export class DashboardRepository extends TenantScopedRepository<typeof salesTran
       `)
     );
     return rows.map((row) => ({ date: row.sale_date, menuItemId: row.menu_item_id, quantitySold: row.quantity_sold }));
+  }
+
+  /**
+   * `fact_daily_sales`'s real input (009-01) — every real COMPLETED line for one store within an
+   * ALREADY-RESOLVED `[from, to)` UTC window (the caller resolves this via
+   * `resolveLocalDateRange` against the store's own timezone; this method does no timezone logic
+   * itself, matching `packages/domain/src/time/store-time.ts`'s own "one place resolves store-local
+   * time" discipline). `menuItemId`/`posItemCategory` are `null` for an unmapped POS item (I7 — the
+   * absence of a mapping is not evidence the sale didn't happen), `channel` is `null` when the
+   * vendor didn't report one. `transactionSubtotal`/`transactionDiscount` are the PARENT
+   * transaction's own header totals, carried on every line — the caller needs them to prorate the
+   * transaction-level discount across lines by revenue share (no per-line discount exists in this
+   * schema).
+   */
+  async findSalesLinesForFactAggregation(storeId: string, from: Date, to: Date) {
+    return this.runScoped((db, scopedWhere) =>
+      db
+        .select({
+          transactionId: salesTransactions.id,
+          occurredAt: salesTransactions.occurredAt,
+          channel: salesTransactions.channel,
+          transactionSubtotal: salesTransactions.subtotal,
+          transactionDiscount: salesTransactions.discount,
+          currency: salesTransactions.currency,
+          lineTotal: salesTransactionLines.lineTotal,
+          quantity: salesTransactionLines.quantity,
+          menuItemId: posItems.menuItemId,
+          posItemCategory: posItems.category,
+        })
+        .from(salesTransactionLines)
+        .innerJoin(salesTransactions, eq(salesTransactionLines.transactionId, salesTransactions.id))
+        .leftJoin(posItems, eq(salesTransactionLines.posItemId, posItems.id))
+        .where(
+          scopedWhere(
+            and(
+              eq(salesTransactions.storeId, storeId),
+              eq(salesTransactions.status, 'COMPLETED'),
+              gte(salesTransactions.occurredAt, from),
+              lt(salesTransactions.occurredAt, to)
+            )
+          )
+        )
+    );
+  }
+
+  /**
+   * `fact_daily_sales`'s refund half (009-01) — every real `REFUNDED` transaction whose ORIGINAL
+   * (`refundOfId`-referenced) transaction occurred within the resolved local day, even if the
+   * refund itself was recorded later (a refund processed the next calendar day still belongs to
+   * the sale it reverses, for fact-table attribution purposes — matching this project's own
+   * bi-temporal convention of attributing a correction back to the event it corrects, not the
+   * moment it was recorded). Returns the refunded transaction's real `total` and its ORIGINAL
+   * transaction's id, for the caller to prorate across that original transaction's own lines by
+   * the same revenue-share method used for discounts.
+   */
+  async findRefundsForFactAggregation(storeId: string, from: Date, to: Date) {
+    return this.runScoped((db, scopedWhere) =>
+      db
+        .select({
+          originalTransactionId: originalSalesTransactions.id,
+          refundTotal: salesTransactions.total,
+        })
+        .from(salesTransactions)
+        .innerJoin(originalSalesTransactions, eq(salesTransactions.refundOfId, originalSalesTransactions.id))
+        .where(
+          scopedWhere(
+            and(
+              eq(salesTransactions.storeId, storeId),
+              eq(salesTransactions.status, 'REFUNDED'),
+              // `scopedWhere` only ANDs the tenant predicate against `salesTransactions` (this
+              // repository's own constructor table) — the ALIASED join side needs its own explicit
+              // organization_id check, defense in depth against `refundOfId` (a plain FK to `id`,
+              // with no same-org constraint enforced at the schema level) ever pointing cross-org.
+              eq(originalSalesTransactions.organizationId, this.organizationId),
+              gte(originalSalesTransactions.occurredAt, from),
+              lt(originalSalesTransactions.occurredAt, to)
+            )
+          )
+        )
+    );
+  }
+
+  /**
+   * `fact_daily_consumption`'s real ACTUAL-consumption input (009-01) — the same real
+   * `SALE_CONSUMPTION` movements `findConsumption` reads, but INCLUDING `variantId`, which
+   * `findConsumption`'s existing callers (margin metrics) never needed since they aggregate to a
+   * single period total, not a per-variant fact row. A new method rather than widening
+   * `findConsumption` itself — that method's existing, already-tested consumers get exactly the
+   * columns they've always gotten, no silent shape change.
+   */
+  async findConsumptionForFactAggregation(storeId: string, from: Date, to: Date) {
+    // NOT `scopedWhere` — that closure is bound to THIS repository's own constructor table
+    // (`salesTransactions`), and would AND a `salesTransactions.organization_id` predicate against
+    // a query that never joins that table at all (a real `missing FROM-clause entry` error this
+    // project has hit before). `stockMovements` is a different table than this repository's own
+    // constructor table, so the tenant predicate is built by hand against it directly — matching
+    // `findConsumption`'s own existing, identical, already-tested pattern one screen above.
+    return this.runScoped((db) =>
+      db
+        .select({
+          productId: stockMovements.productId,
+          variantId: stockMovements.variantId,
+          quantity: stockMovements.quantity,
+          unitCost: stockMovements.unitCost,
+        })
+        .from(stockMovements)
+        .where(
+          and(
+            eq(stockMovements.organizationId, this.organizationId),
+            eq(stockMovements.storeId, storeId),
+            eq(stockMovements.movementType, 'SALE_CONSUMPTION'),
+            gte(stockMovements.occurredAt, from),
+            lt(stockMovements.occurredAt, to)
+          )
+        )
+    );
+  }
+
+  /**
+   * `fact_waste`'s real input (009-01) — real `WASTE` movements including `reasonCode` (NOT NULL
+   * on every real `WASTE` row by database constraint — `findWaste`'s own existing doc comment),
+   * which neither `findWaste` (period-range, not per-store-day) nor `findDailyWasteValue`
+   * (day-bucketed but reason-blind, 009-11) carries in the shape this fact table's grain needs.
+   */
+  async findWasteForFactAggregation(storeId: string, from: Date, to: Date) {
+    return this.runScoped((db) =>
+      db
+        .select({
+          productId: stockMovements.productId,
+          reasonCode: stockMovements.reasonCode,
+          quantity: stockMovements.quantity,
+          unitCost: stockMovements.unitCost,
+        })
+        .from(stockMovements)
+        .where(
+          and(
+            eq(stockMovements.organizationId, this.organizationId),
+            eq(stockMovements.storeId, storeId),
+            eq(stockMovements.movementType, 'WASTE'),
+            gte(stockMovements.occurredAt, from),
+            lt(stockMovements.occurredAt, to)
+          )
+        )
+    );
+  }
+
+  /**
+   * 009-16 (drill-through) — every real completed sales line in the period, WITH its own row id and
+   * the menu item name it's mapped to (nullable — an unmapped line still appears, `menuItemName:
+   * null`, matching this dashboard's own established "surface the gap, don't hide it" completeness
+   * convention). Backs `net_revenue`/`transaction_count`/`average_transaction_value`'s drill-through.
+   * A dedicated method rather than widening `findSalesLines` — that method's existing metric-compute
+   * callers keep the exact columns they've always gotten; this one exists purely to let a human find
+   * the specific row behind a number, a genuinely different concern from computing the number itself.
+   */
+  async findSalesLinesForDrillThrough(storeId: string, from: Date, to: Date, limit = 50) {
+    return this.runScoped((db) =>
+      db
+        .select({
+          id: salesTransactionLines.id,
+          transactionId: salesTransactions.id,
+          occurredAt: salesTransactions.occurredAt,
+          lineTotal: salesTransactionLines.lineTotal,
+          quantity: salesTransactionLines.quantity,
+          currency: salesTransactions.currency,
+          menuItemName: menuItems.name,
+        })
+        .from(salesTransactionLines)
+        .innerJoin(salesTransactions, eq(salesTransactionLines.transactionId, salesTransactions.id))
+        .leftJoin(posItems, eq(salesTransactionLines.posItemId, posItems.id))
+        .leftJoin(menuItems, eq(posItems.menuItemId, menuItems.id))
+        .where(
+          and(
+            eq(salesTransactionLines.organizationId, this.organizationId),
+            eq(salesTransactions.organizationId, this.organizationId),
+            eq(salesTransactions.storeId, storeId),
+            eq(salesTransactions.status, 'COMPLETED'),
+            gte(salesTransactions.occurredAt, from),
+            lt(salesTransactions.occurredAt, to)
+          )
+        )
+        .orderBy(sql`${salesTransactions.occurredAt} DESC`)
+        .limit(limit)
+    );
+  }
+
+  /**
+   * 009-16 (drill-through) — real `SALE_CONSUMPTION` movements with their own row id and the
+   * product's name, backing `cogs_actual`'s drill-through. `unitCost: null` rows are included, not
+   * filtered out (I7) — a human drilling into "why is actual COGS lower than expected" needs to see
+   * the unknown-cost rows too, not just the ones that happened to have a cost.
+   */
+  async findConsumptionForDrillThrough(storeId: string, from: Date, to: Date, limit = 50) {
+    return this.runScoped((db) =>
+      db
+        .select({
+          id: stockMovements.id,
+          occurredAt: stockMovements.occurredAt,
+          quantity: stockMovements.quantity,
+          unitCost: stockMovements.unitCost,
+          currency: stockMovements.currency,
+          productName: products.name,
+        })
+        .from(stockMovements)
+        .leftJoin(products, eq(stockMovements.productId, products.id))
+        .where(
+          and(
+            eq(stockMovements.organizationId, this.organizationId),
+            eq(stockMovements.storeId, storeId),
+            eq(stockMovements.movementType, 'SALE_CONSUMPTION'),
+            gte(stockMovements.occurredAt, from),
+            lt(stockMovements.occurredAt, to)
+          )
+        )
+        .orderBy(sql`${stockMovements.occurredAt} DESC`)
+        .limit(limit)
+    );
+  }
+
+  /**
+   * 009-16 (drill-through) — real `WASTE` movements with their own row id and the product's name,
+   * backing `waste_value`'s drill-through (the total AND each reason-code breakdown row, filtered
+   * client-side by `reasonCode` when a specific reason is expanded).
+   */
+  async findWasteForDrillThrough(storeId: string, from: Date, to: Date, limit = 50) {
+    return this.runScoped((db) =>
+      db
+        .select({
+          id: stockMovements.id,
+          occurredAt: stockMovements.occurredAt,
+          quantity: stockMovements.quantity,
+          unitCost: stockMovements.unitCost,
+          currency: stockMovements.currency,
+          reasonCode: stockMovements.reasonCode,
+          productName: products.name,
+        })
+        .from(stockMovements)
+        .leftJoin(products, eq(stockMovements.productId, products.id))
+        .where(
+          and(
+            eq(stockMovements.organizationId, this.organizationId),
+            eq(stockMovements.storeId, storeId),
+            eq(stockMovements.movementType, 'WASTE'),
+            gte(stockMovements.occurredAt, from),
+            lt(stockMovements.occurredAt, to)
+          )
+        )
+        .orderBy(sql`${stockMovements.occurredAt} DESC`)
+        .limit(limit)
+    );
   }
 }

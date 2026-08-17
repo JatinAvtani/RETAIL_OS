@@ -38,6 +38,7 @@ import {
 import { generateId } from '@retailos/domain';
 import { eq } from 'drizzle-orm';
 import Decimal from 'decimal.js';
+import { createQueueRedisConnection, createFactAggregationQueue, registerFactAggregationJob } from '@retailos/queue';
 
 const email = process.argv[2];
 if (!email) {
@@ -75,12 +76,24 @@ await db.insert(organizations).values({
 });
 
 const storeId = generateId();
+const storeTimezone = 'America/New_York';
 await db.insert(stores).values({
   id: storeId,
   organizationId,
   name: 'Mill Street',
-  timezone: 'America/New_York',
+  timezone: storeTimezone,
 });
+
+// 009-01 — this is currently the ONLY real store-creation code path in the codebase (the stores
+// tRPC router is read-only; a real create endpoint doesn't exist until EPIC-012's onboarding
+// flow), so this is where the daily fact-aggregation job genuinely gets registered today. The same
+// `registerFactAggregationJob` call belongs in that future onboarding endpoint too — this is not a
+// demo-only concern, just demo's only current trigger point.
+const factAggregationConnection = createQueueRedisConnection(process.env.REDIS_URL ?? 'redis://localhost:6379');
+const factAggregationQueue = createFactAggregationQueue(factAggregationConnection);
+await registerFactAggregationJob(factAggregationQueue, { organizationId, storeId, storeTimezone });
+await factAggregationQueue.close();
+await factAggregationConnection.quit();
 
 await db.insert(memberships).values({
   id: generateId(),

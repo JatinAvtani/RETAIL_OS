@@ -4,6 +4,7 @@ import {
   auditLogs,
   createDb,
   categories,
+  documents,
   lots,
   menuItems,
   organizations,
@@ -11,12 +12,14 @@ import {
   posItems,
   productVariants,
   products,
+  purchaseOrders,
   recipeComponents,
   recipes,
   salesTransactionLines,
   salesTransactions,
   stockLevels,
   stockMovements,
+  stockParLevels,
   stores,
   supplierPrices,
   supplierProducts,
@@ -25,6 +28,8 @@ import {
   unmappedSales,
   LotRepository,
   MovementService,
+  ParLevelRepository,
+  PurchaseOrderRepository,
   SalesTransactionRepository,
 } from '@retailos/db';
 import { createRedisClient, SessionStore } from '@retailos/session';
@@ -55,8 +60,11 @@ describe('dashboard.summary', () => {
       await db.delete(stockMovements).where(eq(stockMovements.organizationId, orgId));
       await db.delete(auditLogs).where(eq(auditLogs.organizationId, orgId));
       await db.delete(stockLevels).where(eq(stockLevels.organizationId, orgId));
+      await db.delete(stockParLevels).where(eq(stockParLevels.organizationId, orgId));
       await db.delete(lots).where(eq(lots.organizationId, orgId));
       await db.delete(outboxEvents).where(eq(outboxEvents.organizationId, orgId));
+      await db.delete(purchaseOrders).where(eq(purchaseOrders.organizationId, orgId));
+      await db.delete(documents).where(eq(documents.organizationId, orgId));
       await db.delete(unmappedSales).where(eq(unmappedSales.organizationId, orgId));
       await db.delete(salesTransactionLines).where(eq(salesTransactionLines.organizationId, orgId));
       await db.delete(salesTransactions).where(eq(salesTransactions.organizationId, orgId));
@@ -704,6 +712,492 @@ describe('dashboard.summary', () => {
     // Tenant B attacking tenant A's store id gets a 404, not tenant A's numbers.
     const cookieB = await issueSession(orgB);
     const response = await fetchSummary(storeA, cookieB);
+    expect(response.statusCode).toBe(404);
+  });
+});
+
+/**
+ * Real HTTP verification for the manager dashboard (009-15, spec 12 §12.5). Every figure asserted
+ * here is hand-derived from the seeded rows, same discipline as `dashboard.summary`'s own suite.
+ */
+describe('dashboard.managerSummary', () => {
+  let app: FastifyInstance;
+  const { db } = createDb(process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/retailos');
+  const redis = createRedisClient(process.env.REDIS_URL ?? 'redis://localhost:6379');
+  const sessionStore = new SessionStore(redis);
+  const createdOrgIds: string[] = [];
+  const createdUserIds: string[] = [];
+
+  beforeAll(async () => {
+    app = buildServer({ logger: false });
+    await app.ready();
+  });
+
+  afterEach(async () => {
+    for (const orgId of createdOrgIds) {
+      await db.delete(auditLogs).where(eq(auditLogs.organizationId, orgId));
+      await db.delete(outboxEvents).where(eq(outboxEvents.organizationId, orgId));
+      await db.delete(purchaseOrders).where(eq(purchaseOrders.organizationId, orgId));
+      await db.delete(documents).where(eq(documents.organizationId, orgId));
+      await db.delete(stockMovements).where(eq(stockMovements.organizationId, orgId));
+      await db.delete(stockLevels).where(eq(stockLevels.organizationId, orgId));
+      await db.delete(stockParLevels).where(eq(stockParLevels.organizationId, orgId));
+      await db.delete(lots).where(eq(lots.organizationId, orgId));
+      await db.delete(salesTransactionLines).where(eq(salesTransactionLines.organizationId, orgId));
+      await db.delete(salesTransactions).where(eq(salesTransactions.organizationId, orgId));
+      const orgProducts = await db.select({ id: products.id }).from(products).where(eq(products.organizationId, orgId));
+      for (const p of orgProducts) {
+        await db.delete(productVariants).where(eq(productVariants.productId, p.id));
+      }
+      await db.delete(products).where(eq(products.organizationId, orgId));
+      await db.delete(suppliers).where(eq(suppliers.organizationId, orgId));
+      await db.delete(stores).where(eq(stores.organizationId, orgId));
+      await db.delete(organizations).where(eq(organizations.id, orgId));
+    }
+    createdOrgIds.length = 0;
+    createdUserIds.length = 0;
+  });
+
+  afterAll(async () => {
+    await app.close();
+    await redis.quit();
+  });
+
+  const setUpOrg = async () => {
+    const organizationId = generateId();
+    createdOrgIds.push(organizationId);
+    await db.insert(organizations).values({
+      id: organizationId,
+      name: `Manager Dashboard Test Org ${organizationId}`,
+      slug: `manager-dashboard-test-${organizationId}`,
+      baseCurrency: 'USD',
+    });
+    const storeId = generateId();
+    await db.insert(stores).values({ id: storeId, organizationId, name: 'Test Store', timezone: 'America/New_York' });
+    return { organizationId, storeId };
+  };
+
+  const issueSession = async (organizationId: string): Promise<string> => {
+    const userId = generateId();
+    createdUserIds.push(userId);
+    const { token } = await sessionStore.create(
+      {
+        userId,
+        organizationId,
+        storeIds: 'ALL',
+        role: 'OWNER',
+        permissions: ['financial:read', 'inventory:read', 'documents:read', 'purchasing:read'],
+      },
+      '127.0.0.1',
+      'test-agent'
+    );
+    return token;
+  };
+
+  const fetchManagerSummary = async (storeId: string, cookie: string, days = 30) => {
+    return app.inject({
+      method: 'GET',
+      url: `/trpc/dashboard.managerSummary?input=${encodeURIComponent(JSON.stringify({ storeId, days }))}`,
+      cookies: { '__Host-session': cookie },
+    });
+  };
+
+  it('rejects a request with no session cookie (401)', async () => {
+    const { storeId } = await setUpOrg();
+    const response = await app.inject({
+      method: 'GET',
+      url: `/trpc/dashboard.managerSummary?input=${encodeURIComponent(JSON.stringify({ storeId, days: 30 }))}`,
+    });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('an org with no data returns real zero counts, not null, for every section', async () => {
+    const { organizationId, storeId } = await setUpOrg();
+    const cookie = await issueSession(organizationId);
+
+    const response = await fetchManagerSummary(storeId, cookie);
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body).result.data;
+
+    expect(body.belowReorderPoint.count).toBe(0);
+    expect(body.expiryQueue.lots).toEqual([]);
+    expect(body.pendingReceipts.count).toBe(0);
+    expect(body.openPurchaseOrders.every((row: { count: number }) => row.count === 0)).toBe(true);
+    expect(body.documentsAwaitingReview.count).toBe(0);
+    // Net revenue for an empty org is a real, knowable 0 — not unknown.
+    expect(Number(body.todayVsAverage.today.amount)).toBe(0);
+    expect(body.todayVsAverage.direction).toBe('flat');
+  });
+
+  it('counts a real product below its configured reorder point, and excludes one still above it', async () => {
+    const { organizationId, storeId } = await setUpOrg();
+    const cookie = await issueSession(organizationId);
+    const [eachUnit] = await db.select({ id: units.id }).from(units).where(eq(units.code, 'each'));
+
+    const belowId = generateId();
+    await db.insert(products).values({ id: belowId, organizationId, sku: `MGR-BELOW-${belowId}`, name: 'Below Par', baseUnitId: eachUnit!.id, type: 'INGREDIENT' });
+    const belowVariantId = generateId();
+    await db.insert(productVariants).values({ id: belowVariantId, productId: belowId, name: 'Default', isDefault: true });
+
+    const aboveId = generateId();
+    await db.insert(products).values({ id: aboveId, organizationId, sku: `MGR-ABOVE-${aboveId}`, name: 'Above Par', baseUnitId: eachUnit!.id, type: 'INGREDIENT' });
+    const aboveVariantId = generateId();
+    await db.insert(productVariants).values({ id: aboveVariantId, productId: aboveId, name: 'Default', isDefault: true });
+
+    const lotRepo = new LotRepository(db, organizationId);
+    const movements = new MovementService(db, organizationId);
+    for (const [productId, variantId, qty] of [
+      [belowId, belowVariantId, '5.000000'],
+      [aboveId, aboveVariantId, '50.000000'],
+    ] as const) {
+      const lot = await lotRepo.receive({
+        id: generateId(),
+        storeId,
+        productId,
+        variantId,
+        receivedAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
+        initialQuantity: qty,
+        unitCost: '1.0000',
+        currency: 'USD',
+      });
+      await movements.postMovement({
+        storeId,
+        productId,
+        variantId,
+        lotId: lot.id,
+        movementType: 'RECEIPT',
+        quantity: qty,
+        unitCost: '1.0000',
+        currency: 'USD',
+        occurredAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
+        sourceType: 'test',
+      });
+    }
+
+    const parLevelRepository = new ParLevelRepository(db, organizationId);
+    await parLevelRepository.setParLevel({ storeId, productId: belowId, variantId: belowVariantId, reorderPoint: '10.000000' });
+    await parLevelRepository.setParLevel({ storeId, productId: aboveId, variantId: aboveVariantId, reorderPoint: '10.000000' });
+
+    const response = await fetchManagerSummary(storeId, cookie);
+    const body = JSON.parse(response.body).result.data;
+    expect(body.belowReorderPoint.count).toBe(1);
+    expect(body.belowReorderPoint.items[0].productId).toBe(belowId);
+  });
+
+  it('counts real open purchase orders by status, and pending receipts separately', async () => {
+    const { organizationId, storeId } = await setUpOrg();
+    const cookie = await issueSession(organizationId);
+    const supplierId = generateId();
+    await db.insert(suppliers).values({ id: supplierId, organizationId, name: 'Manager Dashboard Test Supplier' });
+
+    const poRepo = new PurchaseOrderRepository(db, organizationId);
+    const { id: sentPoId } = await poRepo.create({ storeId, supplierId, poNumber: `MGR-SENT-${generateId()}`, currency: 'USD' });
+    await db.update(purchaseOrders).set({ status: 'SENT' }).where(eq(purchaseOrders.id, sentPoId));
+
+    const { id: draftPoId } = await poRepo.create({ storeId, supplierId, poNumber: `MGR-DRAFT-${generateId()}`, currency: 'USD' });
+    void draftPoId; // stays DRAFT — real, unmodified
+
+    const { id: receivedPoId } = await poRepo.create({ storeId, supplierId, poNumber: `MGR-RECEIVED-${generateId()}`, currency: 'USD' });
+    await db.update(purchaseOrders).set({ status: 'RECEIVED' }).where(eq(purchaseOrders.id, receivedPoId));
+
+    const response = await fetchManagerSummary(storeId, cookie);
+    const body = JSON.parse(response.body).result.data;
+
+    // 1 SENT + 1 DRAFT are "open"; RECEIVED is terminal and excluded.
+    const sentCount = body.openPurchaseOrders.find((r: { status: string }) => r.status === 'SENT').count;
+    const draftCount = body.openPurchaseOrders.find((r: { status: string }) => r.status === 'DRAFT').count;
+    expect(sentCount).toBe(1);
+    expect(draftCount).toBe(1);
+    // Only the real SENT PO counts as a pending receipt — DRAFT/RECEIVED do not.
+    expect(body.pendingReceipts.count).toBe(1);
+  });
+
+  it('counts a real document at REVIEW_REQUIRED as awaiting review', async () => {
+    const { organizationId, storeId } = await setUpOrg();
+    const cookie = await issueSession(organizationId);
+    await db.insert(documents).values({
+      id: generateId(),
+      organizationId,
+      storeId,
+      type: 'INVOICE',
+      source: 'UPLOAD',
+      status: 'REVIEW_REQUIRED',
+      storageKey: `${organizationId}/mgr-doc.pdf`,
+      contentHash: `mgr-hash-${generateId()}`,
+      mimeType: 'application/pdf',
+      sizeBytes: 1,
+    });
+
+    const response = await fetchManagerSummary(storeId, cookie);
+    const body = JSON.parse(response.body).result.data;
+    expect(body.documentsAwaitingReview.count).toBe(1);
+  });
+
+  it('cross-tenant: a store id from a different org returns 404, not that org\'s counts', async () => {
+    const { organizationId: orgA, storeId: storeA } = await setUpOrg();
+    const { organizationId: orgB } = await setUpOrg();
+
+    const supplierId = generateId();
+    await db.insert(suppliers).values({ id: supplierId, organizationId: orgA, name: 'Cross-Tenant Test Supplier' });
+    const poRepo = new PurchaseOrderRepository(db, orgA);
+    await poRepo.create({ storeId: storeA, supplierId, poNumber: `MGR-XT-${generateId()}`, currency: 'USD' });
+
+    const cookieB = await issueSession(orgB);
+    const response = await fetchManagerSummary(storeA, cookieB);
+    expect(response.statusCode).toBe(404);
+  });
+});
+
+/**
+ * 009-16 — real HTTP proof that drill-through returns the ACTUAL rows behind a dashboard figure,
+ * not a re-aggregated summary. Each test seeds a real fixture, reads the figure's own total via
+ * the same arithmetic `dashboard.summary`'s tests already trust, then confirms drillThrough's rows
+ * sum back to that exact total — the property this endpoint exists to guarantee.
+ */
+describe('dashboard.drillThrough', () => {
+  let app: FastifyInstance;
+  const { db } = createDb(process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/retailos');
+  const redis = createRedisClient(process.env.REDIS_URL ?? 'redis://localhost:6379');
+  const sessionStore = new SessionStore(redis);
+  const createdOrgIds: string[] = [];
+  const createdUserIds: string[] = [];
+
+  beforeAll(async () => {
+    app = buildServer({ logger: false });
+    await app.ready();
+  });
+
+  afterEach(async () => {
+    for (const orgId of createdOrgIds) {
+      await db.delete(stockMovements).where(eq(stockMovements.organizationId, orgId));
+      await db.delete(auditLogs).where(eq(auditLogs.organizationId, orgId));
+      await db.delete(stockLevels).where(eq(stockLevels.organizationId, orgId));
+      await db.delete(lots).where(eq(lots.organizationId, orgId));
+      await db.delete(outboxEvents).where(eq(outboxEvents.organizationId, orgId));
+      await db.delete(salesTransactionLines).where(eq(salesTransactionLines.organizationId, orgId));
+      await db.delete(salesTransactions).where(eq(salesTransactions.organizationId, orgId));
+      await db.delete(posItems).where(eq(posItems.organizationId, orgId));
+      await db.delete(menuItems).where(eq(menuItems.organizationId, orgId));
+      const orgProducts = await db.select({ id: products.id }).from(products).where(eq(products.organizationId, orgId));
+      for (const p of orgProducts) {
+        await db.delete(productVariants).where(eq(productVariants.productId, p.id));
+      }
+      await db.delete(products).where(eq(products.organizationId, orgId));
+      await db.delete(stores).where(eq(stores.organizationId, orgId));
+      await db.delete(organizations).where(eq(organizations.id, orgId));
+    }
+    createdOrgIds.length = 0;
+    createdUserIds.length = 0;
+  });
+
+  afterAll(async () => {
+    await app.close();
+    await redis.quit();
+  });
+
+  const setUpOrg = async () => {
+    const organizationId = generateId();
+    createdOrgIds.push(organizationId);
+    await db.insert(organizations).values({
+      id: organizationId,
+      name: `Drill-Through Test Org ${organizationId}`,
+      slug: `drill-through-test-${organizationId}`,
+      baseCurrency: 'USD',
+    });
+    const storeId = generateId();
+    await db.insert(stores).values({ id: storeId, organizationId, name: 'Test Store', timezone: 'America/New_York' });
+    return { organizationId, storeId };
+  };
+
+  const issueSession = async (organizationId: string): Promise<string> => {
+    const userId = generateId();
+    createdUserIds.push(userId);
+    const { token } = await sessionStore.create(
+      { userId, organizationId, storeIds: 'ALL', role: 'OWNER', permissions: ['financial:read', 'inventory:read'] },
+      '127.0.0.1',
+      'test-agent'
+    );
+    return token;
+  };
+
+  const fetchDrillThrough = async (
+    storeId: string,
+    cookie: string,
+    figure: string,
+    from: Date,
+    to: Date,
+    reasonCode?: string
+  ) => {
+    const input = { storeId, figure, from: from.toISOString(), to: to.toISOString(), ...(reasonCode ? { reasonCode } : {}) };
+    return app.inject({
+      method: 'GET',
+      url: `/trpc/dashboard.drillThrough?input=${encodeURIComponent(JSON.stringify(input))}`,
+      cookies: { '__Host-session': cookie },
+    });
+  };
+
+  it('rejects a request with no session cookie (401)', async () => {
+    const { storeId } = await setUpOrg();
+    const now = new Date();
+    const response = await app.inject({
+      method: 'GET',
+      url: `/trpc/dashboard.drillThrough?input=${encodeURIComponent(JSON.stringify({ storeId, figure: 'net_revenue', from: new Date(now.getTime() - 86400000).toISOString(), to: now.toISOString() }))}`,
+    });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('net_revenue drill-through returns the real sales lines summing to the same total dashboard.summary reports', async () => {
+    const { organizationId, storeId } = await setUpOrg();
+    const salesRepo = new SalesTransactionRepository(db, organizationId);
+    const now = new Date();
+    const from = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
+    for (const [i, total] of [['a', '60.0000'], ['b', '40.0000']] as const) {
+      await salesRepo.recordIfNew({
+        storeId,
+        source: 'square',
+        externalId: `DT-ORDER-${i}-${organizationId}`,
+        occurredAt: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000),
+        subtotal: total,
+        discount: '0.0000',
+        tax: '0.0000',
+        total,
+        currency: 'USD',
+        lines: [{ quantity: '1.000000', unitPrice: total, discount: '0.0000', lineTotal: total }],
+      });
+    }
+
+    const cookie = await issueSession(organizationId);
+    const response = await fetchDrillThrough(storeId, cookie, 'net_revenue', from, now);
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body).result.data;
+
+    expect(body.figure).toBe('net_revenue');
+    expect(body.rows).toHaveLength(2);
+    const sum = body.rows.reduce((acc: number, row: { amount: { amount: string } }) => acc + Number(row.amount.amount), 0);
+    expect(sum).toBe(100);
+    // An unmapped line (no posItemId, so no menu item) is labeled honestly, never dropped.
+    expect(body.rows.every((row: { label: string }) => row.label === 'Unmapped item')).toBe(true);
+  });
+
+  it('cogs_actual drill-through returns real consumption rows, including one with an unknown cost, never silently dropped', async () => {
+    const { organizationId, storeId } = await setUpOrg();
+    const [eachUnit] = await db.select({ id: units.id }).from(units).where(eq(units.code, 'each'));
+    const productId = generateId();
+    await db.insert(products).values({ id: productId, organizationId, sku: `DT-COGS-${productId}`, name: 'Drill Ingredient', baseUnitId: eachUnit!.id, type: 'INGREDIENT' });
+    const variantId = generateId();
+    await db.insert(productVariants).values({ id: variantId, productId, name: 'Default', isDefault: true });
+
+    const now = new Date();
+    const from = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
+
+    // One consumption with a known cost, one with none.
+    await db.insert(stockMovements).values({
+      id: generateId(), organizationId, storeId, productId, variantId,
+      movementType: 'SALE_CONSUMPTION', quantity: '-4.000000', unitCost: '3.0000', currency: 'USD',
+      occurredAt: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000), recordedAt: new Date(), sourceType: 'test',
+    });
+    await db.insert(stockMovements).values({
+      id: generateId(), organizationId, storeId, productId, variantId,
+      movementType: 'SALE_CONSUMPTION', quantity: '-2.000000', unitCost: null, currency: 'USD',
+      occurredAt: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000), recordedAt: new Date(), sourceType: 'test',
+    });
+
+    const cookie = await issueSession(organizationId);
+    const response = await fetchDrillThrough(storeId, cookie, 'cogs_actual', from, now);
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body).result.data;
+
+    expect(body.rows).toHaveLength(2);
+    const knownRow = body.rows.find((r: { amount: unknown }) => r.amount !== null);
+    const unknownRow = body.rows.find((r: { amount: unknown }) => r.amount === null);
+    expect(Number(knownRow.amount.amount)).toBe(12); // 4 * $3.00
+    expect(unknownRow).toBeDefined();
+    expect(unknownRow.label).toBe('Drill Ingredient');
+  });
+
+  it('waste_by_reason drill-through filters to the requested reason code only', async () => {
+    const { organizationId, storeId } = await setUpOrg();
+    const [eachUnit] = await db.select({ id: units.id }).from(units).where(eq(units.code, 'each'));
+    const productId = generateId();
+    await db.insert(products).values({ id: productId, organizationId, sku: `DT-WASTE-${productId}`, name: 'Drill Waste Item', baseUnitId: eachUnit!.id, type: 'INGREDIENT' });
+    const variantId = generateId();
+    await db.insert(productVariants).values({ id: variantId, productId, name: 'Default', isDefault: true });
+
+    const now = new Date();
+    const from = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
+
+    await db.insert(stockMovements).values({
+      id: generateId(), organizationId, storeId, productId, variantId,
+      movementType: 'WASTE', quantity: '-3.000000', unitCost: '5.0000', currency: 'USD', reasonCode: 'SPILLAGE',
+      occurredAt: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000), recordedAt: new Date(), sourceType: 'test',
+    });
+    await db.insert(stockMovements).values({
+      id: generateId(), organizationId, storeId, productId, variantId,
+      movementType: 'WASTE', quantity: '-1.000000', unitCost: '5.0000', currency: 'USD', reasonCode: 'DAMAGED',
+      occurredAt: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000), recordedAt: new Date(), sourceType: 'test',
+    });
+
+    const cookie = await issueSession(organizationId);
+    const response = await fetchDrillThrough(storeId, cookie, 'waste_by_reason', from, now, 'SPILLAGE');
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body).result.data;
+
+    expect(body.rows).toHaveLength(1);
+    expect(body.rows[0].reasonCode).toBe('SPILLAGE');
+    expect(Number(body.rows[0].amount.amount)).toBe(15); // 3 * $5.00
+  });
+
+  it('stock_value drill-through returns real per-lot rows summing to the same total dashboard.summary reports', async () => {
+    const { organizationId, storeId } = await setUpOrg();
+    const [eachUnit] = await db.select({ id: units.id }).from(units).where(eq(units.code, 'each'));
+    const productId = generateId();
+    await db.insert(products).values({ id: productId, organizationId, sku: `DT-STOCK-${productId}`, name: 'Drill Stock Item', baseUnitId: eachUnit!.id, type: 'INGREDIENT' });
+    const variantId = generateId();
+    await db.insert(productVariants).values({ id: variantId, productId, name: 'Default', isDefault: true });
+
+    const lotRepo = new LotRepository(db, organizationId);
+    await lotRepo.receive({
+      id: generateId(), storeId, productId, variantId,
+      receivedAt: new Date(Date.now() - 24 * 60 * 60 * 1000), initialQuantity: '20.000000', unitCost: '4.0000', currency: 'USD',
+    });
+
+    const cookie = await issueSession(organizationId);
+    const now = new Date();
+    const response = await fetchDrillThrough(storeId, cookie, 'stock_value', new Date(now.getTime() - 86400000), now);
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body).result.data;
+
+    expect(body.rows).toHaveLength(1);
+    expect(body.rows[0].label).toBe('Drill Stock Item');
+    expect(Number(body.rows[0].amount.amount)).toBe(80); // 20 * $4.00
+  });
+
+  it('a composite figure (contribution_margin) returns an empty row set pointing at its real underlying figures', async () => {
+    const { organizationId, storeId } = await setUpOrg();
+    const cookie = await issueSession(organizationId);
+    const now = new Date();
+    const response = await fetchDrillThrough(storeId, cookie, 'contribution_margin', new Date(now.getTime() - 86400000), now);
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body).result.data;
+
+    expect(body.rows).toEqual([]);
+    expect(body.relatedFigures).toEqual(['net_revenue', 'cogs_actual']);
+  });
+
+  it('cross-tenant: a store id from a different org returns 404, not that org\'s rows', async () => {
+    const { organizationId: orgA, storeId: storeA } = await setUpOrg();
+    const { organizationId: orgB } = await setUpOrg();
+
+    const salesRepo = new SalesTransactionRepository(db, orgA);
+    await salesRepo.recordIfNew({
+      storeId: storeA, source: 'square', externalId: `DT-XT-${orgA}`,
+      occurredAt: new Date(), subtotal: '10.0000', discount: '0.0000', tax: '0.0000', total: '10.0000', currency: 'USD',
+      lines: [{ quantity: '1.000000', unitPrice: '10.0000', discount: '0.0000', lineTotal: '10.0000' }],
+    });
+
+    const cookieB = await issueSession(orgB);
+    const now = new Date();
+    const response = await fetchDrillThrough(storeA, cookieB, 'net_revenue', new Date(now.getTime() - 86400000), now);
     expect(response.statusCode).toBe(404);
   });
 });

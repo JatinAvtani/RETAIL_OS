@@ -2,9 +2,14 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { eq } from 'drizzle-orm';
 import { organizations, ProductRepository, RecipeRepository } from '@retailos/db';
-import { generateId, type CurrencyCode } from '@retailos/domain';
+import {
+  generateId,
+  RecipeDepthExceededError,
+  RecipeVersionNotFoundError,
+  type CurrencyCode,
+} from '@retailos/domain';
 import { protectedProcedure, router } from '../trpc';
-import { resolveRecipeCostBreakdown } from '../../metrics/recipe-cost-resolver';
+import { RecipeNotFoundError, resolveRecipeCostBreakdown } from '@retailos/metrics';
 
 const componentInput = z.object({
   componentType: z.enum(['PRODUCT', 'RECIPE']),
@@ -111,6 +116,16 @@ export const recipesRouter = router({
       .where(eq(organizations.id, ctx.session.organizationId));
     const currency = (orgRow?.baseCurrency ?? 'USD') as CurrencyCode;
 
-    return resolveRecipeCostBreakdown(ctx.db, ctx.session.organizationId, input.recipeGroupId, currency);
+    try {
+      return await resolveRecipeCostBreakdown(ctx.db, ctx.session.organizationId, input.recipeGroupId, currency);
+    } catch (err) {
+      if (err instanceof RecipeNotFoundError) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: err.message });
+      }
+      if (err instanceof RecipeDepthExceededError || err instanceof RecipeVersionNotFoundError) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: err.message });
+      }
+      throw err;
+    }
   }),
 });

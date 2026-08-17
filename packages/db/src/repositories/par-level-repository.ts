@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import * as schema from '../schema/index';
 import { stockParLevels } from '../schema/index';
@@ -81,5 +81,48 @@ export class ParLevelRepository extends TenantScopedRepository<typeof stockParLe
         .from(stockParLevels)
         .where(scopedWhere(eq(stockParLevels.storeId, storeId)))
     );
+  }
+
+  /**
+   * `items_below_reorder_point`'s real input (009-15) — a tenant-scoped equivalent of
+   * `findBelowParLevels` (`packages/db/src/below-par.ts`, 005-09), same reasoning as
+   * `StockLevelRepository.findExpiringLots`/`findDriftForOrg`: the original is a deliberate
+   * cross-tenant admin sweep, this is the one-store, app-role-scoped version this catalog entry can
+   * actually call. `INNER JOIN` (not `LEFT`), matching the original exactly — a product with no
+   * `stock_par_levels` row at all has no reorder point configured, a genuinely different state from
+   * "configured and currently satisfied," and confirmed with the user this metric is the SIMPLE
+   * literal threshold check, not `suggestReorder`'s richer supplier-grouped suggestion engine.
+   */
+  async findBelowReorderPointForStore(storeId: string) {
+    const rows = await this.runScoped((db) =>
+      db.execute<{
+        product_id: string;
+        variant_id: string;
+        quantity_on_hand: string;
+        reorder_point: string;
+      }>(sql`
+        SELECT
+          sl.product_id,
+          sl.variant_id,
+          sl.quantity AS quantity_on_hand,
+          pl.reorder_point
+        FROM stock_levels sl
+        INNER JOIN stock_par_levels pl
+          ON pl.store_id = sl.store_id
+         AND pl.product_id = sl.product_id
+         AND pl.variant_id = sl.variant_id
+         AND pl.organization_id = ${this.organizationId}
+        WHERE sl.organization_id = ${this.organizationId}
+          AND sl.store_id = ${storeId}
+          AND pl.reorder_point IS NOT NULL
+          AND sl.quantity <= pl.reorder_point
+      `)
+    );
+    return rows.map((row) => ({
+      productId: row.product_id,
+      variantId: row.variant_id,
+      quantityOnHand: row.quantity_on_hand,
+      reorderPoint: row.reorder_point,
+    }));
   }
 }

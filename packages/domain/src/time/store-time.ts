@@ -72,3 +72,58 @@ export const resolveDaypart = (localHour: number): Daypart => {
 /** Convenience: the daypart a UTC instant falls into for a given store timezone, in one call. */
 export const resolveLocalDaypart = (instant: Date, timezone: StoreTimezone): Daypart =>
   resolveDaypart(resolveLocalHour(instant, timezone));
+
+/**
+ * The real UTC offset (in minutes, positive = ahead of UTC) in effect for a given instant in a
+ * given timezone — e.g. `America/New_York` is `-240` (EDT) in August, `-300` (EST) in January.
+ * `longOffset` is the one `Intl.DateTimeFormat` format that returns a literal `GMT±HH:MM` string
+ * rather than an abbreviation (`EDT`) or a UTC-relative name, so this needs no hardcoded
+ * zone-name-to-offset table and stays correct across a DST transition automatically.
+ */
+const resolveUtcOffsetMinutes = (instant: Date, timezone: StoreTimezone): number => {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: timezone, timeZoneName: 'longOffset' }).formatToParts(
+    instant
+  );
+  const offsetPart = parts.find((p) => p.type === 'timeZoneName')?.value ?? 'GMT+00:00';
+  const match = /GMT([+-])(\d{2}):(\d{2})/.exec(offsetPart);
+  if (!match) return 0;
+  const sign = match[1] === '-' ? -1 : 1;
+  return sign * (Number(match[2]) * 60 + Number(match[3]));
+};
+
+/**
+ * The `[from, to)` UTC instant range one store-local calendar date covers — 009-01's real need:
+ * an incremental aggregation job resolves "yesterday" per store's own timezone (this project's
+ * standing example: "a three-store group across two timezones has three different yesterdays,"
+ * plan.md Phase 1), then must query raw transactional tables (all stored TIMESTAMPTZ/UTC) for
+ * exactly the UTC window that local day spans — never the UTC calendar day, which would silently
+ * include/exclude hours at either edge for any timezone not at UTC+0.
+ *
+ * `from` = local midnight of `localDate`, converted to UTC using the real offset in effect AT that
+ * date (not "now") — correct across a DST transition landing on the date's own boundary. `to` is
+ * the same calculation for the NEXT calendar day, not `from + 24h` — a day with a DST transition
+ * is genuinely 23 or 25 hours long in UTC terms, and a fixed 24h step would silently mis-bound one
+ * hour of transactions into the wrong day's fact row twice a year.
+ */
+export const resolveLocalDateRange = (localDate: string, timezone: StoreTimezone): { from: Date; to: Date } => {
+  const localMidnightUtc = (dateStr: string): Date => {
+    const utcGuess = new Date(`${dateStr}T00:00:00Z`);
+    const offsetMinutes = resolveUtcOffsetMinutes(utcGuess, timezone);
+    return new Date(utcGuess.getTime() - offsetMinutes * 60 * 1000);
+  };
+
+  // The next CALENDAR date, computed by plain date arithmetic on `localDate` itself (a real
+  // calendar-day increment, not a UTC-instant-plus-24h guess) — a fall-back DST day is a genuine
+  // 25-hour day in UTC terms, so `from + 24h` can still land WITHIN the same local calendar day
+  // (confirmed the hard way: `2026-11-01` in America/New_York is 25 real UTC hours, and
+  // `from + 24h` resolves back to `2026-11-01`, not `2026-11-02`). Parsing `localDate` as a plain
+  // UTC-midnight instant purely for calendar-day increment (never used as an actual UTC boundary)
+  // sidesteps this entirely — it is timezone-independent arithmetic on the calendar date string.
+  const nextLocalDate = new Date(`${localDate}T00:00:00Z`);
+  nextLocalDate.setUTCDate(nextLocalDate.getUTCDate() + 1);
+  const nextLocalDateStr = nextLocalDate.toISOString().slice(0, 10);
+
+  const from = localMidnightUtc(localDate);
+  const to = localMidnightUtc(nextLocalDateStr);
+  return { from, to };
+};

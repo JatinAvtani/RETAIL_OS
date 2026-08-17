@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import Redis from 'ioredis';
 import type { AuthContext } from '@retailos/authz';
 import {
   DuplicateMetricIdError,
@@ -12,6 +13,8 @@ import {
   listMetricIds,
 } from './registry.js';
 import type { MetricContext, MetricResult } from './types.js';
+
+const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://localhost:6379';
 
 /**
  * Mechanics tests for the catalog itself — registration validation, the single execution path,
@@ -186,5 +189,97 @@ describe('metric catalog registry', () => {
     const result = await executeMetric('unknowable_metric', {}, auth(new Set(['financial:read'])), ctx);
     expect(result.value).toBe('unknown');
     expect(result.unknownReason).toBe('No data in the period.');
+  });
+
+  describe('executeMetric with a real Redis cache (009-12)', () => {
+    const redis = new Redis(REDIS_URL);
+
+    afterAll(async () => {
+      await redis.quit();
+    });
+
+    it('with no cache field on ctx, behaves exactly as before — every call recomputes', async () => {
+      _resetRegistryForTests();
+      let executed = 0;
+      defineMetric({
+        id: 'no_cache_metric',
+        description: 'x',
+        parameters: z.object({}),
+        unit: 'COUNT',
+        requiredPermission: 'financial:read',
+        sources: ['t'],
+        async execute(): Promise<MetricResult> {
+          executed++;
+          return {
+            metricId: 'no_cache_metric',
+            value: '1',
+            unit: 'COUNT',
+            period: { from: new Date(), to: new Date() },
+            computedAt: new Date(),
+            freshness: new Date(),
+            provenance: [],
+          };
+        },
+      });
+
+      await executeMetric('no_cache_metric', {}, auth(new Set(['financial:read'])), ctx);
+      await executeMetric('no_cache_metric', {}, auth(new Set(['financial:read'])), ctx);
+      expect(executed).toBe(2);
+    });
+
+    it('with a cache field present, a second real call for the same metric+org+params is served from cache, not recomputed', async () => {
+      _resetRegistryForTests();
+      let executed = 0;
+      defineMetric({
+        id: 'cached_metric',
+        description: 'x',
+        parameters: z.object({}),
+        unit: 'COUNT',
+        requiredPermission: 'financial:read',
+        sources: ['t'],
+        async execute(): Promise<MetricResult> {
+          executed++;
+          return {
+            metricId: 'cached_metric',
+            value: String(executed),
+            unit: 'COUNT',
+            period: { from: new Date(), to: new Date() },
+            computedAt: new Date(),
+            freshness: new Date(),
+            provenance: [],
+          };
+        },
+      });
+
+      const cachedCtx: MetricContext = { ...ctx, organizationId: `org-registry-${Date.now()}`, cache: redis };
+      const first = await executeMetric('cached_metric', {}, auth(new Set(['financial:read'])), cachedCtx);
+      const second = await executeMetric('cached_metric', {}, auth(new Set(['financial:read'])), cachedCtx);
+
+      expect(executed).toBe(1);
+      expect(first.value).toBe('1');
+      expect(second.value).toBe('1'); // NOT '2' — genuinely came from cache, not a second real compute
+
+      await redis.del(`metrics:v1:${cachedCtx.organizationId}:cached_metric:{}`);
+    });
+
+    it('permission enforcement still runs BEFORE any cache lookup — a denied caller never even checks the cache', async () => {
+      _resetRegistryForTests();
+      defineMetric({
+        id: 'cached_gated_metric',
+        description: 'x',
+        parameters: z.object({}),
+        unit: 'COUNT',
+        requiredPermission: 'financial:read',
+        sources: ['t'],
+        async execute(): Promise<MetricResult> {
+          throw new Error('unreachable — permission check must reject first');
+        },
+      });
+
+      const cachedCtx: MetricContext = { ...ctx, organizationId: `org-registry-gated-${Date.now()}`, cache: redis };
+      await expect(executeMetric('cached_gated_metric', {}, auth(new Set()), cachedCtx)).rejects.toThrow(
+        MetricPermissionDeniedError
+      );
+    });
   });
 });

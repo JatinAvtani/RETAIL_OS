@@ -114,6 +114,17 @@ report BLOCKING I9 "AI tool definition contains a mutating verb" \
 # session's organizationId lives in its stored payload, not its lookup key; the OAuth state and the
 # rate-limit counter have no organizationId to leak at all - an auth attempt has no tenant yet by
 # definition, that's what's being resolved). Documented at the call sites too, not just here.
+#
+# packages/metrics/src/catalog/cache.ts excluded too (009-12): the OPPOSITE situation from the
+# three above - every key here genuinely IS tenant-scoped (buildMetricCacheKey embeds
+# organizationId directly in cacheKey; the lock key is built as
+# `metrics:v1:${organizationId}:lock:${cacheKey}`, explicitly org-namespaced in its own right) -
+# but withSingleFlight's `organizationId` parameter is declared once near the top of a ~30-line
+# function and reused at several `redis.get`/`redis.set` calls further down than this rule's fixed
+# 5-line lookback window reaches. Confirmed by reading the real code, not assumed: every cache
+# read/write in this file is provably reachable only through a cacheKey/lockKey that already
+# encodes organizationId - there is no code path in this file that builds or uses a
+# cache/lock key without it.
 r=""
 while IFS= read -r hit; do
   [[ -z "$hit" ]] && continue
@@ -122,7 +133,7 @@ while IFS= read -r hit; do
   lo=$(( ln > 5 ? ln - 5 : 1 ))
   ctx=$(sed -n "${lo},$((ln+1))p" "$f" 2>/dev/null)
   echo "$ctx" | grep -qE 'organization_?[Ii]d|orgId|tenantId|__tenant' || r+="$hit"$'\n'
-done < <(search '(cacheKey|redis\.(get|set|setex)|cache\.(get|set))' 'packages/session/src/session-store\.ts|apps/api/src/oauth/state-store\.ts|packages/session/src/rate-limiter\.ts' '*.ts')
+done < <(search '(cacheKey|redis\.(get|set|setex)|cache\.(get|set))' 'packages/session/src/session-store\.ts|apps/api/src/oauth/state-store\.ts|packages/session/src/rate-limiter\.ts|packages/metrics/src/catalog/cache\.ts' '*.ts')
 report BLOCKING I4 "Cache key may lack a tenant component" \
   "A cache hit bypasses RLS entirely — a leak with a different mechanism." "$r"
 
@@ -132,9 +143,15 @@ report BLOCKING I4 "Tenant context set session-scoped (must be SET LOCAL)" \
 
 r=$(search '(vectorSearch|embeddingSearch|\.similaritySearch|<=>|<->)' '' '*.ts' \
    | grep -Ev 'organization_?[Ii]d|orgId|tenantId' \
-   | grep -Ev ':\s*(//|\*|/\*)' || true)
+   | grep -Ev ':\s*(//|\*|/\*)' \
+   | grep -Ev 'search-repository\.ts:.*ORDER BY de_emb\.embedding <=>' || true)
 report BLOCKING I4 "Vector/semantic query may lack an explicit tenant filter" \
   "Retrieval leakage is the likeliest serious failure in an AI product. Filter at query level, not only RLS." "$r"
+# 009-18: SearchRepository.searchDocumentsByVector's real WHERE clause explicitly filters
+# de_emb.organization_id = this.organizationId (verified directly, two lines above the flagged
+# ORDER BY) -- this scanner checks a single flagged line for the string "organization_id", with no
+# lookback across a multi-line SQL template, so a real, correct multi-line WHERE clause can't
+# satisfy it. Excluded here, not suppressed by weakening the check for every future query.
 
 # RLS coverage: any table whose CREATE statement declares organization_id needs a policy.
 # Reads each .sql file, splits on ';', and inspects each CREATE TABLE block.

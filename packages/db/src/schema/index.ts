@@ -32,3 +32,4 @@ export * from './purchase-orders';
 export * from './goods-receipts';
 export * from './invoice-matches';
 export * from './supplier-performance-events';
+export * from './fact-tables';

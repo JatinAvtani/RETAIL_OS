@@ -1,4 +1,5 @@
 import { hasPermission, type AuthContext } from '@retailos/authz';
+import { withMetricCache } from './cache.js';
 import type { MetricContext, MetricDefinition, MetricResult } from './types.js';
 
 /**
@@ -89,5 +90,9 @@ export const executeMetric = async <TParams>(
     throw new MetricPermissionDeniedError(id, definition.requiredPermission);
   }
   const params = definition.parameters.parse(rawParams);
+
+  if (ctx.cache) {
+    return withMetricCache(ctx.cache, id, ctx.organizationId, params, () => definition.execute(params, ctx));
+  }
   return definition.execute(params, ctx);
 };

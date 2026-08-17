@@ -30,11 +30,11 @@ import {
  * underlying `DashboardRepository` method is single-store-bounded — a cross-store rollup is a
  * genuinely different, unbuilt aggregation (009-01's fact tables), not a trivial loop over stores.
  *
- * `resolveRecipeUnitCost` is passed on `MetricContext` rather than imported directly: it lives in
- * `apps/api` (it throws `TRPCError`, a tRPC-specific error shape, and reaching into `apps/api`'s
- * internals from `packages/metrics` would also be a real `pnpm boundaries` violation) — this
- * package only knows it as an injected function, matching how `PostingService`/`MovementService`
- * already take collaborators as parameters rather than importing across a layer boundary.
+ * `resolveRecipeUnitCost` (009-01, `../recipes/recipe-cost-resolver.js`) is passed on `MetricContext`
+ * rather than called directly here: this module stays free of concrete repository wiring
+ * (`RecipeRepository`, `ProductRepository`, etc. construction), taking its collaborators as
+ * parameters instead — matching how `PostingService`/`MovementService` already take collaborators
+ * as parameters rather than reaching for concrete construction inline.
  */
 
 const CURRENCY: CurrencyCode = 'USD';
