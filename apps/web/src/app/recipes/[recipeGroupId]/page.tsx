@@ -95,11 +95,11 @@ export default function RecipeDetailPage() {
             </p>
             {costLoading && <p className="mt-2 text-sm text-content-muted">Computing…</p>}
             {!costLoading && !costKnown && (
-              <p className="mt-1.5 text-3xl font-semibold tracking-tight text-content-subtle">Unknown</p>
+              <p className="mt-2 text-2xl italic leading-none text-unknown">Not known</p>
             )}
             {costKnown && (
-              <p className="tabular mt-1.5 text-3xl font-semibold tracking-tight text-content">
-                <span className="mr-1 text-lg font-medium text-content-muted">
+              <p className="mt-2 font-mono text-3xl font-semibold leading-none tracking-[-0.02em] tabular-nums text-content">
+                <span className="mr-1 text-lg font-normal text-content-muted">
                   {cost!.total !== 'unknown' && cost!.total.currency}
                 </span>
                 {cost!.total !== 'unknown' && formatMoneyAmount(cost!.total.amount)}
@@ -108,9 +108,8 @@ export default function RecipeDetailPage() {
           </div>
           {!costLoading && !costKnown && (
             <p className="max-w-sm text-sm text-content-muted">
-              At least one ingredient has no confirmed supplier price. We show{' '}
-              <strong className="font-medium text-content">unknown</strong> rather than a zero — a
-              guessed zero would silently overstate your margin.
+              One or more ingredients have no confirmed price yet. We show{' '}
+              <strong className="font-medium text-content">not known</strong> instead of a guess.
             </p>
           )}
         </div>
@@ -128,16 +127,16 @@ export default function RecipeDetailPage() {
                 <Tr key={line.productId}>
                   <Td className="font-medium">
                     {productNames.get(line.productId) ?? (
-                      <span className="text-content-subtle">{line.productId.slice(0, 8)}…</span>
+                      <span className="font-mono text-content-subtle">{line.productId.slice(0, 8)}…</span>
                     )}
                   </Td>
-                  <Td align="right">
+                  <Td variant="numeric">
                     {line.cost === 'unknown' ? (
-                      <Badge tone="warning">Unknown</Badge>
+                      // An unpriced ingredient is an absence, not a warning state — `unknown` says
+                      // "no supplier price on file" without implying something went wrong.
+                      <Badge tone="unknown">No price</Badge>
                     ) : (
-                      <span className="tabular">
-                        {line.cost.currency} {formatMoneyAmount(line.cost.amount)}
-                      </span>
+                      `${line.cost.currency} ${formatMoneyAmount(line.cost.amount)}`
                     )}
                   </Td>
                 </Tr>
@@ -164,7 +163,7 @@ export default function RecipeDetailPage() {
                     {component.componentType.toLowerCase().replace('_', ' ')}
                   </Badge>
                 </Td>
-                <Td align="right" className="tabular">
+                <Td variant="numeric">
                   {component.quantity}
                 </Td>
               </Tr>

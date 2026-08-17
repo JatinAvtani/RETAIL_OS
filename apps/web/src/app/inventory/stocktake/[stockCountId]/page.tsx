@@ -16,6 +16,7 @@ import {
   Td,
   Th,
   Tr,
+  Value,
   type BadgeTone,
 } from '@/components/ui';
 
@@ -103,7 +104,7 @@ export default function StocktakeDetailPage() {
     <>
       <PageHeader
         title="Stock count"
-        description="Counted quantities are compared against the balance frozen when the count started, not the live balance."
+        description="Compared against the balance from when this count started, not today's balance."
         actions={
           <div className="flex items-center gap-2">
             <Badge tone={STATUS_TONES[count.status] ?? 'neutral'}>
@@ -211,14 +212,17 @@ export default function StocktakeDetailPage() {
                   : 0;
               const needsReason = magnitude >= LARGE_VARIANCE_HINT_THRESHOLD && !line.line.reasonCode;
 
+              // A line still owing a reason for a large discrepancy is the row that blocks approval,
+              // so it carries the stripe — the thing to act on is visible while scanning, without
+              // reading every variance figure.
               return (
-                <Tr key={line.line.id}>
+                <Tr key={line.line.id} {...(needsReason ? { severity: 'watch' as const } : {})}>
                   <Td className="text-content-muted">{line.storageLocationName ?? 'Unassigned'}</Td>
                   <Td>
                     <span className="font-medium">{line.productName}</span>
-                    <span className="ml-2 text-xs text-content-subtle">{line.productSku}</span>
+                    <span className="ml-2 font-mono text-xs text-content-subtle">{line.productSku}</span>
                   </Td>
-                  <Td align="right" className="tabular text-content-muted">
+                  <Td variant="numeric" className="text-content-muted">
                     {line.line.theoreticalQuantityT0 ?? (
                       <span className="text-content-subtle italic">Not started</span>
                     )}
@@ -240,24 +244,16 @@ export default function StocktakeDetailPage() {
                         </Button>
                       </div>
                     ) : (
-                      <span className="tabular">
-                        {line.line.countedQuantity ?? <span className="text-content-subtle">—</span>}
-                      </span>
+                      // An uncounted line is genuinely uncounted, not zero — counting it as zero
+                      // would post a full-stock write-off.
+                      <Value value={line.line.countedQuantity} />
                     )}
                   </Td>
-                  <Td align="right">
+                  <Td variant="numeric">
                     {varianceQty === null ? (
-                      <span className="text-content-subtle">—</span>
+                      <span className="italic text-unknown">Not counted</span>
                     ) : (
-                      <span
-                        className={
-                          varianceQty < 0
-                            ? 'tabular font-medium text-danger'
-                            : varianceQty > 0
-                              ? 'tabular font-medium text-positive'
-                              : 'tabular text-content-muted'
-                        }
-                      >
+                      <span className="font-medium">
                         {varianceQty > 0 ? '+' : ''}
                         {line.line.varianceQuantity}
                         {varianceValue !== null && (

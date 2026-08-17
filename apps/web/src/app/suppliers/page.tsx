@@ -9,8 +9,8 @@ import {
   Card,
   EmptyState,
   ErrorNotice,
-  LoadingState,
   PageHeader,
+  SkeletonRows,
   Table,
   Td,
   Th,
@@ -36,7 +36,7 @@ export default function SuppliersPage() {
     <>
       <PageHeader
         title="Suppliers"
-        description="Contacts, payment terms, delivery schedule, and lead times for who you buy from."
+        description="Who you buy from."
         actions={
           <Link href="/suppliers/new">
             <Button variant="primary">New supplier</Button>
@@ -47,7 +47,7 @@ export default function SuppliersPage() {
       {error && <ErrorNotice>{error}</ErrorNotice>}
 
       <Card>
-        {loading && <LoadingState />}
+        {loading && <SkeletonRows columns={5} />}
         {!loading && !error && suppliers.length === 0 && (
           <EmptyState title="No suppliers yet" hint="Add your first supplier to start creating purchase orders." />
         )}
@@ -73,7 +73,7 @@ export default function SuppliersPage() {
                   <Td>
                     <Badge tone={supplier.status === 'active' ? 'positive' : 'neutral'}>{supplier.status}</Badge>
                   </Td>
-                  <Td align="right">
+                  <Td variant="actions">
                     <Link href={`/suppliers/${supplier.id}/edit`} className="text-sm font-medium text-accent hover:underline">
                       Edit
                     </Link>

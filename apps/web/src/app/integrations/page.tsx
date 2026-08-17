@@ -100,7 +100,7 @@ export default function IntegrationsPage() {
     <>
       <PageHeader
         title="Integrations"
-        description="Each store's POS connection — status, data freshness, and manual sync controls."
+        description="Your POS connection for each store."
       />
 
       {error && <ErrorNotice>{error}</ErrorNotice>}

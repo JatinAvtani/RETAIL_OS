@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
 import { useStores } from '@/lib/use-stores';
-import { Badge, Button, Card, EmptyState, ErrorNotice, LoadingState, PageHeader, Select, Table, Td, Th, Tr } from '@/components/ui';
+import { Badge, Button, Card, EmptyState, ErrorNotice, PageHeader, SkeletonRows, Select, Table, Td, Th, Tr } from '@/components/ui';
 
 type SupplierGroup = Awaited<ReturnType<typeof trpc.purchaseOrders.reorderSuggestions.query>>[number];
 
@@ -49,7 +49,7 @@ export default function ReorderSuggestionsPage() {
     <>
       <PageHeader
         title="Reorder suggestions"
-        description="Deterministic, explainable reorder suggestions grouped by supplier — no ML, no black box. Every quantity comes with the reasoning behind it, so you can verify it before ordering."
+        description="Reorder suggestions by supplier, with the reasoning behind each one."
         actions={
           <div className="flex items-center gap-2">
             {!storesLoading && stores.length > 0 && (
@@ -73,12 +73,12 @@ export default function ReorderSuggestionsPage() {
       {error && <ErrorNotice>{error}</ErrorNotice>}
 
       <Card>
-        {(loading || storesLoading) && <LoadingState />}
+        {(loading || storesLoading) && <SkeletonRows columns={5} />}
         {!storesLoading && stores.length === 0 && <EmptyState title="No stores available." />}
         {!loading && !error && stores.length > 0 && totalSuggestions === 0 && (
           <EmptyState
             title="Nothing needs reordering right now"
-            hint="A product shows up here once it's below its reorder point and has confirmed supplier pricing/consumption history to reason from. New products with no sales history are never guessed at."
+            hint="Products show up here once they're low on stock and have enough history to work from."
           />
         )}
         {!loading &&
@@ -106,7 +106,7 @@ export default function ReorderSuggestionsPage() {
                   {group.suggestions.map((row) => (
                     <Tr key={row.supplierProductId}>
                       <Td className="font-medium">{row.productName}</Td>
-                      <Td align="right" className="tabular">
+                      <Td variant="numeric">
                         {row.suggestion.quantity.amount} {row.unit ?? ''}
                       </Td>
                       <Td>

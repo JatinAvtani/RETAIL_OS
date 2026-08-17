@@ -25,6 +25,19 @@ const VARIANCE_LABELS: Record<string, string> = {
   INVOICED_NOT_RECEIVED: 'Invoiced, not received',
 };
 
+const STATUS_LABELS: Record<string, string> = {
+  PENDING: 'Pending review',
+  REVIEWED: 'Reviewed',
+  RESOLVED: 'Resolved',
+};
+
+const SEVERITY_LABELS: Record<string, string> = {
+  HIGH: 'High',
+  MEDIUM: 'Medium',
+  LOW: 'Low',
+  NONE: 'No issues',
+};
+
 /**
  * 008-10 (plan.md Phase 4, spec 05 §5.2.4): "the financial control that catches real money" —
  * this is the screen a manager actually reads to see it. Runs automatically after
@@ -99,7 +112,11 @@ export default function InvoiceMatchDetailPage() {
       <PageHeader
         title="Three-way match"
         description={`Matched ${new Date(invoiceMatch.matchedAt).toLocaleString()}`}
-        actions={<Badge tone={severityTone(invoiceMatch.highestSeverity ?? 'NONE')}>{invoiceMatch.highestSeverity ?? 'NONE'}</Badge>}
+        actions={
+          <Badge tone={severityTone(invoiceMatch.highestSeverity ?? 'NONE')}>
+            {SEVERITY_LABELS[invoiceMatch.highestSeverity ?? 'NONE'] ?? invoiceMatch.highestSeverity}
+          </Badge>
+        }
       />
 
       {error && <ErrorNotice>{error}</ErrorNotice>}
@@ -126,7 +143,11 @@ export default function InvoiceMatchDetailPage() {
           </div>
           <div>
             <dt className="text-xs font-medium uppercase tracking-wide text-content-subtle">Status</dt>
-            <dd className="mt-1 text-sm text-content">{invoiceMatch.status}</dd>
+            <dd className="mt-1">
+              <Badge tone={invoiceMatch.status === 'RESOLVED' ? 'positive' : invoiceMatch.status === 'REVIEWED' ? 'accent' : 'neutral'}>
+                {STATUS_LABELS[invoiceMatch.status] ?? invoiceMatch.status}
+              </Badge>
+            </dd>
           </div>
         </dl>
       </Card>
@@ -187,16 +208,16 @@ export default function InvoiceMatchDetailPage() {
                   <Td>
                     <Value value={line.invoiceSku} />
                   </Td>
-                  <Td align="right" className="tabular">
+                  <Td variant="numeric">
                     <Value value={line.invoiceQuantity} />
                   </Td>
-                  <Td align="right" className="tabular">
+                  <Td variant="numeric">
                     <Value value={line.receivedQuantity} />
                   </Td>
-                  <Td align="right" className="tabular">
+                  <Td variant="numeric">
                     <Value value={line.invoiceUnitPrice} />
                   </Td>
-                  <Td align="right" className="tabular">
+                  <Td variant="numeric">
                     <Value value={line.poUnitPrice} />
                   </Td>
                   <Td>

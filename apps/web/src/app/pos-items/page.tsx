@@ -9,8 +9,8 @@ import {
   Card,
   EmptyState,
   ErrorNotice,
-  LoadingState,
   PageHeader,
+  SkeletonRows,
   Select,
   Table,
   Td,
@@ -90,7 +90,7 @@ export default function PosItemsPage() {
     <>
       <PageHeader
         title="Map POS items"
-        description="Everything your POS has sold that isn't linked to a menu item yet, ranked by revenue — mapping the top few usually covers most of your sales. You confirm every match; nothing is mapped automatically."
+        description="POS items not yet linked to a menu item, biggest sellers first. You confirm every match."
         actions={
           !storesLoading && stores.length > 0 ? (
             <Select
@@ -111,12 +111,12 @@ export default function PosItemsPage() {
       {error && <ErrorNotice>{error}</ErrorNotice>}
 
       <Card>
-        {(loading || storesLoading) && <LoadingState />}
+        {(loading || storesLoading) && <SkeletonRows columns={4} />}
         {!storesLoading && stores.length === 0 && <EmptyState title="No stores available." />}
         {!loading && !error && stores.length > 0 && items.length === 0 && (
           <EmptyState
             title="Everything's mapped"
-            hint="Every POS item at this store is either linked to a menu item or marked as not a menu item."
+            hint="Every item at this store has been checked."
           />
         )}
         {!loading && !error && items.length > 0 && (
@@ -136,7 +136,7 @@ export default function PosItemsPage() {
                 return (
                   <Tr key={item.id}>
                     <Td className="font-medium">{item.name}</Td>
-                    <Td align="right" className="tabular text-content-muted">
+                    <Td variant="numeric" className="text-content-muted">
                       {item.totalRevenue === '0' ? (
                         <span className="text-content-subtle">—</span>
                       ) : (

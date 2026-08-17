@@ -3,8 +3,9 @@ import type { ReactNode } from 'react';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'RetailOS',
-  description: 'Operations intelligence for food-service retail.',
+  title: 'Vyapaar',
+  description: 'Know where your margin goes.',
+  icons: { icon: '/icon.svg' },
 };
 
 /*
@@ -30,8 +31,15 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        {/*
+         * Two faces, two jobs. Public Sans carries the interface: it was commissioned for public
+         * -service forms and records, so it was drawn for exactly this product's condition of use —
+         * text people must read correctly, small, when tired. JetBrains Mono carries every figure;
+         * see `--font-mono` in globals.css for why numbers get a face of their own rather than just
+         * `tabular-nums` on the body face.
+         */}
         <link
-          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+          href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
           rel="stylesheet"
         />
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />

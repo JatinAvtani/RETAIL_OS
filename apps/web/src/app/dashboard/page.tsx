@@ -15,10 +15,12 @@ import {
   PageHeader,
   Select,
   StatTile,
+  StatTileGrid,
   Table,
   Td,
   Th,
   Tr,
+  Value,
 } from '@/components/ui';
 
 type Summary = Awaited<ReturnType<typeof trpc.dashboard.summary.query>>;
@@ -113,8 +115,10 @@ const DrillThroughPanel = ({
                       </Td>
                     )}
                     <Td>{row.label}</Td>
-                    <Td align="right" className="tabular">
-                      {row.amount ? `${row.amount.currency} ${Number(row.amount.amount).toFixed(2)}` : 'Unknown'}
+                    <Td variant="numeric">
+                      <Value
+                        value={row.amount ? `${row.amount.currency} ${Number(row.amount.amount).toFixed(2)}` : null}
+                      />
                     </Td>
                   </Tr>
                 ))}
@@ -153,7 +157,7 @@ export default function DashboardPage() {
     <>
       <PageHeader
         title="Overview"
-        description="Where your margin actually went. Every figure below is computed from your own recorded sales, recipes, and stock movements — nothing is estimated."
+        description="Where your margin went. Every figure is computed, not estimated."
         actions={
           <div className="flex items-center gap-2">
             {!storesLoading && stores.length > 0 && (
@@ -191,66 +195,69 @@ export default function DashboardPage() {
 
       {!loading && !error && summary && (
         <>
-          {/* The headline row (spec 12 §12.5): net revenue, contribution margin %, food cost %, stock value — each with delta + sparkline where a real trend exists. */}
-          <div className="mb-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <div>
-              <StatTile
-                label="Net revenue"
-                value={fmt(summary.netRevenue)}
-                hint={`${summary.transactionCount} transactions`}
-                {...trendProp(summary.trends.netRevenue)}
-                delta={{ direction: summary.deltas.netRevenue.direction, label: `vs prior ${summary.period.days} days`, higherIsBetter: true }}
-              />
-              {summary.netRevenue !== null && selectedStoreId && (
-                <DrillThroughPanel storeId={selectedStoreId} figure="net_revenue" from={summary.period.from} to={summary.period.to} />
-              )}
-            </div>
-            <div>
-              <StatTile
-                label="Contribution margin"
-                value={
-                  summary.contributionMarginPercentage !== null ? String(summary.contributionMarginPercentage) : null
-                }
-                unit="%"
-                tone="positive"
-                hint="Excludes rent, labour and tax"
-                unknownReason="Actual COGS could not be determined"
-                delta={{
-                  direction: summary.deltas.contributionMarginPercentage.direction,
-                  label: `vs prior ${summary.period.days} days`,
-                  higherIsBetter: true,
-                }}
-              />
-              {summary.contributionMarginPercentage !== null && selectedStoreId && (
-                <DrillThroughPanel storeId={selectedStoreId} figure="contribution_margin" from={summary.period.from} to={summary.period.to} />
-              )}
-            </div>
-            <div>
-              <StatTile
-                label="Food cost"
-                value={summary.foodCostPercentage !== null ? String(summary.foodCostPercentage) : null}
-                unit="%"
-                hint="COGS as a share of revenue"
-                unknownReason="Needs both COGS and revenue"
-                {...trendProp(summary.trends.foodCostPercentage)}
-                delta={{ direction: summary.deltas.foodCostPercentage.direction, label: `vs prior ${summary.period.days} days`, higherIsBetter: false }}
-              />
-              {summary.foodCostPercentage !== null && selectedStoreId && (
-                <DrillThroughPanel storeId={selectedStoreId} figure="food_cost_percentage" from={summary.period.from} to={summary.period.to} />
-              )}
-            </div>
-            <div>
-              <StatTile
-                label="Stock value"
-                value={fmt(summary.stockValue)}
-                hint="Cash tied up in on-hand stock, right now"
-                unknownReason="You need inventory:read to see this"
-              />
-              {summary.stockValue !== null && selectedStoreId && (
-                <DrillThroughPanel storeId={selectedStoreId} figure="stock_value" from={summary.period.from} to={summary.period.to} />
-              )}
-            </div>
-          </div>
+          {/* The headline row: net revenue, contribution margin %, food cost %, stock value — each
+              with delta + sparkline where a real trend exists. Edge-joined into one instrument panel
+              rather than four detached cards; the drill-through trigger rides in each tile's own
+              footer slot so the proof sits with the claim. */}
+          <StatTileGrid className="mb-6">
+            <StatTile
+              label="Net revenue"
+              value={fmt(summary.netRevenue)}
+              hint={`${summary.transactionCount} transactions`}
+              unknownReason="No priced sales were recorded in this period"
+              {...trendProp(summary.trends.netRevenue)}
+              delta={{ direction: summary.deltas.netRevenue.direction, label: `vs prior ${summary.period.days} days`, higherIsBetter: true }}
+              footer={
+                summary.netRevenue !== null && selectedStoreId ? (
+                  <DrillThroughPanel storeId={selectedStoreId} figure="net_revenue" from={summary.period.from} to={summary.period.to} />
+                ) : null
+              }
+            />
+            <StatTile
+              label="Contribution margin"
+              value={
+                summary.contributionMarginPercentage !== null ? String(summary.contributionMarginPercentage) : null
+              }
+              unit="%"
+              hint="Excludes rent, labour and tax"
+              unknownReason="Actual COGS could not be determined"
+              delta={{
+                direction: summary.deltas.contributionMarginPercentage.direction,
+                label: `vs prior ${summary.period.days} days`,
+                higherIsBetter: true,
+              }}
+              footer={
+                summary.contributionMarginPercentage !== null && selectedStoreId ? (
+                  <DrillThroughPanel storeId={selectedStoreId} figure="contribution_margin" from={summary.period.from} to={summary.period.to} />
+                ) : null
+              }
+            />
+            <StatTile
+              label="Food cost"
+              value={summary.foodCostPercentage !== null ? String(summary.foodCostPercentage) : null}
+              unit="%"
+              hint="COGS as a share of revenue"
+              unknownReason="Needs both COGS and revenue"
+              {...trendProp(summary.trends.foodCostPercentage)}
+              delta={{ direction: summary.deltas.foodCostPercentage.direction, label: `vs prior ${summary.period.days} days`, higherIsBetter: false }}
+              footer={
+                summary.foodCostPercentage !== null && selectedStoreId ? (
+                  <DrillThroughPanel storeId={selectedStoreId} figure="food_cost_percentage" from={summary.period.from} to={summary.period.to} />
+                ) : null
+              }
+            />
+            <StatTile
+              label="Stock value"
+              value={fmt(summary.stockValue)}
+              hint="Cash tied up in on-hand stock, right now"
+              unknownReason="You need inventory:read to see this"
+              footer={
+                summary.stockValue !== null && selectedStoreId ? (
+                  <DrillThroughPanel storeId={selectedStoreId} figure="stock_value" from={summary.period.from} to={summary.period.to} />
+                ) : null
+              }
+            />
+          </StatTileGrid>
 
           {/* The exception feed (spec 12 §12.5) — deterministic, no AI narration yet (EPIC-010). */}
           {summary.exceptions.length > 0 && (
@@ -284,8 +291,8 @@ export default function DashboardPage() {
                     {summary.itemsByContribution.slice(0, 5).map((item) => (
                       <Tr key={item.menuItemId}>
                         <Td>{item.menuItemName}</Td>
-                        <Td align="right" className="tabular">
-                          {fmt(item.totalContribution) ?? 'Unknown'}
+                        <Td variant="numeric">
+                          <Value value={fmt(item.totalContribution)} />
                         </Td>
                       </Tr>
                     ))}
@@ -308,8 +315,8 @@ export default function DashboardPage() {
                       .map((item) => (
                         <Tr key={item.menuItemId}>
                           <Td>{item.menuItemName}</Td>
-                          <Td align="right" className="tabular">
-                            {fmt(item.totalContribution) ?? 'Unknown'}
+                          <Td variant="numeric">
+                            <Value value={fmt(item.totalContribution)} />
                           </Td>
                         </Tr>
                       ))}
@@ -327,30 +334,35 @@ export default function DashboardPage() {
                   Cost variance
                 </p>
                 {variance?.value === null ? (
-                  <p className="mt-1.5 text-3xl font-semibold tracking-tight text-content-subtle">
-                    Unknown
-                  </p>
+                  <>
+                    <p className="mt-2 text-2xl italic leading-none text-unknown">Not known</p>
+                    <p className="mt-2 text-xs text-content-subtle">
+                      Needs both a known actual cost and a fully-priced recipe for everything sold
+                    </p>
+                  </>
                 ) : (
-                  <p
-                    className={`tabular mt-1.5 text-3xl font-semibold tracking-tight ${
-                      varianceTone === 'danger'
-                        ? 'text-danger'
-                        : varianceTone === 'warning'
-                          ? 'text-warning'
-                          : 'text-content'
-                    }`}
-                  >
-                    {fmt(variance?.value ?? null)}
-                  </p>
+                  <div className="mt-2 flex flex-wrap items-baseline gap-2.5">
+                    {/* The figure stays ink-coloured; the direction it moved is carried by the badge
+                        beside it. A red number invites reading the colour instead of the digit, and
+                        this is the digit the whole product exists to produce. */}
+                    <p className="font-mono text-3xl font-semibold leading-none tracking-[-0.02em] tabular-nums text-content">
+                      {fmt(variance?.value ?? null)}
+                    </p>
+                    {varianceTone !== 'neutral' && (
+                      <Badge tone={varianceTone === 'danger' ? 'danger' : 'warning'}>
+                        {variance?.direction === 'over' ? 'Over recipe' : 'Under recipe'}
+                      </Badge>
+                    )}
+                  </div>
                 )}
-                <div className="mt-2 flex items-center gap-2">
-                  <span className="text-sm text-content-muted">Actual</span>
-                  <span className="tabular text-sm font-medium text-content">
-                    {fmt(summary.cogsActual) ?? 'Unknown'}
+                <div className="mt-3 flex flex-wrap items-baseline gap-2 text-sm">
+                  <span className="text-content-muted">Actual</span>
+                  <span className="font-medium text-content">
+                    <Value value={fmt(summary.cogsActual)} />
                   </span>
-                  <span className="text-sm text-content-subtle">vs theoretical</span>
-                  <span className="tabular text-sm font-medium text-content">
-                    {fmt(summary.cogsTheoretical) ?? 'Unknown'}
+                  <span className="text-content-subtle">vs theoretical</span>
+                  <span className="font-medium text-content">
+                    <Value value={fmt(summary.cogsTheoretical)} />
                   </span>
                 </div>
                 {summary.cogsActual !== null && selectedStoreId && (
@@ -361,21 +373,19 @@ export default function DashboardPage() {
               <p className="max-w-md text-sm text-content-muted">
                 {variance?.direction === 'over' && (
                   <>
-                    You used <strong className="font-medium text-content">more</strong> stock than
-                    your recipes account for. That gap is waste, over-portioning, or shrinkage —
-                    losses that are invisible without both a recipe model and a stock ledger.
+                    You used <strong className="font-medium text-content">more</strong> stock than your
+                    recipes call for. This is likely waste, over-portioning, or theft.
                   </>
                 )}
                 {variance?.direction === 'under' && (
                   <>
-                    You used <strong className="font-medium text-content">less</strong> stock than
-                    your recipes predict. Usually this means a recipe over-states its portions, or a
-                    delivery was never recorded.
+                    You used <strong className="font-medium text-content">less</strong> stock than your
+                    recipes call for. Check if a recipe or a delivery needs fixing.
                   </>
                 )}
-                {variance?.direction === 'exact' && 'Actual consumption matched your recipes exactly.'}
+                {variance?.direction === 'exact' && 'Actual usage matched your recipes exactly.'}
                 {variance?.direction === 'unknown' &&
-                  'We can’t state this yet — it needs both a known actual cost and a fully-priced recipe for everything sold. We show nothing rather than a number we can’t stand behind.'}
+                  'Not enough data yet — we need real costs and priced recipes for everything sold.'}
               </p>
             </div>
           </Card>
@@ -386,8 +396,8 @@ export default function DashboardPage() {
               <CardHeader
                 title="Waste by reason"
                 actions={
-                  <span className="tabular text-sm font-medium text-content">
-                    {fmt(summary.waste.total) ?? 'Unknown'}
+                  <span className="text-sm font-medium text-content">
+                    <Value value={fmt(summary.waste.total)} />
                   </span>
                 }
               />
@@ -404,8 +414,8 @@ export default function DashboardPage() {
                   <tbody>
                     {summary.waste.byReason.map((entry) => (
                       <Tr key={entry.reasonCode}>
-                        <Td>{humanize(entry.reasonCode)}</Td>
-                        <Td align="right" className="tabular">
+                        <Td className="capitalize">{humanize(entry.reasonCode)}</Td>
+                        <Td variant="numeric">
                           {summary.currency} {Number(entry.value).toFixed(2)}
                         </Td>
                       </Tr>
@@ -416,8 +426,8 @@ export default function DashboardPage() {
               {summary.waste.unknownCostEventCount > 0 && (
                 <p className="border-t border-border px-5 py-3 text-xs text-content-subtle">
                   {summary.waste.unknownCostEventCount} waste event
-                  {summary.waste.unknownCostEventCount === 1 ? '' : 's'} had no known lot cost, so
-                  the total above is incomplete.
+                  {summary.waste.unknownCostEventCount === 1 ? '' : 's'} had no known cost, so this
+                  total is not complete.
                 </p>
               )}
               {summary.waste.byReason.length > 0 && selectedStoreId && (
@@ -458,21 +468,21 @@ export default function DashboardPage() {
                   </Tr>
                   <Tr>
                     <Td>Units sold</Td>
-                    <Td align="right" className="tabular">
-                      {Number(summary.unitsSold).toFixed(0)}
-                    </Td>
+                    <Td variant="numeric">{Number(summary.unitsSold).toFixed(0)}</Td>
                   </Tr>
                   <Tr>
                     <Td>Average transaction value</Td>
-                    <Td align="right" className="tabular">
-                      {fmt(summary.averageTransactionValue) ?? '—'}
+                    {/* An em-dash here would read as a value. It isn't one — this is genuinely
+                        unknown whenever revenue or the transaction count is, so it renders through
+                        `Value` like every other nullable figure. */}
+                    <Td variant="numeric">
+                      <Value value={fmt(summary.averageTransactionValue)} />
                     </Td>
                   </Tr>
                 </tbody>
               </Table>
               <p className="border-t border-border px-5 py-3 text-xs text-content-subtle">
-                Showing you what’s missing is the point — a number computed over incomplete data is
-                only trustworthy if you know how incomplete it is.
+                We show you what's missing so you know how much to trust the numbers above.
               </p>
             </Card>
           </div>

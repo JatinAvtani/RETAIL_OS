@@ -15,6 +15,13 @@ const DEFAULT_QUANTITY_PERCENT_LABEL = '2%';
 
 const ROLES = ['OWNER', 'MANAGER', 'STAFF', 'VIEWER_FINANCE'] as const;
 
+const ROLE_LABELS: Record<(typeof ROLES)[number], string> = {
+  OWNER: 'Owner',
+  MANAGER: 'Manager',
+  STAFF: 'Staff',
+  VIEWER_FINANCE: 'Finance viewer (read-only)',
+};
+
 /**
  * The "team" half of settings — previously didn't exist visually at all, even though
  * `invitations.create`/`accept` and the full 4-role permission model were fully built server-side
@@ -165,7 +172,7 @@ const TeamPanel = () => {
       {devToken && (
         <p className="border-b border-border bg-surface-sunken/50 px-5 py-3 text-xs text-content-subtle">
           No email delivery is configured yet — share this link with the invitee directly:{' '}
-          <span className="tabular font-medium text-content">
+          <span className="font-mono font-medium text-content">
             /invitations/accept?token={devToken}
           </span>
         </p>
@@ -195,7 +202,7 @@ const TeamPanel = () => {
                 >
                   {ROLES.map((role) => (
                     <option key={role} value={role}>
-                      {role}
+                      {ROLE_LABELS[role]}
                     </option>
                   ))}
                 </Select>
@@ -217,7 +224,7 @@ const TeamPanel = () => {
               <Td>
                 {invitation.email} <Badge tone="warning">Invited</Badge>
               </Td>
-              <Td>{invitation.role}</Td>
+              <Td>{ROLE_LABELS[invitation.role as (typeof ROLES)[number]] ?? invitation.role}</Td>
               <Td align="right">
                 <Button type="button" variant="ghost" disabled={busyId === invitation.id} onClick={() => revokeInvitation(invitation.id)}>
                   Revoke
@@ -317,7 +324,7 @@ export default function SettingsPage() {
 
   return (
     <>
-      <PageHeader title="Settings" description="Organization-wide configuration." />
+      <PageHeader title="Settings" description="Your team and how we check invoices." />
       <TeamPanel />
 
       {error && <ErrorNotice>{error}</ErrorNotice>}
@@ -330,7 +337,7 @@ export default function SettingsPage() {
         </p>
 
         <div className="grid gap-4 sm:grid-cols-3">
-          <Field label="Price tolerance (fraction)" hint={`Default ${DEFAULT_PRICE_PERCENT_LABEL}, e.g. 0.02`}>
+          <Field label="Price can be off by (%)" hint={`Default ${DEFAULT_PRICE_PERCENT_LABEL} — enter as 0.02`}>
             <Input
               value={pricePercent}
               onChange={(e) => setPricePercent(e.target.value)}
@@ -338,7 +345,7 @@ export default function SettingsPage() {
               inputMode="decimal"
             />
           </Field>
-          <Field label="Price tolerance (absolute)" hint={`Default ${DEFAULT_PRICE_ABSOLUTE_LABEL}, e.g. 5.00`}>
+          <Field label="Or off by this amount" hint={`Default ${DEFAULT_PRICE_ABSOLUTE_LABEL}`}>
             <Input
               value={priceAbsolute}
               onChange={(e) => setPriceAbsolute(e.target.value)}
@@ -346,7 +353,7 @@ export default function SettingsPage() {
               inputMode="decimal"
             />
           </Field>
-          <Field label="Quantity tolerance (fraction)" hint={`Default ${DEFAULT_QUANTITY_PERCENT_LABEL}, e.g. 0.02`}>
+          <Field label="Quantity can be off by (%)" hint={`Default ${DEFAULT_QUANTITY_PERCENT_LABEL} — enter as 0.02`}>
             <Input
               value={quantityPercent}
               onChange={(e) => setQuantityPercent(e.target.value)}

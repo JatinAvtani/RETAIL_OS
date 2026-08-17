@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
 import { useStores } from '@/lib/use-stores';
-import { Badge, Button, Card, EmptyState, ErrorNotice, LoadingState, PageHeader, Select, Table, Td, Th, Tr, type BadgeTone } from '@/components/ui';
+import { Badge, Button, Card, EmptyState, ErrorNotice, PageHeader, SkeletonRows, Select, Table, Td, Th, Tr, type BadgeTone } from '@/components/ui';
 
 type CsvImportRow = Awaited<ReturnType<typeof trpc.csvImport.list.query>>[number];
 
@@ -77,7 +77,7 @@ export default function SalesImportPage() {
     <>
       <PageHeader
         title="Sales import"
-        description="Upload a CSV export from a POS this project doesn't sync automatically — map its columns once, then commit."
+        description="Upload a CSV from your POS. Match the columns once, then import."
       />
 
       {error && <ErrorNotice>{error}</ErrorNotice>}
@@ -117,7 +117,7 @@ export default function SalesImportPage() {
       </Card>
 
       <Card>
-        {loading && <LoadingState />}
+        {loading && <SkeletonRows columns={5} />}
         {!loading && !error && imports.length === 0 && (
           <EmptyState title="No imports yet" hint="Upload a CSV to get started." />
         )}

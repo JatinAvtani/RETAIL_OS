@@ -120,7 +120,7 @@ export default function ReceiveWalkInPage() {
     <>
       <PageHeader
         title="Receive a walk-in purchase"
-        description="No purchase order — records a standalone receipt an invoice can later match against."
+        description="For a delivery with no purchase order. You can match it to an invoice later."
       />
 
       <Card className="max-w-3xl p-6">
@@ -208,10 +208,10 @@ export default function ReceiveWalkInPage() {
                 {lines.map((line) => (
                   <Tr key={line.key}>
                     <Td>{line.productName}</Td>
-                    <Td align="right" className="tabular">
+                    <Td variant="numeric">
                       {line.quantity}
                     </Td>
-                    <Td align="right" className="tabular">
+                    <Td variant="numeric">
                       {line.unitCost}
                     </Td>
                     <Td>{line.discrepancyCode || '—'}</Td>

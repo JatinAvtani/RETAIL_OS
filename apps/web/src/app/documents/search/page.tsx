@@ -38,7 +38,7 @@ export default function DocumentsSearchPage() {
     <>
       <PageHeader
         title="Search documents"
-        description="Find an invoice by number, supplier, or a natural-language description of what it's about — a longer, conceptual question searches by meaning, not just matching words."
+        description="Search by invoice number, supplier, or just describe what you're looking for."
       />
 
       <Card className="mb-6">
@@ -115,7 +115,7 @@ export default function DocumentsSearchPage() {
 
       {!searchedOnce && (
         <Card>
-          <EmptyState title="Search for a document" hint="Try a document number, supplier name, or a longer question about what an invoice covers." />
+          <EmptyState title="Search for a document" hint="Try a document number, a supplier name, or just describe it." />
         </Card>
       )}
     </>

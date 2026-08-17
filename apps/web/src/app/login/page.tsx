@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { TRPCClientError } from '@trpc/client';
 import { trpc } from '@/lib/trpc';
 import { Button, Card, ErrorNotice, Field, Input } from '@/components/ui';
+import { LogoMark } from '@/components/logo';
 import { ThemeToggle } from '@/components/theme-toggle';
 
 const LoginForm = () => {
@@ -38,12 +39,10 @@ const LoginForm = () => {
   return (
     <div className="w-full max-w-sm">
       <div className="mb-8 text-center">
-        <span className="mx-auto mb-3 grid size-10 place-items-center rounded-xl bg-accent text-accent-content">
-          R
-        </span>
-        <h1 className="text-xl font-semibold tracking-tight text-content">Sign in to RetailOS</h1>
+        <LogoMark className="mx-auto mb-5 size-14 text-content" />
+        <h1 className="text-xl font-semibold tracking-tight text-content">Sign in to Vyapaar</h1>
         <p className="mt-1 text-sm text-content-muted">
-          Operations intelligence for cafés, bakeries, and restaurants.
+          Know where your margin goes.
         </p>
       </div>
 
@@ -86,7 +85,7 @@ const LoginForm = () => {
       </Card>
 
       <p className="mt-4 text-center text-sm text-content-muted">
-        New to RetailOS?{' '}
+        New to Vyapaar?{' '}
         <Link href="/signup" className="font-medium text-accent hover:underline">
           Create a workspace
         </Link>

@@ -180,7 +180,7 @@ export default function ReceivePurchaseOrderPage() {
       <>
         <PageHeader
           title="Attach photos for damage claims"
-          description="Optional — a photo strengthens a discrepancy claim with the supplier."
+          description="Optional. A photo helps if you need to raise this with the supplier."
         />
         {error && <ErrorNotice>{error}</ErrorNotice>}
         <Card>
@@ -236,7 +236,7 @@ export default function ReceivePurchaseOrderPage() {
     <>
       <PageHeader
         title={`Receive ${po.purchaseOrder.poNumber}`}
-        description="Record what actually arrived — quantities default to what's still outstanding."
+        description="Record what actually arrived."
       />
 
       {error && <ErrorNotice>{error}</ErrorNotice>}
@@ -265,7 +265,7 @@ export default function ReceivePurchaseOrderPage() {
                 return (
                   <Tr key={line.id}>
                     <Td>{productName(line.productId)}</Td>
-                    <Td align="right" className="tabular">
+                    <Td variant="numeric">
                       {remainingBaseUnits(line)}
                     </Td>
                     <Td align="right">

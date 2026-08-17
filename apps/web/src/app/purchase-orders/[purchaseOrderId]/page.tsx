@@ -161,19 +161,19 @@ export default function PurchaseOrderDetailPage() {
               {lines.map((line) => (
                 <Tr key={line.id}>
                   <Td>{line.lineNumber}</Td>
-                  <Td align="right" className="tabular">
+                  <Td variant="numeric">
                     {line.quantityOrderUnits}
                   </Td>
-                  <Td align="right" className="tabular">
+                  <Td variant="numeric">
                     {line.quantityBaseUnits}
                   </Td>
-                  <Td align="right" className="tabular">
+                  <Td variant="numeric">
                     {line.unitPrice}
                   </Td>
-                  <Td align="right" className="tabular">
+                  <Td variant="numeric">
                     {line.lineTotal}
                   </Td>
-                  <Td align="right" className="tabular">
+                  <Td variant="numeric">
                     <Value value={line.receivedQuantityBaseUnits} />
                   </Td>
                 </Tr>
@@ -262,7 +262,7 @@ export default function PurchaseOrderDetailPage() {
           )}
 
           {(purchaseOrder.status === 'RECEIVED' || purchaseOrder.status === 'CLOSED' || purchaseOrder.status === 'CANCELLED') && (
-            <p className="text-sm text-content-subtle">No further actions — this purchase order is in a terminal state.</p>
+            <p className="text-sm text-content-subtle">This order is closed. There's nothing left to do here.</p>
           )}
         </div>
 

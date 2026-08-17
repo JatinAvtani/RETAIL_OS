@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { TRPCClientError } from '@trpc/client';
 import { trpc } from '@/lib/trpc';
 import { Button, Card, ErrorNotice, Field, Input } from '@/components/ui';
+import { LogoMark } from '@/components/logo';
 import { ThemeToggle } from '@/components/theme-toggle';
 
 const ResetPasswordContent = () => {
@@ -79,6 +80,7 @@ export default function ResetPasswordPage() {
       </div>
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
+          <LogoMark className="mx-auto mb-5 size-11 text-content" />
           <h1 className="text-xl font-semibold tracking-tight text-content">Choose a new password</h1>
         </div>
         <Suspense fallback={<Card className="p-6 text-center text-sm text-content-muted">Loading…</Card>}>

@@ -6,6 +6,7 @@ import { useSearchParams } from 'next/navigation';
 import { TRPCClientError } from '@trpc/client';
 import { trpc } from '@/lib/trpc';
 import { Button, Card, ErrorNotice } from '@/components/ui';
+import { LogoMark } from '@/components/logo';
 import { ThemeToggle } from '@/components/theme-toggle';
 
 type Status = 'idle' | 'verifying' | 'done' | 'error' | 'no-token';
@@ -28,7 +29,9 @@ const VerifyEmailContent = () => {
   }, [token]);
 
   return (
-    <Card className="p-6 text-center">
+    <>
+      <LogoMark className="mx-auto mb-5 size-11 text-content" />
+      <Card className="p-6 text-center">
       {status === 'no-token' && (
         <>
           <h1 className="text-lg font-semibold text-content">Check your email</h1>
@@ -61,7 +64,8 @@ const VerifyEmailContent = () => {
           </p>
         </>
       )}
-    </Card>
+      </Card>
+    </>
   );
 };
 

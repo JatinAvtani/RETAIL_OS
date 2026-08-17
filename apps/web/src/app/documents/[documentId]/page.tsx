@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
-import { Badge, Button, Card, ErrorNotice, LoadingState, PageHeader, Select, Value, type BadgeTone } from '@/components/ui';
+import { Badge, Button, Card, ErrorNotice, LoadingState, PageHeader, Select, StepRail, Value, type BadgeTone } from '@/components/ui';
 
 type ProductOption = Awaited<ReturnType<typeof trpc.products.list.query>>[number];
 
@@ -305,6 +305,23 @@ export default function DocumentReviewPage() {
         actions={<Badge tone={documentStatusTone(document.status)}>{document.status.replace('_', ' ')}</Badge>}
       />
 
+      {/* A rejected document has left the sequence rather than advanced through it, so it gets no
+          rail — the status badge above already says what happened. */}
+      {document.status !== 'REJECTED' && (
+        <StepRail
+          steps={['Extract', 'Review lines', 'Approve', 'Post']}
+          current={
+            document.status === 'POSTED'
+              ? 3
+              : document.status === 'APPROVED' || document.status === 'AUTO_APPROVED'
+                ? 2
+                : document.status === 'REVIEW_REQUIRED'
+                  ? 1
+                  : 0
+          }
+        />
+      )}
+
       {actionError && <ErrorNotice>{actionError}</ErrorNotice>}
 
       {!extraction && (
@@ -333,7 +350,9 @@ export default function DocumentReviewPage() {
                 <ul className="space-y-2">
                   {validation.issues.map((issue, i) => (
                     <li key={`${issue.code}-${i}`} className="flex items-start gap-2 text-sm">
-                      <Badge tone={issue.severity === 'BLOCK' ? 'danger' : 'warning'}>{issue.severity}</Badge>
+                      <Badge tone={issue.severity === 'BLOCK' ? 'danger' : 'warning'}>
+                        {issue.severity === 'BLOCK' ? 'Must fix' : 'Check this'}
+                      </Badge>
                       <span className="text-content-muted">{issue.message}</span>
                     </li>
                   ))}

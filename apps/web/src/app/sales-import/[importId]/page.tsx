@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { TRPCClientError } from '@trpc/client';
 import { trpc } from '@/lib/trpc';
-import { Badge, Button, Card, ErrorNotice, Field, Input, LoadingState, PageHeader, Select, Table, Td, Th, Tr } from '@/components/ui';
+import { Badge, Button, Card, ErrorNotice, Field, Input, LoadingState, PageHeader, Select, StepRail, Table, Td, Th, Tr, Value } from '@/components/ui';
 
 type CsvImportDetail = Awaited<ReturnType<typeof trpc.csvImport.get.query>>;
 type SavedMapping = Awaited<ReturnType<typeof trpc.csvImport.savedMappings.query>>[number];
@@ -124,28 +124,52 @@ export default function CsvImportDetailPage() {
 
       {error && <ErrorNotice>{error}</ErrorNotice>}
 
-      <div className="mb-4 flex items-center gap-2">
-        <span className="text-sm text-content-muted">Status</span>
-        <Badge tone={importRow.status === 'IMPORTED' ? 'positive' : importRow.status === 'FAILED' ? 'danger' : 'accent'}>
-          {importRow.status.toLowerCase()}
-        </Badge>
-      </div>
+      {/* A genuine sequence, so the steps are numbered and the rail stays visible throughout — the
+          operator can always see how much of the import is left without scrolling. A FAILED import
+          is not a fourth step; it's the current step having gone wrong, so the rail holds position
+          and the error notice carries the news. */}
+      <StepRail
+        steps={['Map columns', 'Preview rows', 'Commit']}
+        current={importRow.status === 'IMPORTED' ? 2 : importRow.status === 'MAPPED' ? 1 : 0}
+      />
+
+      {importRow.status === 'FAILED' && (
+        <div className="mb-4 flex items-center gap-2">
+          <span className="text-sm text-content-muted">Status</span>
+          <Badge tone="danger">Failed</Badge>
+        </div>
+      )}
 
       {importRow.status === 'IMPORTED' && (
         <Card className="mb-6 max-w-2xl p-6">
           <h2 className="mb-3 text-sm font-semibold text-content">Import complete</h2>
+          {/* Counts, so the figures stay ink-coloured and the outcome rides in the badge beneath —
+              "quarantined" is only worth attention when it's actually non-zero. */}
           <div className="grid grid-cols-3 gap-4 text-sm">
             <div>
-              <div className="text-content-subtle">Imported</div>
-              <div className="tabular text-lg font-semibold text-positive">{importRow.importedRowCount ?? 0}</div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-content-subtle">
+                Imported
+              </div>
+              <div className="mt-1.5 font-mono text-lg font-semibold tabular-nums text-content">
+                <Value value={importRow.importedRowCount} />
+              </div>
             </div>
             <div>
-              <div className="text-content-subtle">Quarantined</div>
-              <div className="tabular text-lg font-semibold text-warning">{importRow.quarantinedRowCount ?? 0}</div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-content-subtle">
+                Quarantined
+              </div>
+              <div className="mt-1.5 flex items-baseline gap-2 font-mono text-lg font-semibold tabular-nums text-content">
+                <Value value={importRow.quarantinedRowCount} />
+                {(importRow.quarantinedRowCount ?? 0) > 0 && <Badge tone="warning">Review</Badge>}
+              </div>
             </div>
             <div>
-              <div className="text-content-subtle">Skipped</div>
-              <div className="tabular text-lg font-semibold text-content-muted">{importRow.skippedRowCount ?? 0}</div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-content-subtle">
+                Skipped
+              </div>
+              <div className="mt-1.5 font-mono text-lg font-semibold tabular-nums text-content">
+                <Value value={importRow.skippedRowCount} />
+              </div>
             </div>
           </div>
         </Card>

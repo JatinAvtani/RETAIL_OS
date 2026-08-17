@@ -88,7 +88,7 @@ export default function NewRecipePage() {
     <>
       <PageHeader
         title="New recipe"
-        description="Add each ingredient with the quantity used per batch — cost is computed from your confirmed supplier prices."
+        description="Add each ingredient and how much one batch uses."
       />
 
       <form onSubmit={handleSubmit} className="max-w-3xl space-y-6">

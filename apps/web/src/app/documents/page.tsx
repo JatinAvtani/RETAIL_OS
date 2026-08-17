@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
 import { useStores } from '@/lib/use-stores';
-import { Badge, Card, EmptyState, ErrorNotice, Input, LoadingState, PageHeader, Select, StatTile, Table, Th, Td, Tr, Value } from '@/components/ui';
+import { Badge, Button, Card, EmptyState, ErrorNotice, Input, PageHeader, SkeletonRows, Select, StatTile, Table, Th, Td, Tr, Value } from '@/components/ui';
 
 type Telemetry = Awaited<ReturnType<typeof trpc.documents.accuracyTelemetry.query>>;
 
@@ -45,24 +45,29 @@ const TelemetryPanel = ({ telemetry }: { telemetry: Telemetry }) => {
     <Card className="mb-6">
       <h2 className="mb-3 text-sm font-semibold text-content">Extraction pipeline, last {telemetry.period.days} days</h2>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <StatTile
-          label="Auto-approval rate"
-          value={telemetry.autoApprovalRate !== null ? `${(telemetry.autoApprovalRate * 100).toFixed(0)}%` : null}
-          hint={`of ${telemetry.documentCount} extraction${telemetry.documentCount === 1 ? '' : 's'}`}
-        />
-        <div className="rounded-card border border-border bg-surface-raised px-5 py-4 sm:col-span-2">
+        <div className="rounded-card border border-border">
+          <StatTile
+            label="Auto-approval rate"
+            value={telemetry.autoApprovalRate !== null ? `${(telemetry.autoApprovalRate * 100).toFixed(0)}%` : null}
+            unknownReason="No extraction has completed validation yet"
+            hint={`of ${telemetry.documentCount} extraction${telemetry.documentCount === 1 ? '' : 's'}`}
+          />
+        </div>
+        <div className="rounded-card border border-border bg-surface-raised px-4 py-3.5 sm:col-span-2">
           <p className="text-xs font-semibold uppercase tracking-wide text-content-subtle">Most common validation issues</p>
           {topIssues.length === 0 ? (
-            <p className="mt-1.5 text-sm text-content-subtle">None — every extraction reconciled cleanly.</p>
+            <p className="mt-1.5 text-sm text-content-subtle">None. Every extraction went through cleanly.</p>
           ) : (
             <ul className="mt-2 space-y-1">
               {topIssues.map((issue) => (
                 <li key={`${issue.code}-${issue.severity}`} className="flex items-center justify-between text-sm">
                   <span className="flex items-center gap-2">
-                    <Badge tone={issue.severity === 'BLOCK' ? 'danger' : 'warning'}>{issue.severity}</Badge>
+                    <Badge tone={issue.severity === 'BLOCK' ? 'danger' : 'warning'}>
+                      {issue.severity === 'BLOCK' ? 'Must fix' : 'Check this'}
+                    </Badge>
                     <span className="text-content-muted">{issue.code}</span>
                   </span>
-                  <span className="tabular text-content-subtle">{issue.count}</span>
+                  <span className="font-mono tabular-nums text-content-subtle">{issue.count}</span>
                 </li>
               ))}
             </ul>
@@ -177,7 +182,7 @@ export default function DocumentsPage() {
     <>
       <PageHeader
         title="Documents"
-        description="Upload supplier invoices — PDF or a photo. Each one is classified automatically; nothing is extracted or posted yet."
+        description="Upload a supplier invoice — a PDF or a photo."
         actions={
           <>
             <Link href="/documents/search" className="text-sm font-medium text-accent hover:underline">
@@ -285,13 +290,32 @@ export default function DocumentsPage() {
       )}
 
       <Card>
-        {(loading || storesLoading) && <LoadingState />}
-        {!loading && !error && stores.length > 0 && documents.length === 0 && (
-          <EmptyState
-            title={statusFilter || typeFilter || searchQuery ? 'No documents match these filters' : 'No documents yet'}
-            hint={statusFilter || typeFilter || searchQuery ? 'Try a different search or clear the filters.' : 'Upload an invoice above to get started.'}
-          />
-        )}
+        {(loading || storesLoading) && <SkeletonRows columns={5} />}
+        {!loading && !error && stores.length > 0 && documents.length === 0 &&
+          (statusFilter || typeFilter || searchQuery ? (
+            <EmptyState
+              variant="no-matches"
+              title="No documents match these filters"
+              hint="Your documents are still here — these filters just don't select any of them."
+              action={
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setStatusFilter('');
+                    setTypeFilter('');
+                    setSearchInput('');
+                  }}
+                >
+                  Clear filters
+                </Button>
+              }
+            />
+          ) : (
+            <EmptyState
+              title="No documents yet"
+              hint="Upload a supplier invoice and we'll extract its line items for you to review."
+            />
+          ))}
         {!loading && !error && documents.length > 0 && (
           <Table>
             <thead>
@@ -317,7 +341,7 @@ export default function DocumentsPage() {
                   <Td>
                     <Badge tone={statusTone(doc.status)}>{statusLabel[doc.status]}</Badge>
                   </Td>
-                  <Td align="right" className="tabular text-content-muted">
+                  <Td variant="numeric" className="text-content-muted">
                     {(Number(doc.sizeBytes) / 1024).toFixed(0)} KB
                   </Td>
                   <Td align="right">

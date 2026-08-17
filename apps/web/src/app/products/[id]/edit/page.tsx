@@ -73,7 +73,7 @@ export default function EditProductPage() {
     <>
       <PageHeader
         title={name || 'Edit product'}
-        description="The SKU and base unit are fixed after creation — changing a unit retroactively would corrupt existing stock quantities."
+        description="SKU and base unit can't be changed after creation."
         actions={
           <Link href="/products">
             <Button variant="ghost">Back to products</Button>

@@ -1,68 +1,101 @@
 @import 'tailwindcss';
 
 /*
- * Warm hospitality palette. The domain is cafés, bakeries, and restaurants — the people using this
- * are not analysts staring at a trading terminal, so the surface is warm off-white rather than
- * clinical white, and the accent is a terracotta/clay tone rather than the default SaaS blue.
+ * "Cold store, warm accent."
+ *
+ * The domain is cafés, bakeries and restaurants, but the screen deliberately does NOT dress itself
+ * in that world. The people using this already work surrounded by warmth; what they need from a
+ * laptop at 11pm is the opposite — a quiet, dry surface that gets out of the way of numbers, and
+ * the sense that someone competent already checked the arithmetic. The reference class is the
+ * ledger and the calibration certificate, not the trading terminal and not a consumer app.
+ *
+ * So: a cool paper-grey ground, near-black ink for maximum figure contrast, and warmth concentrated
+ * into ONE accent — brass, the material of scales, taps, hood rails and the clasp on a ledger.
+ * Brass also sits far from every status hue, so the accent can never be misread as a warning; the
+ * previous terracotta accent sat close enough to amber/red that it constantly could.
  *
  * Every colour is a semantic token (surface / content / accent / status), never a raw hex at the
- * call site — so the dark theme below only has to redefine the same names, and no component needs
- * to know which theme is active.
+ * call site — so the dark theme below only redefines the same names, and no component needs to know
+ * which theme is active.
  */
 @theme {
-  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  /* Body/UI face. Public Sans was drawn for government forms and benefit statements — legibility
+     under obligation, at small sizes, on bad screens, by tired people. That is exactly this
+     product's condition of use. */
+  --font-sans: 'Public Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
 
-  --color-surface: #faf7f2;
-  --color-surface-raised: #ffffff;
-  --color-surface-sunken: #f2ece3;
-  --color-border: #e5dccf;
-  --color-border-strong: #d3c6b3;
+  /* Numeric face. Every money value, quantity, percentage, count and ID renders in this. Giving
+     figures their own face does three things at once: alignment becomes structural rather than a
+     CSS opt-in someone can forget, a reader can tell a measured value from a label without reading
+     either, and — the important one — a genuinely unknown value can differ from a real one in
+     typeface, style AND colour simultaneously. Three redundant channels, only one of which is
+     colour, so the distinction survives greyscale printing and every form of colour blindness. */
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, 'SF Mono', monospace;
 
-  --color-content: #2a2521;
-  --color-content-muted: #6f635a;
-  --color-content-subtle: #9a8c80;
+  --color-surface: #f2f0eb;
+  --color-surface-raised: #fbfaf8;
+  --color-surface-sunken: #e8e5de;
+  --color-border: #d8d3c9;
+  --color-border-strong: #bcb5a8;
 
-  --color-accent: #b4552d;
-  --color-accent-hover: #9a4626;
-  --color-accent-soft: #f6e7de;
-  --color-accent-content: #ffffff;
+  --color-content: #1c1b19;
+  --color-content-muted: #5e5a53;
+  --color-content-subtle: #8c867c;
 
-  --color-positive: #3f6d4e;
-  --color-positive-soft: #e4efe6;
-  --color-warning: #9a6b1f;
-  --color-warning-soft: #f7ecd8;
-  --color-danger: #a33a32;
-  --color-danger-soft: #f7e3e1;
+  --color-accent: #8a6a1f;
+  --color-accent-hover: #6e5416;
+  --color-accent-soft: #f0e8d4;
+  --color-accent-content: #fbfaf8;
 
-  --radius-card: 0.75rem;
+  --color-positive: #2e6a4f;
+  --color-positive-soft: #e1ede5;
+  --color-warning: #8a5a16;
+  --color-warning-soft: #f5e9d6;
+  --color-danger: #9e3327;
+  --color-danger-soft: #f7e4e1;
+
+  /* The I7 colour. A dead, fully-desaturated grey belonging to no status family — because "we don't
+     know" is emphatically not a status, and must never be mistaken for either a good or a bad
+     reading. Deliberately distinct from --color-content-subtle, which is for labels and captions
+     (real text that happens to be quiet) rather than for absent data. */
+  --color-unknown: #7a7168;
+
+  /* 3px, not 0.75rem. `rounded-lg` on every surface is the most recognisable tell of generic 2020s
+     SaaS; at 3px the components read as ruled and printed rather than soft-carded, which is the
+     register a system of financial record should occupy. */
+  --radius-card: 3px;
+  --radius-control: 3px;
 }
 
 /*
- * Dark theme. Not a mechanical inversion — a warm dark brown/charcoal base keeps the hospitality
- * feel, and the accent lightens so it stays legible against a dark surface rather than muddying.
+ * Dark theme. Not a mechanical inversion — the ground keeps its faint warm bias so it reads as
+ * unlit paper rather than black glass, and brass lightens to a true antique gold so it stays
+ * legible on a dark surface instead of muddying into the background.
  */
 .dark {
-  --color-surface: #1a1613;
-  --color-surface-raised: #241f1b;
-  --color-surface-sunken: #12100e;
-  --color-border: #3a322c;
-  --color-border-strong: #4d423a;
+  --color-surface: #161513;
+  --color-surface-raised: #1f1d1a;
+  --color-surface-sunken: #100f0d;
+  --color-border: #332f2a;
+  --color-border-strong: #4a443c;
 
-  --color-content: #f2ece5;
-  --color-content-muted: #b3a599;
-  --color-content-subtle: #8a7d72;
+  --color-content: #ede9e2;
+  --color-content-muted: #a8a196;
+  --color-content-subtle: #7d766c;
 
-  --color-accent: #d97a4e;
-  --color-accent-hover: #e88d62;
-  --color-accent-soft: #3a2419;
-  --color-accent-content: #1a1613;
+  --color-accent: #c9a24e;
+  --color-accent-hover: #ddb865;
+  --color-accent-soft: #2c2415;
+  --color-accent-content: #161513;
 
-  --color-positive: #7fb08d;
-  --color-positive-soft: #1e2c22;
-  --color-warning: #d9a75e;
-  --color-warning-soft: #2e2415;
-  --color-danger: #e0796f;
-  --color-danger-soft: #2e1a18;
+  --color-positive: #6faf8b;
+  --color-positive-soft: #17251d;
+  --color-warning: #d19b4f;
+  --color-warning-soft: #2a2013;
+  --color-danger: #dd7b6d;
+  --color-danger-soft: #2b1815;
+
+  --color-unknown: #8c857a;
 }
 
 html {
@@ -81,7 +114,34 @@ body {
 }
 
 /* Tabular figures everywhere a quantity or money value is rendered — columns of numbers that don't
-   align are genuinely harder to scan, and this product is mostly columns of numbers. */
+   align are genuinely harder to scan, and this product is mostly columns of numbers. Retained as a
+   utility for the handful of places that render a figure without going through `Figure`/`Value`;
+   those components set the mono face and tabular figures themselves. */
 .tabular {
   font-variant-numeric: tabular-nums;
+}
+
+/* Skeleton loading. A skeleton preserves layout so the page doesn't jump when data lands — which is
+   why table and tile regions use these rather than a spinner. Reduced-motion users get the shape
+   without the pulse; the information ("something is loading here, this big") is in the shape. */
+@keyframes retailos-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.skeleton {
+  background-color: var(--color-surface-sunken);
+  border-radius: 2px;
+  animation: retailos-pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
 }

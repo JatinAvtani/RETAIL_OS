@@ -9,8 +9,8 @@ import {
   Card,
   EmptyState,
   ErrorNotice,
-  LoadingState,
   PageHeader,
+  SkeletonRows,
   Select,
   Table,
   Td,
@@ -50,7 +50,7 @@ export default function InventoryPage() {
     <>
       <PageHeader
         title="Stock levels"
-        description="What's on hand right now, projected from the movement ledger — every number here traces back to a recorded movement."
+        description="What's on hand right now."
         actions={
           <div className="flex items-center gap-2">
             {!storesLoading && stores.length > 0 && (
@@ -79,7 +79,7 @@ export default function InventoryPage() {
       {error && <ErrorNotice>{error}</ErrorNotice>}
 
       <Card>
-        {(loading || storesLoading) && <LoadingState />}
+        {(loading || storesLoading) && <SkeletonRows columns={5} />}
         {!storesLoading && stores.length === 0 && <EmptyState title="No stores available." />}
         {!loading && !error && stores.length > 0 && levels.length === 0 && (
           <EmptyState
@@ -101,29 +101,28 @@ export default function InventoryPage() {
             <tbody>
               {levels.map((level) => {
                 const negative = Number(level.quantity) < 0;
+                // Negative on-hand is a real data anomaly, not just a small number — it rides as a
+                // row severity stripe rather than a recoloured digit, so the figure stays as
+                // readable as every other figure in the column.
                 return (
-                  <Tr key={`${level.productId}-${level.variantId}`}>
+                  <Tr key={`${level.productId}-${level.variantId}`} {...(negative ? { severity: 'short' as const } : {})}>
                     <Td className="font-medium">
                       {productsById.get(level.productId)?.name ?? (
-                        <span className="text-content-subtle">{level.productId.slice(0, 8)}…</span>
+                        <span className="font-mono text-content-subtle">{level.productId.slice(0, 8)}…</span>
                       )}
                     </Td>
-                    <Td align="right">
-                      <span className={negative ? 'tabular font-medium text-danger' : 'tabular'}>
-                        {level.quantity}
-                      </span>
-                    </Td>
-                    <Td align="right">
+                    <Td variant="numeric">{level.quantity}</Td>
+                    <Td variant="numeric">
                       <Value value={level.avgUnitCost} />
                     </Td>
-                    <Td className="text-content-muted">
+                    <Td className="font-mono text-content-muted">
                       {level.lastMovementAt ? (
                         new Date(level.lastMovementAt).toLocaleString()
                       ) : (
-                        <span className="text-content-subtle">—</span>
+                        <span className="italic text-unknown">Never</span>
                       )}
                     </Td>
-                    <Td align="right">
+                    <Td variant="actions">
                       <div className="flex justify-end gap-3 text-sm font-medium">
                         <Link
                           href={`/inventory/movements?storeId=${selectedStoreId}&productId=${level.productId}&variantId=${level.variantId}`}

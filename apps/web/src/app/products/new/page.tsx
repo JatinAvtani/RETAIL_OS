@@ -60,7 +60,7 @@ export default function NewProductPage() {
     <>
       <PageHeader
         title="New product"
-        description="Ingredients and sellable items both live here — the base unit is what stock is counted in."
+        description="The base unit is what stock is counted in."
       />
 
       <Card className="max-w-2xl p-6">

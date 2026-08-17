@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { trpc } from '@/lib/trpc';
 import {
-  Badge,
   Card,
   ErrorNotice,
   Field,
@@ -11,11 +10,12 @@ import {
   PageHeader,
   Select,
   StatTile,
+  StatTileGrid,
   Table,
   Td,
   Th,
   Tr,
-  type BadgeTone,
+  Value,
 } from '@/components/ui';
 
 type Supplier = Awaited<ReturnType<typeof trpc.suppliers.list.query>>[number];
@@ -27,24 +27,16 @@ type TrendDirection = 'up' | 'down' | 'flat' | null;
 const pct = (value: number | null): string | null => (value === null ? null : (value * 100).toFixed(1));
 
 /**
- * 008-15: a real up/down/flat badge next to each component — spec's own "components side by side
- * WITH TRENDS." Direction alone doesn't say whether a change is good or bad (a rising fill rate is
- * good, a rising quality-reject rate is bad), so each call site tells this component which
- * direction means "positive" for that specific metric — `higherIsBetter` flips the tone mapping,
- * never the direction itself (the direction stays a plain factual up/down/flat regardless).
+ * Direction alone doesn't say whether a change is good or bad (a rising fill rate is good, a rising
+ * quality-reject rate is bad), so each call site below passes `higherIsBetter` for its specific
+ * metric. The shared `TrendBadge` handles the tone mapping; this helper only supplies the basis
+ * label every delta needs to be a fact rather than a bare arrow.
  */
-const TrendBadge = ({ direction, higherIsBetter }: { direction: TrendDirection; higherIsBetter: boolean }) => {
-  if (direction === null) return <span className="text-xs text-content-subtle">No prior-period data</span>;
-  const isGood = direction === 'flat' ? null : (direction === 'up') === higherIsBetter;
-  const tone: BadgeTone = isGood === null ? 'neutral' : isGood ? 'positive' : 'danger';
-  const arrow = direction === 'up' ? '↑' : direction === 'down' ? '↓' : '→';
-  const label = direction === 'up' ? 'Up' : direction === 'down' ? 'Down' : 'Flat';
-  return (
-    <Badge tone={tone}>
-      {arrow} {label} vs. prior period
-    </Badge>
-  );
-};
+const trendDelta = (direction: TrendDirection, higherIsBetter: boolean) => ({
+  direction,
+  label: direction === null ? 'No prior-period data' : 'vs. prior period',
+  higherIsBetter,
+});
 
 /**
  * 008-13/008-15's scorecard: real components side by side, each drillable to the events that
@@ -96,7 +88,7 @@ export default function SupplierScorecardPage() {
     <>
       <PageHeader
         title="Supplier scorecard"
-        description="Measured components only, each drillable to the real events behind it — no composite score."
+        description="Click any number to see the real deliveries behind it."
       />
 
       <Card className="mb-6">
@@ -133,57 +125,49 @@ export default function SupplierScorecardPage() {
 
       {!loading && components && (
         <>
-          <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-            <div>
-              <StatTile
-                label="Fill rate"
-                value={pct(components.fillRate)}
-                unit="%"
-                hint="Received vs. ordered quantity"
-                unknownReason="No deliveries recorded against a purchase order in this window"
-              />
-              {trend && <div className="mt-2"><TrendBadge direction={trend.fillRate.direction} higherIsBetter={true} /></div>}
-            </div>
-            <div>
-              <StatTile
-                label="On-time rate"
-                value={pct(components.onTimeRate)}
-                unit="%"
-                hint="Deliveries by the PO's expected date"
-                unknownReason="No PO carried an expected delivery date in this window"
-              />
-              {trend && <div className="mt-2"><TrendBadge direction={trend.onTimeRate.direction} higherIsBetter={true} /></div>}
-            </div>
-            <div>
-              <StatTile
-                label="Price variance"
-                value={components.totalPriceVariance}
-                hint="Sum of real per-unit price drift vs. the PO price"
-                unknownReason="No matched invoice line had a real price variance in this window"
-              />
-              {trend && <div className="mt-2"><TrendBadge direction={trend.totalPriceVariance.direction} higherIsBetter={false} /></div>}
-            </div>
-            <div>
-              <StatTile
-                label="Invoice accuracy"
-                value={pct(components.invoiceAccuracy)}
-                unit="%"
-                hint="Clean invoices ÷ total matched invoices"
-                unknownReason="No invoice was matched in this window"
-              />
-              {trend && <div className="mt-2"><TrendBadge direction={trend.invoiceAccuracy.direction} higherIsBetter={true} /></div>}
-            </div>
-            <div>
-              <StatTile
-                label="Quality reject rate"
-                value={pct(components.qualityRejectRate)}
-                unit="%"
-                hint="Rejected quantity ÷ received quantity"
-                unknownReason="No receiving activity in this window"
-              />
-              {trend && <div className="mt-2"><TrendBadge direction={trend.qualityRejectRate.direction} higherIsBetter={false} /></div>}
-            </div>
-          </div>
+          {/* Five components side by side, never a single composite score — a rolled-up supplier
+              "grade" is the fabricated-scoring anti-pattern this product exists to avoid. */}
+          <StatTileGrid className="mb-6 lg:grid-cols-5">
+            <StatTile
+              label="Fill rate"
+              value={pct(components.fillRate)}
+              unit="%"
+              hint="Received vs. ordered quantity"
+              unknownReason="No deliveries recorded against a purchase order in this window"
+              {...(trend ? { delta: trendDelta(trend.fillRate.direction, true) } : {})}
+            />
+            <StatTile
+              label="On-time rate"
+              value={pct(components.onTimeRate)}
+              unit="%"
+              hint="Deliveries by the PO's expected date"
+              unknownReason="No PO carried an expected delivery date in this window"
+              {...(trend ? { delta: trendDelta(trend.onTimeRate.direction, true) } : {})}
+            />
+            <StatTile
+              label="Price variance"
+              value={components.totalPriceVariance}
+              hint="Sum of real per-unit price drift vs. the PO price"
+              unknownReason="No matched invoice line had a real price variance in this window"
+              {...(trend ? { delta: trendDelta(trend.totalPriceVariance.direction, false) } : {})}
+            />
+            <StatTile
+              label="Invoice accuracy"
+              value={pct(components.invoiceAccuracy)}
+              unit="%"
+              hint="Clean invoices ÷ total matched invoices"
+              unknownReason="No invoice was matched in this window"
+              {...(trend ? { delta: trendDelta(trend.invoiceAccuracy.direction, true) } : {})}
+            />
+            <StatTile
+              label="Quality reject rate"
+              value={pct(components.qualityRejectRate)}
+              unit="%"
+              hint="Rejected quantity ÷ received quantity"
+              unknownReason="No receiving activity in this window"
+              {...(trend ? { delta: trendDelta(trend.qualityRejectRate.direction, false) } : {})}
+            />
+          </StatTileGrid>
 
           <Card>
             {!events || events.length === 0 ? (
@@ -202,11 +186,21 @@ export default function SupplierScorecardPage() {
                 <tbody>
                   {events.map((e) => (
                     <Tr key={e.id}>
-                      <Td>{new Date(e.occurredAt).toLocaleDateString()}</Td>
+                      <Td className="font-mono text-content-muted">
+                        {new Date(e.occurredAt).toLocaleDateString()}
+                      </Td>
                       <Td>{e.eventType}</Td>
-                      <Td align="right">{e.expectedValue ?? '—'}</Td>
-                      <Td align="right">{e.actualValue ?? '—'}</Td>
-                      <Td align="right">{e.variance ?? '—'}</Td>
+                      {/* Variance figures, so a dash would read as "no drift" — the one reading that
+                          is definitely wrong when the value is simply absent. */}
+                      <Td variant="numeric">
+                        <Value value={e.expectedValue} />
+                      </Td>
+                      <Td variant="numeric">
+                        <Value value={e.actualValue} />
+                      </Td>
+                      <Td variant="numeric">
+                        <Value value={e.variance} />
+                      </Td>
                     </Tr>
                   ))}
                 </tbody>

@@ -3,7 +3,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { TRPCClientError } from '@trpc/client';
 import { trpc } from '@/lib/trpc';
-import { Button, Card, ErrorNotice, Field, Input, LoadingState, PageHeader, Select, Table, Td, Th, Tr } from '@/components/ui';
+import { Button, Card, ErrorNotice, Field, Input, PageHeader, SkeletonRows, Select, Table, Td, Th, Tr } from '@/components/ui';
 
 type Category = Awaited<ReturnType<typeof trpc.categories.list.query>>[number];
 
@@ -59,7 +59,7 @@ export default function CategoriesPage() {
 
   return (
     <>
-      <PageHeader title="Categories" description="Organize products into a tree — used for filtering and reporting." />
+      <PageHeader title="Categories" description="Group your products for filtering and reports." />
 
       {error && <ErrorNotice>{error}</ErrorNotice>}
 
@@ -85,7 +85,7 @@ export default function CategoriesPage() {
       </Card>
 
       <Card>
-        {loading && <LoadingState />}
+        {loading && <SkeletonRows columns={3} />}
         {!loading && !error && sorted.length === 0 && (
           <div className="p-6 text-sm text-content-subtle">No categories yet — add your first one above.</div>
         )}

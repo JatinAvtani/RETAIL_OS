@@ -10,8 +10,8 @@ import {
   EmptyState,
   ErrorNotice,
   Input,
-  LoadingState,
   PageHeader,
+  SkeletonRows,
   Table,
   Td,
   Th,
@@ -47,7 +47,7 @@ export default function ProductsPage() {
     <>
       <PageHeader
         title="Products"
-        description="Everything you buy or make — ingredients, prepared items, and the units they're tracked in."
+        description="Everything you buy or make."
         actions={
           <Link href="/products/new">
             <Button variant="primary">New product</Button>
@@ -67,13 +67,30 @@ export default function ProductsPage() {
       </div>
 
       <Card>
-        {loading && <LoadingState />}
-        {!loading && !error && products.length === 0 && (
-          <EmptyState
-            title="No products yet"
-            hint={search ? 'Try a different search term.' : 'Add your first product to get started.'}
-          />
-        )}
+        {loading && <SkeletonRows columns={5} />}
+        {!loading && !error && products.length === 0 &&
+          (search ? (
+            <EmptyState
+              variant="no-matches"
+              title="No products match this search"
+              hint="Nothing here matched that term — clearing it brings the full list back."
+              action={
+                <Button variant="secondary" onClick={() => setSearch('')}>
+                  Clear search
+                </Button>
+              }
+            />
+          ) : (
+            <EmptyState
+              title="No products yet"
+              hint="Recipes, orders, and stock all depend on your products."
+              action={
+                <Link href="/products/new">
+                  <Button variant="primary">Add a product</Button>
+                </Link>
+              }
+            />
+          ))}
         {!loading && !error && products.length > 0 && (
           <Table>
             <thead>
@@ -87,14 +104,14 @@ export default function ProductsPage() {
             <tbody>
               {products.map((product) => (
                 <Tr key={product.id}>
-                  <Td className="tabular text-content-muted">{product.sku}</Td>
+                  <Td className="font-mono text-content-muted">{product.sku}</Td>
                   <Td className="font-medium">{product.name}</Td>
                   <Td>
                     <Badge tone={TYPE_TONES[product.type] ?? 'neutral'}>
                       {product.type.toLowerCase()}
                     </Badge>
                   </Td>
-                  <Td align="right">
+                  <Td variant="actions">
                     <Link
                       href={`/products/${product.id}/edit`}
                       className="text-sm font-medium text-accent hover:underline"

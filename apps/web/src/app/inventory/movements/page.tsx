@@ -12,6 +12,7 @@ import {
   ErrorNotice,
   LoadingState,
   PageHeader,
+  SkeletonRows,
   Select,
   Table,
   Td,
@@ -83,7 +84,7 @@ function MovementsContent() {
     <>
       <PageHeader
         title="Movement history"
-        description="The append-only ledger for this product. Corrections are new rows, never edits — every past number stays reproducible."
+        description="Full history for this product. Nothing here is ever edited, only added."
         actions={
           <div className="flex items-center gap-2">
             {!error && (
@@ -111,13 +112,25 @@ function MovementsContent() {
 
       {!error && (
         <Card>
-          {loading && <LoadingState />}
-          {!loading && filtered.length === 0 && (
-            <EmptyState
-              title="No movements match this filter"
-              {...(typeFilter ? { hint: 'Try selecting all types.' } : {})}
-            />
-          )}
+          {loading && <SkeletonRows columns={6} />}
+          {!loading && filtered.length === 0 &&
+            (typeFilter ? (
+              <EmptyState
+                variant="no-matches"
+                title="No movements of this type"
+                hint="The ledger still holds every other movement in this period."
+                action={
+                  <Button variant="secondary" onClick={() => setTypeFilter('')}>
+                    Show all types
+                  </Button>
+                }
+              />
+            ) : (
+              <EmptyState
+                title="No movements recorded"
+                hint="Stock movements appear here as goods are received, sold, wasted or counted."
+              />
+            ))}
           {!loading && filtered.length > 0 && (
             <Table>
               <thead>
@@ -133,7 +146,7 @@ function MovementsContent() {
               <tbody>
                 {filtered.map((movement) => (
                   <Tr key={movement.id}>
-                    <Td className="whitespace-nowrap text-content-muted">
+                    <Td className="whitespace-nowrap font-mono text-content-muted">
                       {new Date(movement.occurredAt).toLocaleString()}
                     </Td>
                     <Td>
@@ -141,22 +154,17 @@ function MovementsContent() {
                         {humanize(movement.movementType)}
                       </Badge>
                     </Td>
-                    <Td align="right">
-                      <span
-                        className={
-                          Number(movement.quantity) < 0 ? 'tabular text-danger' : 'tabular text-positive'
-                        }
-                      >
-                        {movement.quantity}
-                      </span>
-                    </Td>
-                    <Td align="right">
+                    {/* Deliberately not red-for-out / green-for-in: stock leaving on a sale is the
+                        business working, not a problem. The sign already carries the direction, and
+                        the movement type beside it carries the meaning. */}
+                    <Td variant="numeric">{movement.quantity}</Td>
+                    <Td variant="numeric">
                       <Value value={movement.unitCost} />
                     </Td>
-                    <Td className="text-content-muted">
-                      {movement.reasonCode ? humanize(movement.reasonCode) : <span className="text-content-subtle">—</span>}
+                    <Td className="capitalize text-content-muted">
+                      {movement.reasonCode ? humanize(movement.reasonCode) : <span className="text-content-subtle">Not set</span>}
                     </Td>
-                    <Td className="text-content-muted">{humanize(movement.sourceType)}</Td>
+                    <Td className="capitalize text-content-muted">{humanize(movement.sourceType)}</Td>
                   </Tr>
                 ))}
               </tbody>

@@ -8,8 +8,8 @@ import {
   Card,
   EmptyState,
   ErrorNotice,
-  LoadingState,
   PageHeader,
+  SkeletonRows,
   Table,
   Td,
   Th,
@@ -35,7 +35,7 @@ export default function RecipesPage() {
     <>
       <PageHeader
         title="Recipes"
-        description="What each menu item is made of — the link between ingredient cost and what you actually sell."
+        description="What each menu item is made of."
         actions={
           <Link href="/recipes/new">
             <Button variant="primary">New recipe</Button>
@@ -46,7 +46,7 @@ export default function RecipesPage() {
       {error && <ErrorNotice>{error}</ErrorNotice>}
 
       <Card>
-        {loading && <LoadingState />}
+        {loading && <SkeletonRows columns={4} />}
         {!loading && !error && recipes.length === 0 && (
           <EmptyState title="No recipes yet" hint="Create a recipe to see its computed cost." />
         )}
@@ -63,10 +63,10 @@ export default function RecipesPage() {
               {recipes.map((recipe) => (
                 <Tr key={recipe.recipeGroupId}>
                   <Td className="font-medium">{recipe.name}</Td>
-                  <Td align="right" className="tabular">
+                  <Td variant="numeric">
                     {recipe.yieldQuantity}
                   </Td>
-                  <Td align="right">
+                  <Td variant="actions">
                     <Link
                       href={`/recipes/${recipe.recipeGroupId}`}
                       className="text-sm font-medium text-accent hover:underline"

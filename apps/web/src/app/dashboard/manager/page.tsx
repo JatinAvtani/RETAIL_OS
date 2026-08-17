@@ -14,10 +14,12 @@ import {
   PageHeader,
   Select,
   StatTile,
+  StatTileGrid,
   Table,
   Th,
   Td,
   Tr,
+  Value,
 } from '@/components/ui';
 
 type ManagerSummary = Awaited<ReturnType<typeof trpc.dashboard.managerSummary.query>>;
@@ -69,7 +71,7 @@ export default function ManagerDashboardPage() {
     <>
       <PageHeader
         title="Manager view"
-        description="What needs attention today — reorder points, expiring stock, receipts, and documents waiting on you."
+        description="What needs your attention today."
         actions={
           <div className="flex items-center gap-2">
             {!storesLoading && stores.length > 0 && (
@@ -103,10 +105,11 @@ export default function ManagerDashboardPage() {
 
       {!loading && !error && summary && (
         <>
-          <div className="mb-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <StatTileGrid className="mb-6">
             <StatTile
               label="Today vs. trailing average"
               value={fmt(summary.todayVsAverage.today)}
+              unknownReason="No priced sales recorded today"
               hint={
                 summary.todayVsAverage.trailingDailyAverage
                   ? `avg ${fmt(summary.todayVsAverage.trailingDailyAverage)}/day over ${summary.period.days} days`
@@ -114,24 +117,41 @@ export default function ManagerDashboardPage() {
               }
               delta={{ direction: summary.todayVsAverage.direction, label: 'vs trailing average', higherIsBetter: true }}
             />
+            {/* These are counts, so zero is a real and good value rather than an absence. The state
+                rides in a badge beneath rather than recolouring the digit — see `StatTile`. */}
             <StatTile
               label="Below reorder point"
               value={String(summary.belowReorderPoint.count)}
-              tone={summary.belowReorderPoint.count > 0 ? 'warning' : 'positive'}
+              unknownReason="Reorder points could not be read"
               hint="Products at or under their reorder point"
+              footer={
+                <div className="mt-2.5">
+                  <Badge tone={summary.belowReorderPoint.count > 0 ? 'warning' : 'positive'}>
+                    {summary.belowReorderPoint.count > 0 ? 'Needs ordering' : 'All stocked'}
+                  </Badge>
+                </div>
+              }
             />
             <StatTile
               label="Expiring stock, value at risk"
               value={`${summary.currency} ${Number(summary.expiryQueue.totalValueAtRisk).toFixed(2)}`}
-              tone={Number(summary.expiryQueue.totalValueAtRisk) > 0 ? 'warning' : 'positive'}
+              unknownReason="Lot costs could not be determined"
               hint={`${summary.expiryQueue.lots.length} lot${summary.expiryQueue.lots.length === 1 ? '' : 's'} expiring soon`}
+              footer={
+                Number(summary.expiryQueue.totalValueAtRisk) > 0 ? (
+                  <div className="mt-2.5">
+                    <Badge tone="warning">Use first</Badge>
+                  </div>
+                ) : null
+              }
             />
             <StatTile
               label="Pending receipts"
               value={String(summary.pendingReceipts.count)}
+              unknownReason="Purchase orders could not be read"
               hint="Sent purchase orders awaiting delivery"
             />
-          </div>
+          </StatTileGrid>
 
           <div className="mb-6 grid gap-6 lg:grid-cols-2">
             <Card>
@@ -195,9 +215,7 @@ export default function ManagerDashboardPage() {
                   {summary.openPurchaseOrders.map((row) => (
                     <Tr key={row.status}>
                       <Td>{humanizeStatus(row.status)}</Td>
-                      <Td align="right" className="tabular">
-                        {row.count}
-                      </Td>
+                      <Td variant="numeric">{row.count}</Td>
                     </Tr>
                   ))}
                 </tbody>
@@ -219,7 +237,7 @@ export default function ManagerDashboardPage() {
                     <Td>Awaiting review</Td>
                     <Td align="right">
                       {summary.documentsAwaitingReview.count === null ? (
-                        <Badge tone="neutral">Unknown</Badge>
+                        <Badge tone="unknown">Not known</Badge>
                       ) : summary.documentsAwaitingReview.count === 0 ? (
                         <Badge tone="positive">None</Badge>
                       ) : (
@@ -229,10 +247,14 @@ export default function ManagerDashboardPage() {
                   </Tr>
                   <Tr>
                     <Td>Oldest waiting</Td>
-                    <Td align="right" className="tabular">
-                      {summary.documentsAwaitingReview.oldestAgeDays === null
-                        ? '—'
-                        : `${summary.documentsAwaitingReview.oldestAgeDays.toFixed(0)} day${summary.documentsAwaitingReview.oldestAgeDays === 1 ? '' : 's'}`}
+                    <Td variant="numeric">
+                      <Value
+                        value={
+                          summary.documentsAwaitingReview.oldestAgeDays === null
+                            ? null
+                            : `${summary.documentsAwaitingReview.oldestAgeDays.toFixed(0)} day${summary.documentsAwaitingReview.oldestAgeDays === 1 ? '' : 's'}`
+                        }
+                      />
                     </Td>
                   </Tr>
                 </tbody>

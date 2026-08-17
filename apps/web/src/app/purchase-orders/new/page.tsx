@@ -144,7 +144,7 @@ function NewPurchaseOrderForm() {
 
   return (
     <>
-      <PageHeader title="New purchase order" description="A draft you can edit freely until it's submitted for approval." />
+      <PageHeader title="New purchase order" description="A draft — you can change it until you submit it." />
 
       <Card className="max-w-3xl p-6">
         <form onSubmit={handleSubmit} className="space-y-6">
@@ -239,13 +239,13 @@ function NewPurchaseOrderForm() {
                   {lines.map((line) => (
                     <Tr key={line.key}>
                       <Td>{line.productName}</Td>
-                      <Td align="right" className="tabular">
+                      <Td variant="numeric">
                         {line.quantityOrderUnits}
                       </Td>
-                      <Td align="right" className="tabular">
+                      <Td variant="numeric">
                         {line.unitPrice}
                       </Td>
-                      <Td align="right" className="tabular">
+                      <Td variant="numeric">
                         {(Number(line.quantityOrderUnits) * Number(line.unitPrice)).toFixed(2)}
                       </Td>
                       <Td align="right">

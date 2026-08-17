@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { TRPCClientError } from '@trpc/client';
 import { trpc } from '@/lib/trpc';
 import { Button, Card, ErrorNotice } from '@/components/ui';
+import { LogoMark } from '@/components/logo';
 import { ThemeToggle } from '@/components/theme-toggle';
 
 type Status = 'checking-session' | 'needs-login' | 'accepting' | 'done' | 'error' | 'no-token';
@@ -55,7 +56,9 @@ const AcceptInvitationContent = () => {
   const returnUrl = token ? `/invitations/accept?token=${encodeURIComponent(token)}` : '/invitations/accept';
 
   return (
-    <Card className="p-6 text-center">
+    <>
+      <LogoMark className="mx-auto mb-5 size-11 text-content" />
+      <Card className="p-6 text-center">
       {status === 'no-token' && <ErrorNotice>This invitation link is missing its token.</ErrorNotice>}
       {status === 'checking-session' && <p className="text-sm text-content-muted">Checking your session…</p>}
       {status === 'accepting' && <p className="text-sm text-content-muted">Joining the team…</p>}
@@ -83,6 +86,7 @@ const AcceptInvitationContent = () => {
       )}
       {status === 'error' && <ErrorNotice>{error}</ErrorNotice>}
     </Card>
+    </>
   );
 };
 

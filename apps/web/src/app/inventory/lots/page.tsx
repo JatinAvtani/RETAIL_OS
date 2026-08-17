@@ -12,6 +12,7 @@ import {
   ErrorNotice,
   LoadingState,
   PageHeader,
+  SkeletonRows,
   Table,
   Td,
   Th,
@@ -61,7 +62,7 @@ function LotsContent() {
     <>
       <PageHeader
         title="Lots"
-        description="Each delivery tracked separately, so stock is drawn first-expiry-first-out and cost follows the lot it actually came from."
+        description="Each delivery, tracked on its own. Oldest stock is used first."
         actions={
           <Link href="/inventory">
             <Button variant="ghost">Back</Button>
@@ -73,7 +74,7 @@ function LotsContent() {
 
       {!error && (
         <Card>
-          {loading && <LoadingState />}
+          {loading && <SkeletonRows columns={6} />}
           {!loading && lots.length === 0 && (
             <EmptyState title="No lots recorded" hint="Lots appear here once goods are received." />
           )}
@@ -107,10 +108,10 @@ function LotsContent() {
                           {lot.status.toLowerCase().replace(/_/g, ' ')}
                         </Badge>
                       </Td>
-                      <Td align="right" className="tabular">
+                      <Td variant="numeric">
                         {lot.remainingQuantity}
                       </Td>
-                      <Td align="right" className="tabular">
+                      <Td variant="numeric">
                         {lot.unitCost}
                       </Td>
                       <Td className="text-content-muted">
@@ -119,7 +120,7 @@ function LotsContent() {
                       <Td>
                         {lot.expiryDate ? (
                           <span className="flex items-center gap-2">
-                            <span className="tabular text-content-muted">{lot.expiryDate}</span>
+                            <span className="font-mono text-content-muted">{lot.expiryDate}</span>
                             {expiringSoon && (
                               <Badge tone={daysLeft <= 0 ? 'danger' : 'warning'}>
                                 {daysLeft <= 0 ? 'expired' : `${daysLeft}d left`}
@@ -127,7 +128,7 @@ function LotsContent() {
                             )}
                           </span>
                         ) : (
-                          <span className="text-content-subtle">—</span>
+                          <span className="italic text-unknown">No expiry set</span>
                         )}
                       </Td>
                       <Td>

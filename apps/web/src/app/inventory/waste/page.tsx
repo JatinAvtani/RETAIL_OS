@@ -100,7 +100,7 @@ export default function WastePage() {
     <>
       <PageHeader
         title="Log waste"
-        description="Quick entry for spoilage, spillage, and prep errors. Stock is drawn from the earliest-expiring lot automatically."
+        description="Log spoilage, spillage, or a prep mistake."
         actions={
           <Link href="/inventory">
             <Button variant="ghost">Back</Button>

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
-import { Badge, Card, EmptyState, ErrorNotice, LoadingState, PageHeader, Table, Td, Th, Tr, type BadgeTone } from '@/components/ui';
+import { Badge, Card, EmptyState, ErrorNotice, PageHeader, SkeletonRows, Table, Td, Th, Tr, type BadgeTone } from '@/components/ui';
 
 type PendingResult = Awaited<ReturnType<typeof trpc.invoiceMatches.pending.query>>;
 type Match = PendingResult[number];
@@ -45,7 +45,7 @@ export default function VarianceQueuePage() {
       <>
         <PageHeader title="Variance review queue" />
         <Card>
-          <LoadingState />
+          <SkeletonRows columns={5} />
         </Card>
       </>
     );
@@ -64,7 +64,7 @@ export default function VarianceQueuePage() {
 
   return (
     <>
-      <PageHeader title="Variance review queue" description="Three-way match results outside tolerance, worst severity first." />
+      <PageHeader title="Variance review queue" description="Mismatches worth checking, worst first." />
 
       {error && <ErrorNotice>{error}</ErrorNotice>}
 

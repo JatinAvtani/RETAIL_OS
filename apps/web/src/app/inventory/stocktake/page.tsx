@@ -52,7 +52,7 @@ export default function StocktakeListPage() {
     <>
       <PageHeader
         title="Stocktakes"
-        description="Starting a count freezes the theoretical balance at that moment, so sales during the count don't show up as phantom variance."
+        description="Starting a count locks in the numbers, so sales during the count don't throw it off."
         actions={
           <Link href="/inventory">
             <Button variant="ghost">Back</Button>

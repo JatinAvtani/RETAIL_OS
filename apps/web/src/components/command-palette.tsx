@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { trpc } from '@/lib/trpc';
+import { LogoMark } from './logo';
 import { cx } from './ui';
 
 type SearchResult = { entityType: 'product' | 'supplier' | 'purchase_order' | 'document'; id: string; title: string; subtitle: string | null; score: number };
@@ -114,9 +115,12 @@ export const CommandPalette = () => {
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-[15vh]" onClick={close}>
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 px-4 pt-[12vh] backdrop-blur-[2px]"
+      onClick={close}
+    >
       <div
-        className="w-full max-w-lg overflow-hidden rounded-card border border-border bg-surface-raised shadow-xl"
+        className="w-full max-w-xl overflow-hidden rounded-card border border-border-strong bg-surface-raised shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <input
@@ -124,26 +128,35 @@ export const CommandPalette = () => {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search products, suppliers, purchase orders, documents…"
-          className="w-full border-b border-border bg-transparent px-4 py-3 text-sm text-content outline-none placeholder:text-content-subtle"
+          className="w-full border-b border-border bg-transparent px-5 py-4 text-[15px] text-content outline-none placeholder:text-content-subtle"
         />
         <div className="max-h-96 overflow-y-auto">
-          {loading && <p className="px-4 py-6 text-center text-sm text-content-subtle">Searching…</p>}
+          {/* Resting state. An empty palette that shows nothing reads as broken; naming what is
+              searchable turns the pause into an instruction. */}
+          {!loading && query.trim().length === 0 && (
+            <p className="px-5 py-8 text-center text-sm text-content-subtle">
+              Start typing to search across your products, suppliers, orders and documents.
+            </p>
+          )}
+          {loading && <p className="px-5 py-8 text-center text-sm text-content-subtle">Searching…</p>}
           {!loading && query.trim().length > 0 && totalResults === 0 && (
-            <p className="px-4 py-6 text-center text-sm text-content-subtle">No results for &ldquo;{query}&rdquo;.</p>
+            <p className="px-5 py-8 text-center text-sm text-content-subtle">
+              Nothing matches &ldquo;{query}&rdquo;.
+            </p>
           )}
           {!loading &&
             GROUPS.map(
               (group) =>
                 results[group.key].length > 0 && (
                   <div key={group.key} className="py-1.5">
-                    <p className="px-4 py-1 text-xs font-semibold uppercase tracking-wide text-content-subtle">{group.label}</p>
+                    <p className="px-5 py-1.5 text-xs font-semibold uppercase tracking-wide text-content-subtle">{group.label}</p>
                     {results[group.key].map((result) => (
                       <button
                         key={result.id}
                         type="button"
                         onClick={() => navigate(result)}
                         className={cx(
-                          'flex w-full items-center justify-between gap-3 px-4 py-2 text-left text-sm',
+                          'flex w-full items-center justify-between gap-3 px-5 py-2 text-left text-sm',
                           'text-content hover:bg-surface-sunken'
                         )}
                       >
@@ -155,9 +168,12 @@ export const CommandPalette = () => {
                 )
             )}
         </div>
-        <div className="flex items-center justify-between border-t border-border px-4 py-2 text-xs text-content-subtle">
+        <div className="flex items-center justify-between border-t border-border px-5 py-2.5 text-xs text-content-subtle">
           <span>↑↓ to navigate · Enter to select</span>
-          <span>Esc to close</span>
+          <span className="inline-flex items-center gap-1.5">
+            <LogoMark className="size-3 text-content-subtle" />
+            Vyapaar
+          </span>
         </div>
       </div>
     </div>
