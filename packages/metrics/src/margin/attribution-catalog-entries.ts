@@ -2,7 +2,7 @@ import { z } from 'zod';
 import Decimal from 'decimal.js';
 import { money, type CurrencyCode, type Money } from '@retailos/domain';
 import { DashboardRepository, MenuItemRepository } from '@retailos/db';
-import { defineMetric, type MetricResult } from '../catalog/index.js';
+import { defineMetric, resolveCurrency, type MetricResult } from '../catalog/index.js';
 import { computeContributionMarginPercentage, computeCogsActual, computeContributionMargin, computeNetRevenue } from './margin.js';
 import { computeMarginAttribution, computeMarginPerItem, computeTotalContribution, type AttributionItemPair } from './attribution.js';
 import { requireMarginContext, type MarginMetricContext } from './catalog-entries.js';
@@ -17,8 +17,6 @@ import { requireMarginContext, type MarginMetricContext } from './catalog-entrie
  * `cogs_theoretical` already depends on — since every metric here needs a menu item's per-unit
  * recipe cost.
  */
-
-const CURRENCY: CurrencyCode = 'USD';
 
 const singleItemParams = z.object({
   storeId: z.string().uuid(),
@@ -36,12 +34,13 @@ type SingleItemParams = z.infer<typeof singleItemParams>;
  */
 const resolveMenuItemUnitCost = async (
   ctx: MarginMetricContext,
-  menuItemId: string
+  menuItemId: string,
+  currency: CurrencyCode
 ): Promise<Money | 'unknown'> => {
   const menuItemRepository = new MenuItemRepository(ctx.db, ctx.organizationId);
   const menuItem = await menuItemRepository.findById(menuItemId);
   if (!menuItem) return 'unknown';
-  return ctx.resolveRecipeUnitCost(ctx, menuItem.recipeGroupId, CURRENCY);
+  return ctx.resolveRecipeUnitCost(ctx, menuItem.recipeGroupId, currency);
 };
 
 const resolveItemFigures = async (
@@ -49,7 +48,8 @@ const resolveItemFigures = async (
   storeId: string,
   menuItemId: string,
   from: Date,
-  to: Date
+  to: Date,
+  currency: CurrencyCode
 ): Promise<{ avgUnitPrice: Money; unitCost: Money | 'unknown'; quantitySold: string } | null> => {
   const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
   const lines = await dashboard.findSoldMappedItemLines(storeId, from, to);
@@ -57,8 +57,8 @@ const resolveItemFigures = async (
   if (!line || new Decimal(line.quantitySold).isZero()) return null;
 
   const quantity = new Decimal(line.quantitySold);
-  const avgUnitPrice = money(new Decimal(line.revenue).dividedBy(quantity), CURRENCY);
-  const unitCost = await resolveMenuItemUnitCost(ctx, menuItemId);
+  const avgUnitPrice = money(new Decimal(line.revenue).dividedBy(quantity), currency);
+  const unitCost = await resolveMenuItemUnitCost(ctx, menuItemId, currency);
   return { avgUnitPrice, unitCost, quantitySold: line.quantitySold };
 };
 
@@ -71,7 +71,8 @@ export const marginPerItemMetric = defineMetric<SingleItemParams>({
   sources: ['sales_transaction_lines', 'pos_items', 'recipes'],
   async execute(params, rawCtx): Promise<MetricResult> {
     const ctx = requireMarginContext(rawCtx, 'margin_per_item');
-    const figures = await resolveItemFigures(ctx, params.storeId, params.menuItemId, params.from, params.to);
+    const currency = await resolveCurrency(ctx);
+    const figures = await resolveItemFigures(ctx, params.storeId, params.menuItemId, params.from, params.to, currency);
     const now = new Date();
     if (!figures) {
       return {
@@ -108,7 +109,8 @@ export const totalContributionMetric = defineMetric<SingleItemParams>({
   sources: ['sales_transaction_lines', 'pos_items', 'recipes'],
   async execute(params, rawCtx): Promise<MetricResult> {
     const ctx = requireMarginContext(rawCtx, 'total_contribution');
-    const figures = await resolveItemFigures(ctx, params.storeId, params.menuItemId, params.from, params.to);
+    const currency = await resolveCurrency(ctx);
+    const figures = await resolveItemFigures(ctx, params.storeId, params.menuItemId, params.from, params.to, currency);
     const now = new Date();
     if (!figures) {
       return {
@@ -162,6 +164,7 @@ export const itemsByContributionMetric = defineMetric<StoreItemsParams>({
   sources: ['sales_transaction_lines', 'pos_items', 'recipes'],
   async execute(params, rawCtx): Promise<ItemsByContributionMetricResult> {
     const ctx = requireMarginContext(rawCtx, 'items_by_contribution');
+    const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
     const menuItemRepository = new MenuItemRepository(ctx.db, ctx.organizationId);
     const now = new Date();
@@ -173,8 +176,8 @@ export const itemsByContributionMetric = defineMetric<StoreItemsParams>({
         .map(async (line): Promise<ItemContributionRow> => {
           const menuItem = await menuItemRepository.findById(line.menuItemId);
           const quantity = new Decimal(line.quantitySold);
-          const avgUnitPrice = money(new Decimal(line.revenue).dividedBy(quantity), CURRENCY);
-          const unitCost = await resolveMenuItemUnitCost(ctx, line.menuItemId);
+          const avgUnitPrice = money(new Decimal(line.revenue).dividedBy(quantity), currency);
+          const unitCost = await resolveMenuItemUnitCost(ctx, line.menuItemId, currency);
           const marginPerItem = computeMarginPerItem(avgUnitPrice, unitCost);
           const totalContribution = computeTotalContribution(marginPerItem, line.quantitySold);
           return {
@@ -230,6 +233,7 @@ export const marginTrendMetric = defineMetric<MarginTrendParams>({
   sources: ['sales_transaction_lines', 'stock_movements', 'recipes'],
   async execute(params, rawCtx): Promise<MarginTrendMetricResult> {
     const ctx = requireMarginContext(rawCtx, 'margin_trend');
+    const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
 
     const points = await Promise.all(
@@ -239,8 +243,8 @@ export const marginTrendMetric = defineMetric<MarginTrendParams>({
           dashboard.findConsumption(params.storeId, period.from, period.to),
         ]);
         const netRevenue = computeNetRevenue(
-          salesLines.map((line) => money(line.lineTotal, CURRENCY)),
-          CURRENCY
+          salesLines.map((line) => money(line.lineTotal, currency)),
+          currency
         );
         const cogsActual = computeCogsActual(
           consumption.map((row) => ({
@@ -249,9 +253,9 @@ export const marginTrendMetric = defineMetric<MarginTrendParams>({
             cost:
               row.unitCost === null
                 ? ('unknown' as const)
-                : money(new Decimal(row.unitCost).times(new Decimal(row.quantity).abs()), CURRENCY),
+                : money(new Decimal(row.unitCost).times(new Decimal(row.quantity).abs()), currency),
           })),
-          CURRENCY
+          currency
         );
         const contributionMargin = computeContributionMargin(netRevenue, cogsActual);
         const pct = computeContributionMarginPercentage(contributionMargin, netRevenue);
@@ -307,6 +311,7 @@ export const marginAttributionMetric = defineMetric<MarginAttributionParams>({
   sources: ['sales_transaction_lines', 'pos_items', 'recipes'],
   async execute(params, rawCtx): Promise<MarginAttributionMetricResult> {
     const ctx = requireMarginContext(rawCtx, 'margin_attribution');
+    const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
 
     const [baseLines, comparisonLines] = await Promise.all([
@@ -320,12 +325,12 @@ export const marginAttributionMetric = defineMetric<MarginAttributionParams>({
     for (const menuItemId of allMenuItemIds) {
       const baseLine = baseLines.find((l) => l.menuItemId === menuItemId);
       const comparisonLine = comparisonLines.find((l) => l.menuItemId === menuItemId);
-      const unitCost = await resolveMenuItemUnitCost(ctx, menuItemId);
+      const unitCost = await resolveMenuItemUnitCost(ctx, menuItemId, currency);
 
       const toFigure = (line: typeof baseLine) =>
         line && !new Decimal(line.quantitySold).isZero()
           ? {
-              price: money(new Decimal(line.revenue).dividedBy(new Decimal(line.quantitySold)), CURRENCY),
+              price: money(new Decimal(line.revenue).dividedBy(new Decimal(line.quantitySold)), currency),
               cost: unitCost,
               quantity: line.quantitySold,
             }
@@ -334,7 +339,7 @@ export const marginAttributionMetric = defineMetric<MarginAttributionParams>({
       items.push({ menuItemId, base: toFigure(baseLine), comparison: toFigure(comparisonLine) });
     }
 
-    const result = computeMarginAttribution(items, CURRENCY);
+    const result = computeMarginAttribution(items, currency);
     const now = new Date();
 
     return {

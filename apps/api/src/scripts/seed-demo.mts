@@ -72,7 +72,7 @@ await db.insert(organizations).values({
   id: organizationId,
   name: 'Ardent Bakehouse',
   slug: `ardent-bakehouse-${organizationId}`,
-  baseCurrency: 'USD',
+  baseCurrency: 'INR',
 });
 
 const storeId = generateId();

@@ -1,12 +1,13 @@
 import { and, eq, gte, isNotNull, lt, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { Decimal } from 'decimal.js';
-import { generateId, applyPurchaseOrderTransition, type PurchaseOrderStatus } from '@retailos/domain';
+import { generateId, applyPurchaseOrderTransition, type CurrencyCode, type PurchaseOrderStatus } from '@retailos/domain';
 import * as schema from '../schema/index';
 import {
   goodsReceipts,
   goodsReceiptLines,
   lots,
+  organizations,
   purchaseOrders,
   purchaseOrderLines,
   outboxEvents,
@@ -235,6 +236,17 @@ export class GoodsReceiptRepository {
           )[0]?.expectedDeliveryDate ?? null
         : null;
 
+    // The org's real base currency — the walk-in-receipt fallback below (no linked PO, no
+    // per-line currency supplied) used to hardcode 'USD' regardless of organizations.baseCurrency,
+    // the same real bug fixed everywhere else in this codebase's money-computing paths. A line
+    // backed by a real PO still uses that PO's own currency (resolved per-line below), since a PO
+    // created before an org's currency ever changed should keep the currency it was placed in.
+    const [orgRow] = await tx
+      .select({ baseCurrency: organizations.baseCurrency })
+      .from(organizations)
+      .where(eq(organizations.id, this.organizationId));
+    const orgCurrency = (orgRow?.baseCurrency ?? 'USD') as CurrencyCode;
+
     for (const line of input.lines) {
       let unitCost = line.unitCost;
       let currency = line.currency;
@@ -286,7 +298,7 @@ export class GoodsReceiptRepository {
           : [];
         currency = po?.currency;
       }
-      const resolvedCurrency = currency ?? 'USD';
+      const resolvedCurrency = currency ?? orgCurrency;
       if (unitCost === undefined) {
         throw new UnknownReceiptCostError(resolvedProductId);
       }

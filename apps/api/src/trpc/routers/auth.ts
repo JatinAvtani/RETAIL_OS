@@ -23,6 +23,9 @@ const signupInput = z.object({
   organizationName: z.string().min(1).max(200),
   storeName: z.string().min(1).max(200),
   storeTimezone: z.string().min(1),
+  // A one-time choice, never changeable after signup — no exchange-rate/conversion logic exists
+  // anywhere in this codebase, so this is only safe to offer before any real financial data exists.
+  baseCurrency: z.enum(['USD', 'EUR', 'GBP', 'INR']),
 });
 
 const verifyEmailInput = z.object({
@@ -117,6 +120,7 @@ export const authRouter = router({
       organizationName: input.organizationName,
       storeName: input.storeName,
       storeTimezone: input.storeTimezone,
+      baseCurrency: input.baseCurrency,
       userId,
     });
 

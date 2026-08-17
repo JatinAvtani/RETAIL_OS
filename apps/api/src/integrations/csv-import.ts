@@ -2,6 +2,7 @@ import { and, eq } from 'drizzle-orm';
 import {
   CsvImportRepository,
   SalesIngestionPipeline,
+  organizations,
   posItems,
   salesTransactionLines,
   salesTransactions,
@@ -13,6 +14,7 @@ import {
   parseCsvRows,
   generateId,
   type CsvColumnMapping,
+  type CurrencyCode,
   type DetectedCsvHeaders,
   type ParsedCsvResult,
 } from '@retailos/domain';
@@ -101,9 +103,18 @@ export const commitCsvImport = async (
   const detected = importRow.detectedHeaders as unknown as DetectedCsvHeaders;
   const mapping = importRow.columnMapping as unknown as CsvColumnMapping;
 
+  // The org's real base currency — a CSV row with no currency column of its own (the common case)
+  // used to fall back to a hardcoded 'USD' inside parseCsvRows, the same real bug fixed everywhere
+  // else in this codebase's money-computing paths.
+  const [orgRow] = await db
+    .select({ baseCurrency: organizations.baseCurrency })
+    .from(organizations)
+    .where(eq(organizations.id, organizationId));
+  const defaultCurrency = (orgRow?.baseCurrency ?? 'USD') as CurrencyCode;
+
   let parsed: ParsedCsvResult;
   try {
-    parsed = parseCsvRows(csvText, detected.headers, mapping);
+    parsed = parseCsvRows(csvText, detected.headers, mapping, defaultCurrency);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'CSV parsing failed.';
     await csvImportRepository.recordFailure(importId, message);

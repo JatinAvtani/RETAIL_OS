@@ -2,7 +2,7 @@ import { z } from 'zod';
 import Decimal from 'decimal.js';
 import { money, type CurrencyCode } from '@retailos/domain';
 import { DashboardRepository, StockCountService } from '@retailos/db';
-import { defineMetric, type MetricContext, type MetricResult } from '../catalog/index.js';
+import { defineMetric, resolveCurrency, type MetricContext, type MetricResult } from '../catalog/index.js';
 import { computeCogsActual, computeWasteBreakdown, type ConsumptionLine } from '../margin/margin.js';
 import {
   computeExpiredValue,
@@ -19,8 +19,6 @@ import {
  * by `margin/catalog-entries.ts`'s `wasteValueMetric`). Every `execute` follows the same
  * fetch-then-compute split as every other catalog file.
  */
-
-const CURRENCY: CurrencyCode = 'USD';
 
 const periodParams = z.object({
   storeId: z.string().uuid(),
@@ -52,7 +50,8 @@ const period = (params: PeriodParams) => ({ from: params.from, to: params.to });
 
 const fetchConsumptionLines = async (
   dashboard: DashboardRepository,
-  params: PeriodParams
+  params: PeriodParams,
+  currency: CurrencyCode
 ): Promise<ConsumptionLine[]> => {
   const consumption = await dashboard.findConsumption(params.storeId, params.from, params.to);
   return consumption.map((row) => {
@@ -60,21 +59,22 @@ const fetchConsumptionLines = async (
     return {
       productId: row.productId,
       quantity: quantity.toFixed(6),
-      cost: row.unitCost === null ? ('unknown' as const) : money(quantity.times(row.unitCost), CURRENCY),
+      cost: row.unitCost === null ? ('unknown' as const) : money(quantity.times(row.unitCost), currency),
     };
   });
 };
 
 const fetchWasteLines = async (
   dashboard: DashboardRepository,
-  params: PeriodParams
+  params: PeriodParams,
+  currency: CurrencyCode
 ): Promise<ReasonCodedWasteLine[]> => {
   const waste = await dashboard.findWaste(params.storeId, params.from, params.to);
   return waste.map((row) => {
     const quantity = new Decimal(row.quantity).abs();
     return {
       reasonCode: row.reasonCode!,
-      value: row.unitCost === null ? ('unknown' as const) : money(new Decimal(row.unitCost).times(quantity), CURRENCY),
+      value: row.unitCost === null ? ('unknown' as const) : money(new Decimal(row.unitCost).times(quantity), currency),
     };
   });
 };
@@ -89,13 +89,14 @@ export const wastePercentageMetric = defineMetric<PeriodParams>({
   requiredPermission: 'financial:read',
   sources: ['stock_movements'],
   async execute(params, ctx: MetricContext): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
     const [wasteLines, consumptionLines] = await Promise.all([
-      fetchWasteLines(dashboard, params),
-      fetchConsumptionLines(dashboard, params),
+      fetchWasteLines(dashboard, params, currency),
+      fetchConsumptionLines(dashboard, params, currency),
     ]);
-    const wasteValue = computeWasteBreakdown(wasteLines, CURRENCY).total;
-    const cogs = computeCogsActual(consumptionLines, CURRENCY);
+    const wasteValue = computeWasteBreakdown(wasteLines, currency).total;
+    const cogs = computeCogsActual(consumptionLines, currency);
     const value = computeWastePercentage(wasteValue, cogs);
     const now = new Date();
     return {
@@ -121,9 +122,10 @@ export const wasteByReasonMetric = defineMetric<WasteReasonParams>({
   requiredPermission: 'financial:read',
   sources: ['stock_movements'],
   async execute(params, ctx: MetricContext): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
-    const wasteLines = await fetchWasteLines(dashboard, params);
-    const value = computeWasteValueForReason(wasteLines, params.reasonCode, CURRENCY);
+    const wasteLines = await fetchWasteLines(dashboard, params, currency);
+    const value = computeWasteValueForReason(wasteLines, params.reasonCode, currency);
     const now = new Date();
     const matchingCount = wasteLines.filter((l) => l.reasonCode === params.reasonCode).length;
     return {
@@ -151,9 +153,10 @@ export const expiredValueMetric = defineMetric<PeriodParams>({
   requiredPermission: 'financial:read',
   sources: ['stock_movements'],
   async execute(params, ctx: MetricContext): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
-    const wasteLines = await fetchWasteLines(dashboard, params);
-    const value = computeExpiredValue(wasteLines, CURRENCY);
+    const wasteLines = await fetchWasteLines(dashboard, params, currency);
+    const value = computeExpiredValue(wasteLines, currency);
     const now = new Date();
     const matchingCount = wasteLines.filter((l) => l.reasonCode === 'EXPIRED').length;
     return {
@@ -189,9 +192,10 @@ export const shrinkageValueMetric = defineMetric<PeriodParams>({
   requiredPermission: 'financial:read',
   sources: ['stock_count_lines', 'stock_counts'],
   async execute(params, ctx: MetricContext): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const stockCounts = new StockCountService(ctx.db, ctx.organizationId);
     const varianceLines = await fetchVarianceLines(stockCounts, params);
-    const value = computeShrinkageValue(varianceLines, CURRENCY);
+    const value = computeShrinkageValue(varianceLines, currency);
     const now = new Date();
     return {
       metricId: 'shrinkage_value',
@@ -213,14 +217,15 @@ export const shrinkagePercentageMetric = defineMetric<PeriodParams>({
   requiredPermission: 'financial:read',
   sources: ['stock_count_lines', 'stock_movements'],
   async execute(params, ctx: MetricContext): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const stockCounts = new StockCountService(ctx.db, ctx.organizationId);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
     const [varianceLines, consumptionLines] = await Promise.all([
       fetchVarianceLines(stockCounts, params),
-      fetchConsumptionLines(dashboard, params),
+      fetchConsumptionLines(dashboard, params, currency),
     ]);
-    const shrinkageValue = computeShrinkageValue(varianceLines, CURRENCY);
-    const cogs = computeCogsActual(consumptionLines, CURRENCY);
+    const shrinkageValue = computeShrinkageValue(varianceLines, currency);
+    const cogs = computeCogsActual(consumptionLines, currency);
     const value = computeShrinkagePercentage(shrinkageValue, cogs);
     const now = new Date();
     return {

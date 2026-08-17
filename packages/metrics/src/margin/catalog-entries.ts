@@ -2,7 +2,7 @@ import { z } from 'zod';
 import Decimal from 'decimal.js';
 import { money, type CurrencyCode, type Money } from '@retailos/domain';
 import { DashboardRepository } from '@retailos/db';
-import { defineMetric, type MetricContext, type MetricResult } from '../catalog/index.js';
+import { defineMetric, resolveCurrency, type MetricContext, type MetricResult } from '../catalog/index.js';
 import {
   computeCogsActual,
   computeCogsTheoretical,
@@ -36,8 +36,6 @@ import {
  * parameters instead — matching how `PostingService`/`MovementService` already take collaborators
  * as parameters rather than reaching for concrete construction inline.
  */
-
-const CURRENCY: CurrencyCode = 'USD';
 
 const marginMetricParams = z.object({
   storeId: z.string().uuid(),
@@ -77,7 +75,8 @@ const period = (params: MarginMetricParams) => ({ from: params.from, to: params.
 
 export const fetchConsumptionLines = async (
   dashboard: DashboardRepository,
-  params: MarginMetricParams
+  params: MarginMetricParams,
+  currency: CurrencyCode
 ): Promise<ConsumptionLine[]> => {
   const consumption = await dashboard.findConsumption(params.storeId, params.from, params.to);
   return consumption.map((row) => {
@@ -88,7 +87,7 @@ export const fetchConsumptionLines = async (
       cost:
         row.unitCost === null
           ? ('unknown' as const)
-          : money(new Decimal(row.unitCost).times(quantity), CURRENCY),
+          : money(new Decimal(row.unitCost).times(quantity), currency),
     };
   });
 };
@@ -96,12 +95,13 @@ export const fetchConsumptionLines = async (
 const fetchSoldItemLines = async (
   ctx: MarginMetricContext,
   dashboard: DashboardRepository,
-  params: MarginMetricParams
+  params: MarginMetricParams,
+  currency: CurrencyCode
 ): Promise<SoldItemLine[]> => {
   const soldMapped = await dashboard.findSoldMappedItems(params.storeId, params.from, params.to);
   const lines: SoldItemLine[] = [];
   for (const sold of soldMapped) {
-    const unitRecipeCost = await ctx.resolveRecipeUnitCost(ctx, sold.menuItemId, CURRENCY);
+    const unitRecipeCost = await ctx.resolveRecipeUnitCost(ctx, sold.menuItemId, currency);
     lines.push({ menuItemId: sold.menuItemId, quantitySold: sold.quantitySold, unitRecipeCost });
   }
   return lines;
@@ -109,7 +109,8 @@ const fetchSoldItemLines = async (
 
 const fetchWasteLines = async (
   dashboard: DashboardRepository,
-  params: MarginMetricParams
+  params: MarginMetricParams,
+  currency: CurrencyCode
 ): Promise<WasteLine[]> => {
   const waste = await dashboard.findWaste(params.storeId, params.from, params.to);
   return waste.map((row) => {
@@ -119,7 +120,7 @@ const fetchWasteLines = async (
       value:
         row.unitCost === null
           ? ('unknown' as const)
-          : money(new Decimal(row.unitCost).times(quantity), CURRENCY),
+          : money(new Decimal(row.unitCost).times(quantity), currency),
     };
   });
 };
@@ -132,11 +133,12 @@ export const netRevenueMetric = defineMetric<MarginMetricParams>({
   requiredPermission: 'financial:read',
   sources: ['sales_transaction_lines', 'sales_transactions'],
   async execute(params, ctx): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
     const salesLines = await dashboard.findSalesLines(params.storeId, params.from, params.to);
     const netRevenue = computeNetRevenue(
-      salesLines.map((line) => money(line.lineTotal, CURRENCY)),
-      CURRENCY
+      salesLines.map((line) => money(line.lineTotal, currency)),
+      currency
     );
     return {
       metricId: 'net_revenue',
@@ -158,9 +160,10 @@ export const cogsActualMetric = defineMetric<MarginMetricParams>({
   requiredPermission: 'financial:read',
   sources: ['stock_movements'],
   async execute(params, ctx): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
-    const consumptionLines = await fetchConsumptionLines(dashboard, params);
-    const cogsActual = computeCogsActual(consumptionLines, CURRENCY);
+    const consumptionLines = await fetchConsumptionLines(dashboard, params, currency);
+    const cogsActual = computeCogsActual(consumptionLines, currency);
     return {
       metricId: 'cogs_actual',
       value: serialize(cogsActual),
@@ -185,9 +188,10 @@ export const cogsTheoreticalMetric = defineMetric<MarginMetricParams>({
   sources: ['sales_transaction_lines', 'pos_items', 'recipes'],
   async execute(params, rawCtx): Promise<MetricResult> {
     const ctx = requireMarginContext(rawCtx, 'cogs_theoretical');
+    const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
-    const soldItemLines = await fetchSoldItemLines(ctx, dashboard, params);
-    const cogsTheoretical = computeCogsTheoretical(soldItemLines, CURRENCY);
+    const soldItemLines = await fetchSoldItemLines(ctx, dashboard, params, currency);
+    const cogsTheoretical = computeCogsTheoretical(soldItemLines, currency);
     return {
       metricId: 'cogs_theoretical',
       value: serialize(cogsTheoretical),
@@ -212,13 +216,14 @@ export const costVarianceMetric = defineMetric<MarginMetricParams>({
   sources: ['stock_movements', 'sales_transaction_lines', 'recipes'],
   async execute(params, rawCtx): Promise<MetricResult> {
     const ctx = requireMarginContext(rawCtx, 'cost_variance');
+    const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
     const [consumptionLines, soldItemLines] = await Promise.all([
-      fetchConsumptionLines(dashboard, params),
-      fetchSoldItemLines(ctx, dashboard, params),
+      fetchConsumptionLines(dashboard, params, currency),
+      fetchSoldItemLines(ctx, dashboard, params, currency),
     ]);
-    const cogsActual = computeCogsActual(consumptionLines, CURRENCY);
-    const cogsTheoretical = computeCogsTheoretical(soldItemLines, CURRENCY);
+    const cogsActual = computeCogsActual(consumptionLines, currency);
+    const cogsTheoretical = computeCogsTheoretical(soldItemLines, currency);
     const { variance } = computeCostVariance(cogsActual, cogsTheoretical);
     return {
       metricId: 'cost_variance',
@@ -244,16 +249,17 @@ export const contributionMarginMetric = defineMetric<MarginMetricParams>({
   requiredPermission: 'financial:read',
   sources: ['sales_transaction_lines', 'stock_movements'],
   async execute(params, ctx): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
     const [salesLines, consumptionLines] = await Promise.all([
       dashboard.findSalesLines(params.storeId, params.from, params.to),
-      fetchConsumptionLines(dashboard, params),
+      fetchConsumptionLines(dashboard, params, currency),
     ]);
     const netRevenue = computeNetRevenue(
-      salesLines.map((line) => money(line.lineTotal, CURRENCY)),
-      CURRENCY
+      salesLines.map((line) => money(line.lineTotal, currency)),
+      currency
     );
-    const cogsActual = computeCogsActual(consumptionLines, CURRENCY);
+    const cogsActual = computeCogsActual(consumptionLines, currency);
     const contributionMargin = computeContributionMargin(netRevenue, cogsActual);
     return {
       metricId: 'contribution_margin',
@@ -279,16 +285,17 @@ export const foodCostPercentageMetric = defineMetric<MarginMetricParams>({
   requiredPermission: 'financial:read',
   sources: ['sales_transaction_lines', 'stock_movements'],
   async execute(params, ctx): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
     const [salesLines, consumptionLines] = await Promise.all([
       dashboard.findSalesLines(params.storeId, params.from, params.to),
-      fetchConsumptionLines(dashboard, params),
+      fetchConsumptionLines(dashboard, params, currency),
     ]);
     const netRevenue = computeNetRevenue(
-      salesLines.map((line) => money(line.lineTotal, CURRENCY)),
-      CURRENCY
+      salesLines.map((line) => money(line.lineTotal, currency)),
+      currency
     );
-    const cogsActual = computeCogsActual(consumptionLines, CURRENCY);
+    const cogsActual = computeCogsActual(consumptionLines, currency);
     const foodCostPercentage = computeFoodCostPercentage(cogsActual, netRevenue);
     return {
       metricId: 'food_cost_percentage',
@@ -316,16 +323,17 @@ export const contributionMarginPercentageMetric = defineMetric<MarginMetricParam
   requiredPermission: 'financial:read',
   sources: ['sales_transaction_lines', 'stock_movements'],
   async execute(params, ctx): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
     const [salesLines, consumptionLines] = await Promise.all([
       dashboard.findSalesLines(params.storeId, params.from, params.to),
-      fetchConsumptionLines(dashboard, params),
+      fetchConsumptionLines(dashboard, params, currency),
     ]);
     const netRevenue = computeNetRevenue(
-      salesLines.map((line) => money(line.lineTotal, CURRENCY)),
-      CURRENCY
+      salesLines.map((line) => money(line.lineTotal, currency)),
+      currency
     );
-    const cogsActual = computeCogsActual(consumptionLines, CURRENCY);
+    const cogsActual = computeCogsActual(consumptionLines, currency);
     const contributionMargin = computeContributionMargin(netRevenue, cogsActual);
     const pct = computeContributionMarginPercentage(contributionMargin, netRevenue);
     return {
@@ -354,9 +362,10 @@ export const wasteValueMetric = defineMetric<MarginMetricParams>({
   requiredPermission: 'financial:read',
   sources: ['stock_movements'],
   async execute(params, ctx): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
-    const wasteLines = await fetchWasteLines(dashboard, params);
-    const breakdown = computeWasteBreakdown(wasteLines, CURRENCY);
+    const wasteLines = await fetchWasteLines(dashboard, params, currency);
+    const breakdown = computeWasteBreakdown(wasteLines, currency);
     return {
       metricId: 'waste_value',
       value: serialize(breakdown.total),

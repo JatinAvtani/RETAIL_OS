@@ -97,8 +97,6 @@ export type ParsedCsvResult = {
   issues: CsvRowIssue[];
 };
 
-const DEFAULT_CURRENCY: CurrencyCode = 'USD';
-
 /**
  * Strips thousands separators and a leading currency symbol from a numeric cell — plan.md's own
  * named encoding-chaos list ("currency symbols, thousands separators"). Deliberately narrow: only
@@ -164,7 +162,8 @@ const computeRowExternalId = (fields: {
 export const parseCsvRows = (
   rawText: string,
   headers: string[],
-  mapping: CsvColumnMapping
+  mapping: CsvColumnMapping,
+  defaultCurrency: CurrencyCode
 ): ParsedCsvResult => {
   const text = stripBom(rawText);
   const result = Papa.parse<string[]>(text, { skipEmptyLines: true });
@@ -235,7 +234,7 @@ export const parseCsvRows = (
     }
 
     const currencyRaw = currencyIdx !== -1 ? cells[currencyIdx]?.trim().toUpperCase() : undefined;
-    const currency = (currencyRaw as CurrencyCode | undefined) ?? DEFAULT_CURRENCY;
+    const currency = (currencyRaw as CurrencyCode | undefined) ?? defaultCurrency;
 
     const quantityStr = quantity.toFixed(6);
     const lineTotalStr = lineTotal.toFixed(4);

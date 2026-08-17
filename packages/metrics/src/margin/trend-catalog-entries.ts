@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import { money, type CurrencyCode } from '@retailos/domain';
+import { money } from '@retailos/domain';
 import { DashboardRepository } from '@retailos/db';
-import { defineMetric, type MetricResult } from '../catalog/index.js';
+import { defineMetric, resolveCurrency, type MetricResult } from '../catalog/index.js';
 import { computeCogsActual, computeFoodCostPercentage, computeNetRevenue } from './margin.js';
 import { requireMarginContext, fetchConsumptionLines, type MarginMetricParams } from './catalog-entries.js';
 
@@ -14,8 +14,6 @@ import { requireMarginContext, fetchConsumptionLines, type MarginMetricParams } 
  * `stock_value_trend` lives in `inventory/catalog-entries.ts` since it needs `StockLevelRepository`,
  * not this file's margin collaborators.
  */
-
-const CURRENCY: CurrencyCode = 'USD';
 
 const trendParams = z.object({
   storeId: z.string().uuid(),
@@ -35,13 +33,14 @@ export const netRevenueTrendMetric = defineMetric<TrendParams>({
   requiredPermission: 'financial:read',
   sources: ['sales_transaction_lines'],
   async execute(params, ctx): Promise<NetRevenueTrendMetricResult> {
+    const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
     const points = await Promise.all(
       params.periods.map(async (p) => {
         const salesLines = await dashboard.findSalesLines(params.storeId, p.from, p.to);
         const netRevenue = computeNetRevenue(
-          salesLines.map((line) => money(line.lineTotal, CURRENCY)),
-          CURRENCY
+          salesLines.map((line) => money(line.lineTotal, currency)),
+          currency
         );
         return { periodLabel: p.label, value: netRevenue.amount.toFixed(4) };
       })
@@ -74,19 +73,20 @@ export const foodCostPercentageTrendMetric = defineMetric<TrendParams>({
   sources: ['sales_transaction_lines', 'stock_movements'],
   async execute(params, rawCtx): Promise<FoodCostPercentageTrendMetricResult> {
     const ctx = requireMarginContext(rawCtx, 'food_cost_percentage_trend');
+    const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
     const points = await Promise.all(
       params.periods.map(async (p): Promise<{ periodLabel: string; value: string | 'unknown' }> => {
         const periodParams: MarginMetricParams = { storeId: params.storeId, from: p.from, to: p.to };
         const [salesLines, consumptionLines] = await Promise.all([
           dashboard.findSalesLines(params.storeId, p.from, p.to),
-          fetchConsumptionLines(dashboard, periodParams),
+          fetchConsumptionLines(dashboard, periodParams, currency),
         ]);
         const netRevenue = computeNetRevenue(
-          salesLines.map((line) => money(line.lineTotal, CURRENCY)),
-          CURRENCY
+          salesLines.map((line) => money(line.lineTotal, currency)),
+          currency
         );
-        const cogsActual = computeCogsActual(consumptionLines, CURRENCY);
+        const cogsActual = computeCogsActual(consumptionLines, currency);
         const foodCostPercentage = computeFoodCostPercentage(cogsActual, netRevenue);
         return { periodLabel: p.label, value: foodCostPercentage === 'unknown' ? 'unknown' : foodCostPercentage.toFixed(2) };
       })

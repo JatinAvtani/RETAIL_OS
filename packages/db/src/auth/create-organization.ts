@@ -1,5 +1,5 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
-import { generateId } from '@retailos/domain';
+import { generateId, type CurrencyCode } from '@retailos/domain';
 import * as schema from '../schema/index';
 import { organizations, stores, memberships } from '../schema/index';
 import { withTenantContext } from '../tenant-context';
@@ -24,10 +24,17 @@ type Db = ReturnType<typeof drizzle<typeof schema>>;
  * would be a genuinely broken account, so all three commit together or not at all. The membership's
  * `acceptedAt` is set immediately (never a pending invite to themselves) — matching how OWNER, the
  * founding member, has always been seeded in `seed-demo.mts`.
+ *
+ * `baseCurrency` is a real, one-time choice made at signup, never changeable afterward — no
+ * conversion logic exists anywhere in this codebase (confirmed before building this), so a
+ * currency change after real financial data exists would silently mix untagged amounts across an
+ * org's own history. Offering the choice ONCE, before any data exists, is what makes it safe;
+ * `organizations.baseCurrency` remains the single source every metric reads from — see
+ * `resolveCurrency()` in `packages/metrics/src/catalog/currency.ts`.
  */
 export const createOrganizationWithOwner = async (
   db: Db,
-  input: { organizationName: string; storeName: string; storeTimezone: string; userId: string }
+  input: { organizationName: string; storeName: string; storeTimezone: string; baseCurrency: CurrencyCode; userId: string }
 ): Promise<{ organizationId: string; storeId: string; membershipId: string }> => {
   const organizationId = generateId();
   const slug = `${input.organizationName
@@ -39,10 +46,7 @@ export const createOrganizationWithOwner = async (
     id: organizationId,
     name: input.organizationName,
     slug,
-    // USD is the only currency this project's own seed data and domain layer have ever exercised
-    // (confirmed: no currency-selection UI or backend input exists anywhere yet) — a real,
-    // documented MVP scope limit, not a silent guess.
-    baseCurrency: 'USD',
+    baseCurrency: input.baseCurrency,
   });
 
   const storeId = generateId();

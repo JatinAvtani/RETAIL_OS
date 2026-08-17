@@ -1,12 +1,12 @@
 import { z } from 'zod';
-import { money, type CurrencyCode } from '@retailos/domain';
+import { money } from '@retailos/domain';
 import {
   GoodsReceiptRepository,
   PurchaseOrderRepository,
   InvoiceMatchRepository,
   SupplierPerformanceEventRepository,
 } from '@retailos/db';
-import { defineMetric, type MetricContext, type MetricResult } from '../catalog/index.js';
+import { defineMetric, resolveCurrency, type MetricContext, type MetricResult } from '../catalog/index.js';
 import {
   computeAverageOrderValue,
   computeEmergencyPurchaseRate,
@@ -37,8 +37,6 @@ import {
  * `PRICE_CHANGE` supplier-performance event (008-14's `detectPriceChange`) rather than
  * recomputing the same `Δunit_price × trailing_12mo_qty` formula a second time (I2).
  */
-
-const CURRENCY: CurrencyCode = 'USD';
 
 const storeParams = z.object({ storeId: z.string().uuid(), from: z.coerce.date(), to: z.coerce.date() });
 type StoreParams = z.infer<typeof storeParams>;
@@ -73,10 +71,11 @@ export const totalSpendMetric = defineMetric<StoreParams>({
   requiredPermission: 'purchasing:read',
   sources: ['purchase_order_lines', 'purchase_orders'],
   async execute(params, ctx: MetricContext): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const purchaseOrders = new PurchaseOrderRepository(ctx.db, ctx.organizationId);
     const lines = await purchaseOrders.findApprovedSpendLines(params.storeId, params.from, params.to);
-    const byCategory = computeSpendByCategory(lines, CURRENCY);
-    const total = computeTotalSpend(byCategory, CURRENCY);
+    const byCategory = computeSpendByCategory(lines, currency);
+    const total = computeTotalSpend(byCategory, currency);
     const now = new Date();
     return {
       metricId: 'total_spend',
@@ -98,15 +97,16 @@ export const spendByCategoryMetric = defineMetric<CategorySpendParams>({
   requiredPermission: 'purchasing:read',
   sources: ['purchase_order_lines', 'purchase_orders', 'products'],
   async execute(params, ctx: MetricContext): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const purchaseOrders = new PurchaseOrderRepository(ctx.db, ctx.organizationId);
     const lines = await purchaseOrders.findApprovedSpendLines(params.storeId, params.from, params.to);
-    const byCategory = computeSpendByCategory(lines, CURRENCY);
+    const byCategory = computeSpendByCategory(lines, currency);
     const now = new Date();
     const match = byCategory.find((entry) => entry.categoryId === params.categoryId);
     const matchingCount = lines.filter((l) => l.categoryId === params.categoryId).length;
     return {
       metricId: 'spend_by_category',
-      value: (match?.value ?? money(0, CURRENCY)).amount.toFixed(4),
+      value: (match?.value ?? money(0, currency)).amount.toFixed(4),
       unit: 'CURRENCY',
       period: period(params),
       computedAt: now,
@@ -126,12 +126,13 @@ export const priceChangeImpactMetric = defineMetric<SupplierProductParams>({
   requiredPermission: 'purchasing:read',
   sources: ['supplier_performance_events'],
   async execute(params, ctx: MetricContext): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const events = new SupplierPerformanceEventRepository(ctx.db, ctx.organizationId);
     const rows = await events.findForSupplierAndProductSince(params.supplierId, params.productId, params.since);
     const priceChangeEvents: PriceChangeEvent[] = rows
       .filter((row) => row.eventType === 'PRICE_CHANGE')
       .map((row) => ({ variance: row.variance, occurredAt: row.occurredAt }));
-    const value = computePriceChangeImpact(priceChangeEvents, CURRENCY);
+    const value = computePriceChangeImpact(priceChangeEvents, currency);
     const now = new Date();
     return {
       metricId: 'price_change_impact',
@@ -158,11 +159,12 @@ export const priceVarianceTotalMetric = defineMetric<SupplierParams>({
   requiredPermission: 'purchasing:read',
   sources: ['invoice_match_lines', 'invoice_matches'],
   async execute(params, ctx: MetricContext): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const invoiceMatches = new InvoiceMatchRepository(ctx.db, ctx.organizationId);
     const lines = await invoiceMatches.findPriceVarianceLines(params.supplierId, params.from, params.to);
     const validLines = lines
       .filter((l): l is { priceVariance: string; invoiceQuantity: string } => l.priceVariance !== null && l.invoiceQuantity !== null);
-    const value = computePriceVarianceTotal(validLines, CURRENCY);
+    const value = computePriceVarianceTotal(validLines, currency);
     const now = new Date();
     return {
       metricId: 'price_variance_total',
@@ -237,10 +239,11 @@ export const averageOrderValueMetric = defineMetric<SupplierParams>({
   requiredPermission: 'purchasing:read',
   sources: ['purchase_orders', 'purchase_order_lines'],
   async execute(params, ctx: MetricContext): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const purchaseOrders = new PurchaseOrderRepository(ctx.db, ctx.organizationId);
     const summary = await purchaseOrders.findSupplierOrderSummary(params.supplierId, params.from, params.to);
-    const totalSpend = money(summary.totalSpend ?? 0, CURRENCY);
-    const value = computeAverageOrderValue(totalSpend, summary.poCount, CURRENCY);
+    const totalSpend = money(summary.totalSpend ?? 0, currency);
+    const value = computeAverageOrderValue(totalSpend, summary.poCount, currency);
     const now = new Date();
     return {
       metricId: 'average_order_value',

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { CurrencyCode, Money } from '@retailos/domain';
 import { MenuItemRepository, StockLevelRepository, SupplierPriceRepository } from '@retailos/db';
-import { defineMetric, type MetricContext, type MetricResult } from '../catalog/index.js';
+import { defineMetric, resolveCurrency, type MetricContext, type MetricResult } from '../catalog/index.js';
 import type { RecipeUnitCostResolver } from '../margin/catalog-entries.js';
 import { resolveUnitCostLatest, resolveUnitCostWeightedAvg } from './cost.js';
 
@@ -44,8 +44,6 @@ const requireCostContext = (ctx: MetricContext, metricId: string): CostMetricCon
   return ctx as CostMetricContext;
 };
 
-const CURRENCY: CurrencyCode = 'USD';
-
 const unitCostWeightedAvgParams = z.object({
   storeId: z.string().uuid(),
   productId: z.string().uuid(),
@@ -61,9 +59,10 @@ export const unitCostWeightedAvgMetric = defineMetric<UnitCostWeightedAvgParams>
   requiredPermission: 'financial:read',
   sources: ['stock_levels'],
   async execute(params, ctx: MetricContext): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const stockLevelRepository = new StockLevelRepository(ctx.db, ctx.organizationId);
     const row = await stockLevelRepository.find(params.storeId, params.productId, params.variantId);
-    const value = resolveUnitCostWeightedAvg(row?.avgUnitCost ?? null, CURRENCY);
+    const value = resolveUnitCostWeightedAvg(row?.avgUnitCost ?? null, currency);
     const now = new Date();
     return {
       metricId: 'unit_cost_weighted_avg',
@@ -124,7 +123,8 @@ export const recipeCostMetric = defineMetric<RecipeCostParams>({
   sources: ['recipes', 'recipe_components', 'supplier_prices'],
   async execute(params, rawCtx): Promise<MetricResult> {
     const ctx = requireCostContext(rawCtx, 'recipe_cost');
-    const breakdown = await ctx.resolveRecipeCostBreakdown(ctx, params.recipeGroupId, CURRENCY);
+    const currency = await resolveCurrency(ctx);
+    const breakdown = await ctx.resolveRecipeCostBreakdown(ctx, params.recipeGroupId, currency);
     const now = new Date();
     return {
       metricId: 'recipe_cost',
@@ -155,6 +155,7 @@ export const menuItemCostMetric = defineMetric<MenuItemCostParams>({
   sources: ['menu_items', 'recipes', 'recipe_components', 'supplier_prices'],
   async execute(params, rawCtx): Promise<MetricResult> {
     const ctx = requireCostContext(rawCtx, 'menu_item_cost');
+    const currency = await resolveCurrency(ctx);
     const menuItemRepository = new MenuItemRepository(ctx.db, ctx.organizationId);
     const menuItem = await menuItemRepository.findById(params.menuItemId);
     const now = new Date();
@@ -171,7 +172,7 @@ export const menuItemCostMetric = defineMetric<MenuItemCostParams>({
       };
     }
 
-    const unitCost = await ctx.resolveRecipeUnitCost(ctx, menuItem.recipeGroupId, CURRENCY);
+    const unitCost = await ctx.resolveRecipeUnitCost(ctx, menuItem.recipeGroupId, currency);
     return {
       metricId: 'menu_item_cost',
       value: unitCost === 'unknown' ? 'unknown' : unitCost.amount.toFixed(4),

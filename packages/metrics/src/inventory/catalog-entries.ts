@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import Decimal from 'decimal.js';
-import { money, type CurrencyCode } from '@retailos/domain';
+import { money } from '@retailos/domain';
 import { DashboardRepository, MenuItemRepository, RecipeRepository, StockLevelRepository } from '@retailos/db';
-import { defineMetric, type MetricContext, type MetricResult } from '../catalog/index.js';
+import { defineMetric, resolveCurrency, type MetricContext, type MetricResult } from '../catalog/index.js';
 import {
   computeDaysOfSupply,
   computeDeadStockValue,
@@ -36,7 +36,6 @@ import { computeCogsActual, type ConsumptionLine } from '../margin/margin.js';
  * decisions for this task, not spec deviations invented silently.
  */
 
-const CURRENCY: CurrencyCode = 'USD';
 const CONSUMPTION_LOOKBACK_DAYS = 30;
 
 const storeParams = z.object({ storeId: z.string().uuid() });
@@ -87,10 +86,11 @@ export const stockValueMetric = defineMetric<StoreParams>({
   requiredPermission: 'inventory:read',
   sources: ['lots', 'products'],
   async execute(params, ctx: MetricContext): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const stockLevelRepository = new StockLevelRepository(ctx.db, ctx.organizationId);
     const lines = await stockLevelRepository.findStockValueByCategory(params.storeId);
-    const byCategory = computeStockValueByCategory(lines, CURRENCY);
-    const total = computeTotalStockValue(byCategory, CURRENCY);
+    const byCategory = computeStockValueByCategory(lines, currency);
+    const total = computeTotalStockValue(byCategory, currency);
     const now = new Date();
     return {
       metricId: 'stock_value',
@@ -155,6 +155,7 @@ export const inventoryTurnoverMetric = defineMetric<TurnoverParams>({
   requiredPermission: 'inventory:read',
   sources: ['stock_movements', 'lots'],
   async execute(params, ctx: MetricContext): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
     const stockLevelRepository = new StockLevelRepository(ctx.db, ctx.organizationId);
     const [consumption, stockValueLines] = await Promise.all([
@@ -164,15 +165,15 @@ export const inventoryTurnoverMetric = defineMetric<TurnoverParams>({
     const consumptionLines: ConsumptionLine[] = consumption.map((row) => ({
       productId: row.productId,
       quantity: new Decimal(row.quantity).abs().toFixed(6),
-      cost: row.unitCost === null ? ('unknown' as const) : money(row.unitCost, CURRENCY),
+      cost: row.unitCost === null ? ('unknown' as const) : money(row.unitCost, currency),
     }));
-    const cogsPeriod = computeCogsActual(consumptionLines, CURRENCY);
-    const byCategory = computeStockValueByCategory(stockValueLines, CURRENCY);
+    const cogsPeriod = computeCogsActual(consumptionLines, currency);
+    const byCategory = computeStockValueByCategory(stockValueLines, currency);
     // "avg stock value" over the period would need multiple snapshots (a fact-table concern, spec
     // 12 §12.6, not built yet — 009-01); the CURRENT stock value is used as the best available
     // proxy, matching this project's own precedent of live-query approximations ahead of the
     // fact-table phase.
-    const currentStockValue = computeTotalStockValue(byCategory, CURRENCY);
+    const currentStockValue = computeTotalStockValue(byCategory, currency);
     const periodDays = Math.max(1, Math.round((params.to.getTime() - params.from.getTime()) / (24 * 60 * 60 * 1000)));
     const value = computeInventoryTurnover(cogsPeriod, currentStockValue, periodDays);
     const now = new Date();
@@ -205,13 +206,14 @@ export const deadStockValueMetric = defineMetric<DeadStockParams>({
   requiredPermission: 'inventory:read',
   sources: ['stock_levels'],
   async execute(params, ctx: MetricContext): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const stockLevelRepository = new StockLevelRepository(ctx.db, ctx.organizationId);
     const rows = await stockLevelRepository.findDeadStock(params.storeId, params.thresholdDays);
     const lines: DeadStockLine[] = rows.map((row) => ({
       quantity: row.quantity,
-      avgUnitCost: row.avgUnitCost === null ? ('unknown' as const) : money(row.avgUnitCost, CURRENCY),
+      avgUnitCost: row.avgUnitCost === null ? ('unknown' as const) : money(row.avgUnitCost, currency),
     }));
-    const result = computeDeadStockValue(lines, CURRENCY);
+    const result = computeDeadStockValue(lines, currency);
     const now = new Date();
     return {
       metricId: 'dead_stock_value',
@@ -241,12 +243,13 @@ export const expiryRiskValueMetric = defineMetric<ExpiryRiskParams>({
   requiredPermission: 'inventory:read',
   sources: ['lots', 'stock_movements'],
   async execute(params, ctx: MetricContext): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const stockLevelRepository = new StockLevelRepository(ctx.db, ctx.organizationId);
     const lots = await stockLevelRepository.findExpiringLots(params.storeId);
     const value = computeExpiryRiskValue(
       lots.map((lot) => ({ valueAtRisk: lot.valueAtRisk, daysToExpiry: lot.daysToExpiry })),
       params.horizonDays,
-      CURRENCY
+      currency
     );
     const now = new Date();
     return {
@@ -368,6 +371,7 @@ export const stockoutRevenueImpactMetric = defineMetric<MenuItemStockoutParams>(
   requiredPermission: 'inventory:read',
   sources: ['stock_movements', 'sales_transaction_lines', 'recipes'],
   async execute(params, ctx: MetricContext): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const { days } = await findMenuItemStockoutDays(ctx, params.storeId, params.menuItemId, params.from, params.to);
 
     const menuItemRepository = new MenuItemRepository(ctx.db, ctx.organizationId);
@@ -392,7 +396,7 @@ export const stockoutRevenueImpactMetric = defineMetric<MenuItemStockoutParams>(
     const soldLine = soldLines.find((l) => l.menuItemId === params.menuItemId);
     const avgUnitPrice =
       soldLine && !new Decimal(soldLine.quantitySold).isZero()
-        ? money(new Decimal(soldLine.revenue).dividedBy(new Decimal(soldLine.quantitySold)), CURRENCY)
+        ? money(new Decimal(soldLine.revenue).dividedBy(new Decimal(soldLine.quantitySold)), currency)
         : ('unknown' as const);
 
     // avg daily consumption is estimated from the SAME menu item's own real sold-quantity rate
@@ -400,7 +404,7 @@ export const stockoutRevenueImpactMetric = defineMetric<MenuItemStockoutParams>(
     const periodDays = Math.max(1, Math.round((params.to.getTime() - params.from.getTime()) / (24 * 60 * 60 * 1000)));
     const avgDailyConsumption = soldLine ? new Decimal(soldLine.quantitySold).dividedBy(periodDays).toFixed(6) : null;
 
-    const result = computeStockoutRevenueImpact({ stockoutDayCount: days.size, avgDailyConsumption, avgUnitPrice }, CURRENCY);
+    const result = computeStockoutRevenueImpact({ stockoutDayCount: days.size, avgDailyConsumption, avgUnitPrice }, currency);
 
     return {
       metricId: 'stockout_revenue_impact',

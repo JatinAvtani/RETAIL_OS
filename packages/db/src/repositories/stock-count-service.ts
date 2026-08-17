@@ -1,7 +1,7 @@
 import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import * as schema from '../schema/index';
-import { productVariants, products, stockCountLines, stockCounts, stockLevels, storageLocations, units } from '../schema/index';
+import { organizations, productVariants, products, stockCountLines, stockCounts, stockLevels, storageLocations, units } from '../schema/index';
 import { withTenantContext } from '../tenant-context';
 import { generateId, type CurrencyCode, type Unit } from '@retailos/domain';
 import { MovementService, UnknownCostSurplusError } from './movement-service';
@@ -188,6 +188,15 @@ export class StockCountService {
         }
 
         const t0At = new Date();
+        // The org's real base currency — this line used to freeze every count line's currency as
+        // a hardcoded 'USD' regardless of organizations.baseCurrency, the same real bug fixed
+        // everywhere else in this codebase's money-computing paths.
+        const [orgRow] = await tx
+          .select({ baseCurrency: organizations.baseCurrency })
+          .from(organizations)
+          .where(eq(organizations.id, this.organizationId));
+        const currency = (orgRow?.baseCurrency ?? 'USD') as CurrencyCode;
+
         const lineRows = await tx
           .select()
           .from(stockCountLines)
@@ -217,7 +226,7 @@ export class StockCountService {
             .set({
               theoreticalQuantityT0: theoreticalQuantity,
               t0UnitCost: unitCost,
-              currency: unitCost !== null ? 'USD' : null,
+              currency: unitCost !== null ? currency : null,
               updatedAt: new Date(),
             })
             .where(eq(stockCountLines.id, line.id));

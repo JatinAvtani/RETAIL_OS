@@ -232,6 +232,7 @@ describe('rate limiting on auth endpoints', () => {
           organizationName: `Signup Lockout Org ${i}`,
           storeName: 'Main Store',
           storeTimezone: 'America/New_York',
+          baseCurrency: 'INR',
         },
         ip
       );
@@ -247,6 +248,7 @@ describe('rate limiting on auth endpoints', () => {
         organizationName: 'Signup Lockout Final Org',
         storeName: 'Main Store',
         storeTimezone: 'America/New_York',
+        baseCurrency: 'INR',
       },
       ip
     );

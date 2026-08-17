@@ -1,9 +1,11 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import Decimal from 'decimal.js';
+import { eq } from 'drizzle-orm';
 import {
   DashboardRepository,
   MenuItemRepository,
+  organizations,
   ParLevelRepository,
   PosConnectionRepository,
   PurchaseOrderRepository,
@@ -13,7 +15,7 @@ import {
   type PurchaseOrderStatus,
 } from '@retailos/db';
 import { canAccessStore, type AuthContext, type Permission } from '@retailos/authz';
-import { money } from '@retailos/domain';
+import { money, type CurrencyCode } from '@retailos/domain';
 import {
   computeWasteBreakdown,
   executeMetric,
@@ -119,7 +121,14 @@ export const dashboardRouter = router({
 
     const to = new Date();
     const from = new Date(to.getTime() - input.days * 24 * 60 * 60 * 1000);
-    const currency = 'USD' as const;
+    // The org's real base currency, matching recipes.ts's own established pattern — this
+    // previously hardcoded 'USD', silently mislabeling every money figure for any org whose
+    // organizations.baseCurrency is something else (a real bug, not a refactor).
+    const [orgRow] = await ctx.db
+      .select({ baseCurrency: organizations.baseCurrency })
+      .from(organizations)
+      .where(eq(organizations.id, ctx.session.organizationId));
+    const currency = (orgRow?.baseCurrency ?? 'USD') as CurrencyCode;
 
     const auth: AuthContext = {
       userId: ctx.session.userId,
@@ -411,7 +420,11 @@ export const dashboardRouter = router({
     const to = new Date();
     const from = new Date(to.getTime() - input.days * 24 * 60 * 60 * 1000);
     const todayStart = new Date(to.getTime() - 24 * 60 * 60 * 1000);
-    const currency = 'USD' as const;
+    const [orgRow] = await ctx.db
+      .select({ baseCurrency: organizations.baseCurrency })
+      .from(organizations)
+      .where(eq(organizations.id, ctx.session.organizationId));
+    const currency = (orgRow?.baseCurrency ?? 'USD') as CurrencyCode;
 
     const auth: AuthContext = {
       userId: ctx.session.userId,

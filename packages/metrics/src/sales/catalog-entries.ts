@@ -2,7 +2,7 @@ import { z } from 'zod';
 import Decimal from 'decimal.js';
 import { money, type CurrencyCode } from '@retailos/domain';
 import { DashboardRepository, StoreRepository } from '@retailos/db';
-import { defineMetric, type MetricResult } from '../catalog/index.js';
+import { defineMetric, resolveCurrency, type MetricResult } from '../catalog/index.js';
 import {
   computeAverageTransactionValue,
   computeDiscountRate,
@@ -26,8 +26,6 @@ import {
  * tenant-scoped query, the one piece of context none of the other sales metrics need.
  */
 
-const CURRENCY: CurrencyCode = 'USD';
-
 const salesMetricParams = z.object({
   storeId: z.string().uuid(),
   from: z.coerce.date(),
@@ -39,14 +37,15 @@ type SalesMetricParams = z.infer<typeof salesMetricParams>;
 const period = (params: SalesMetricParams) => ({ from: params.from, to: params.to });
 
 const toTransactionHeaders = (
-  rows: Awaited<ReturnType<DashboardRepository['findTransactions']>>
+  rows: Awaited<ReturnType<DashboardRepository['findTransactions']>>,
+  currency: CurrencyCode
 ): TransactionHeader[] =>
   rows.map((row) => ({
     occurredAt: row.occurredAt,
-    subtotal: money(row.subtotal, CURRENCY),
-    discount: money(row.discount, CURRENCY),
-    tax: money(row.tax, CURRENCY),
-    total: money(row.total, CURRENCY),
+    subtotal: money(row.subtotal, currency),
+    discount: money(row.discount, currency),
+    tax: money(row.tax, currency),
+    total: money(row.total, currency),
     status: row.status,
   }));
 
@@ -58,9 +57,10 @@ export const grossRevenueMetric = defineMetric<SalesMetricParams>({
   requiredPermission: 'financial:read',
   sources: ['sales_transactions'],
   async execute(params, ctx): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
     const rows = await dashboard.findTransactions(params.storeId, params.from, params.to);
-    const grossRevenue = computeGrossRevenue(toTransactionHeaders(rows), CURRENCY);
+    const grossRevenue = computeGrossRevenue(toTransactionHeaders(rows, currency), currency);
     return {
       metricId: 'gross_revenue',
       value: grossRevenue.amount.toFixed(4),
@@ -81,9 +81,10 @@ export const transactionCountMetric = defineMetric<SalesMetricParams>({
   requiredPermission: 'financial:read',
   sources: ['sales_transactions'],
   async execute(params, ctx): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
     const rows = await dashboard.findTransactions(params.storeId, params.from, params.to);
-    const count = computeTransactionCount(toTransactionHeaders(rows));
+    const count = computeTransactionCount(toTransactionHeaders(rows, currency));
     return {
       metricId: 'transaction_count',
       value: String(count),
@@ -104,14 +105,15 @@ export const averageTransactionValueMetric = defineMetric<SalesMetricParams>({
   requiredPermission: 'financial:read',
   sources: ['sales_transactions', 'sales_transaction_lines'],
   async execute(params, ctx): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
     const [salesLines, transactionRows] = await Promise.all([
       dashboard.findSalesLines(params.storeId, params.from, params.to),
       dashboard.findTransactions(params.storeId, params.from, params.to),
     ]);
     const netRevenue = salesLines.reduce((sum, line) => sum.plus(line.lineTotal), new Decimal(0));
-    const transactionCount = computeTransactionCount(toTransactionHeaders(transactionRows));
-    const avg = computeAverageTransactionValue(money(netRevenue, CURRENCY), transactionCount);
+    const transactionCount = computeTransactionCount(toTransactionHeaders(transactionRows, currency));
+    const avg = computeAverageTransactionValue(money(netRevenue, currency), transactionCount);
     return {
       metricId: 'average_transaction_value',
       value: avg === 'unknown' ? 'unknown' : avg.amount.toFixed(4),
@@ -159,9 +161,10 @@ export const discountRateMetric = defineMetric<SalesMetricParams>({
   requiredPermission: 'financial:read',
   sources: ['sales_transactions'],
   async execute(params, ctx): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
     const rows = await dashboard.findTransactions(params.storeId, params.from, params.to);
-    const { rate } = computeDiscountRate(toTransactionHeaders(rows), CURRENCY);
+    const { rate } = computeDiscountRate(toTransactionHeaders(rows, currency), currency);
     return {
       metricId: 'discount_rate',
       value: rate === 'unknown' ? 'unknown' : rate.toFixed(2),
@@ -183,9 +186,10 @@ export const refundRateMetric = defineMetric<SalesMetricParams>({
   requiredPermission: 'financial:read',
   sources: ['sales_transactions'],
   async execute(params, ctx): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
     const rows = await dashboard.findTransactions(params.storeId, params.from, params.to);
-    const { rate } = computeRefundRate(toTransactionHeaders(rows), CURRENCY);
+    const { rate } = computeRefundRate(toTransactionHeaders(rows, currency), currency);
     return {
       metricId: 'refund_rate',
       value: rate === 'unknown' ? 'unknown' : rate.toFixed(2),
@@ -221,15 +225,16 @@ export const salesMixPercentageMetric = defineMetric<SalesMetricParams>({
   requiredPermission: 'financial:read',
   sources: ['sales_transaction_lines', 'pos_items'],
   async execute(params, ctx): Promise<SalesMixMetricResult> {
+    const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
     const lines = await dashboard.findSalesLinesWithItem(params.storeId, params.from, params.to);
     const mix = computeSalesMix(
       lines.map((line) => ({
         itemId: line.itemId,
         itemName: line.itemName,
-        lineTotal: money(line.lineTotal, CURRENCY),
+        lineTotal: money(line.lineTotal, currency),
       })),
-      CURRENCY
+      currency
     );
     const top = mix[0];
     return {
@@ -258,6 +263,7 @@ export const revenuePerDaypartMetric = defineMetric<SalesMetricParams>({
   requiredPermission: 'financial:read',
   sources: ['sales_transaction_lines', 'stores'],
   async execute(params, ctx): Promise<RevenuePerDaypartMetricResult> {
+    const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
     const storeRepository = new StoreRepository(ctx.db, ctx.organizationId);
     const store = await storeRepository.findById(params.storeId);
@@ -267,9 +273,9 @@ export const revenuePerDaypartMetric = defineMetric<SalesMetricParams>({
 
     const salesLines = await dashboard.findSalesLines(params.storeId, params.from, params.to);
     const byDaypart = computeRevenuePerDaypart(
-      salesLines.map((line) => ({ occurredAt: line.occurredAt, lineTotal: money(line.lineTotal, CURRENCY) })),
+      salesLines.map((line) => ({ occurredAt: line.occurredAt, lineTotal: money(line.lineTotal, currency) })),
       store.timezone,
-      CURRENCY
+      currency
     );
 
     // `value` holds the sum across all four dayparts — a real, meaningful scalar (it equals the

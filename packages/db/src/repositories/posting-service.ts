@@ -2,9 +2,9 @@ import { and, eq, gte, isNull, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { Decimal } from 'decimal.js';
 import * as schema from '../schema/index';
-import { documentLinks, documents, outboxEvents, productVariants, supplierPrices, supplierProducts, stockMovements } from '../schema/index';
+import { documentLinks, documents, organizations, outboxEvents, productVariants, supplierPrices, supplierProducts, stockMovements } from '../schema/index';
 import { withTenantContext, type Tx } from '../tenant-context';
-import { generateId, detectPriceChange } from '@retailos/domain';
+import { generateId, detectPriceChange, type CurrencyCode } from '@retailos/domain';
 import { MovementService } from './movement-service';
 import { SupplierPerformanceEventRepository } from './supplier-performance-event-repository';
 
@@ -105,6 +105,15 @@ export class PostingService {
     const supplierName = input.fields.supplier.value;
     const results: PostingLineResult[] = [];
 
+    // The org's real base currency — every line below used to hardcode 'USD' for a real posted
+    // supplier price regardless of organizations.baseCurrency, the same real bug fixed everywhere
+    // else in this codebase's money-computing paths. Resolved once per document, not per line.
+    const [orgRow] = await tx
+      .select({ baseCurrency: organizations.baseCurrency })
+      .from(organizations)
+      .where(eq(organizations.id, this.organizationId));
+    const currency = (orgRow?.baseCurrency ?? 'USD') as CurrencyCode;
+
     if (!supplierName) {
       // No supplier resolved at all — every line is unmappable by definition (007-10's mapping
       // flow always resolves via an exact supplier name match). Still posts as an empty result,
@@ -119,7 +128,7 @@ export class PostingService {
 
     for (let lineIndex = 0; lineIndex < input.lines.length; lineIndex++) {
       const line = input.lines[lineIndex]!;
-      const result = await this.postLineInTx(tx, input.documentId, input.storeId, supplierName, line, lineIndex, input.actorUserId);
+      const result = await this.postLineInTx(tx, input.documentId, input.storeId, supplierName, line, lineIndex, input.actorUserId, currency);
       results.push(result);
     }
 
@@ -144,7 +153,8 @@ export class PostingService {
     supplierName: string,
     line: RawLine,
     lineIndex: number,
-    actorUserId: string
+    actorUserId: string,
+    currency: CurrencyCode
   ): Promise<PostingLineResult> {
     const sku = line.sku.value;
     const quantity = parseDecimal(line.quantity.value);
@@ -192,7 +202,6 @@ export class PostingService {
     if (currentPrice) {
       await tx.update(supplierPrices).set({ validTo: now }).where(eq(supplierPrices.id, currentPrice.id));
     }
-    const currency = 'USD'; // this project's single-currency scope (organizations.baseCurrency) — matches recipes.cost's own convention.
     const newPriceId = generateId();
     await tx.insert(supplierPrices).values({
       id: newPriceId,

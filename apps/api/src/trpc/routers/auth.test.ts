@@ -91,6 +91,7 @@ describe('auth router', () => {
       organizationName: 'Signup Test Org',
       storeName: 'Main Store',
       storeTimezone: 'America/New_York',
+      baseCurrency: 'INR',
     });
 
     expect(status).toBe(200);
@@ -109,6 +110,7 @@ describe('auth router', () => {
       organizationName: 'Dupe Test Org',
       storeName: 'Main Store',
       storeTimezone: 'America/New_York',
+      baseCurrency: 'INR',
     });
     const { status, body } = await rpc(app, 'auth.signup', {
       email,
@@ -116,6 +118,7 @@ describe('auth router', () => {
       organizationName: 'Dupe Test Org Attempt Two',
       storeName: 'Second Store',
       storeTimezone: 'America/New_York',
+      baseCurrency: 'INR',
     });
 
     expect(status).toBe(200);
@@ -131,6 +134,7 @@ describe('auth router', () => {
       organizationName: 'Bad Password Org',
       storeName: 'Main Store',
       storeTimezone: 'America/New_York',
+      baseCurrency: 'INR',
     });
 
     expect(status).toBe(400);
@@ -146,6 +150,7 @@ describe('auth router', () => {
       organizationName: 'Bad Email Org',
       storeName: 'Main Store',
       storeTimezone: 'America/New_York',
+      baseCurrency: 'INR',
     });
 
     expect(status).toBe(400);
@@ -162,6 +167,7 @@ describe('auth router', () => {
       organizationName: 'Verify Test Org',
       storeName: 'Main Store',
       storeTimezone: 'America/New_York',
+      baseCurrency: 'INR',
     });
     const token = asSuccess(signupResult.body)._devOnlyVerificationToken;
 
@@ -195,6 +201,7 @@ describe('auth router', () => {
       organizationName: 'Reuse Test Org',
       storeName: 'Main Store',
       storeTimezone: 'America/New_York',
+      baseCurrency: 'INR',
     });
     const token = asSuccess(signupResult.body)._devOnlyVerificationToken;
 

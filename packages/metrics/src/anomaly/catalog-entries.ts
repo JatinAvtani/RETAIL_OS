@@ -5,7 +5,7 @@ import {
   MenuItemRepository,
   SupplierPriceRepository,
 } from '@retailos/db';
-import { defineMetric, type MetricContext, type MetricResult } from '../catalog/index.js';
+import { defineMetric, resolveCurrency, type MetricContext, type MetricResult } from '../catalog/index.js';
 import type { RecipeUnitCostResolver } from '../margin/catalog-entries.js';
 import { computeCogsTheoretical, type SoldItemLine } from '../margin/margin.js';
 import { computeConsumptionAnomalyDays, computeCostSpike, computeSalesAnomalies, computeWasteSpikes } from './anomaly.js';
@@ -22,8 +22,6 @@ import type { DailyPoint, FlaggedPoint } from './statistics.js';
  * still carries a real, meaningful single number (the count of flagged points), never left null or
  * arbitrary just because the interesting payload is a list.
  */
-
-const CURRENCY = 'USD' as const;
 
 export type AnomalyMetricResult = MetricResult & { anomalies: FlaggedPoint[] };
 
@@ -157,6 +155,7 @@ export const consumptionAnomalyMetric = defineMetric<ConsumptionAnomalyParams>({
   sources: ['stock_movements', 'sales_transaction_lines', 'recipes'],
   async execute(params, rawCtx): Promise<AnomalyMetricResult> {
     const ctx = requireConsumptionAnomalyContext(rawCtx, 'consumption_anomaly');
+    const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
     const menuItemRepository = new MenuItemRepository(ctx.db, ctx.organizationId);
 
@@ -171,7 +170,7 @@ export const consumptionAnomalyMetric = defineMetric<ConsumptionAnomalyParams>({
     const unitCostByMenuItem = new Map<string, Awaited<ReturnType<RecipeUnitCostResolver>>>();
     for (const menuItemId of distinctMenuItemIds) {
       const menuItem = await menuItemRepository.findById(menuItemId);
-      const unitCost = menuItem ? await ctx.resolveRecipeUnitCost(ctx, menuItem.recipeGroupId, CURRENCY) : ('unknown' as const);
+      const unitCost = menuItem ? await ctx.resolveRecipeUnitCost(ctx, menuItem.recipeGroupId, currency) : ('unknown' as const);
       unitCostByMenuItem.set(menuItemId, unitCost);
     }
 
@@ -193,7 +192,7 @@ export const consumptionAnomalyMetric = defineMetric<ConsumptionAnomalyParams>({
       .map((date) => {
         const actual = actualByDate.get(date) ?? new Decimal(0);
         const soldLines = theoreticalByDate.get(date) ?? [];
-        const theoreticalCogs = computeCogsTheoretical(soldLines, CURRENCY);
+        const theoreticalCogs = computeCogsTheoretical(soldLines, currency);
         return theoreticalCogs === 'unknown' ? null : { date, actual, theoretical: theoreticalCogs.amount };
       })
       .filter((d): d is { date: string; actual: Decimal; theoretical: Decimal } => d !== null);

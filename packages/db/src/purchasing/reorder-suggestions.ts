@@ -1,8 +1,9 @@
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { Decimal } from 'decimal.js';
-import { quantity, money, suggestReorder, type ConsumptionDay, type ReorderSuggestion, type Unit } from '@retailos/domain';
+import { quantity, money, suggestReorder, type ConsumptionDay, type CurrencyCode, type ReorderSuggestion, type Unit } from '@retailos/domain';
 import * as schema from '../schema/index';
+import { organizations } from '../schema/index';
 import { withTenantContext } from '../tenant-context';
 
 type Db = ReturnType<typeof drizzle<typeof schema>>;
@@ -97,6 +98,15 @@ const runReorderSuggestionsQuery = async (
   asOf: Date
 ): Promise<SupplierGroupedSuggestions[]> => {
   const asOfIso = asOf.toISOString();
+
+  // The org's real base currency — minOrderValue/latest_unit_price below previously hardcoded
+  // 'USD' regardless of organizations.baseCurrency, the same real bug fixed everywhere else in
+  // this codebase's money-computing paths (matches recipes.ts's own established pattern).
+  const [orgRow] = await tx
+    .select({ baseCurrency: organizations.baseCurrency })
+    .from(organizations)
+    .where(eq(organizations.id, organizationId));
+  const currency = (orgRow?.baseCurrency ?? 'USD') as CurrencyCode;
 
   const candidateRows = await tx.execute<{
     supplier_product_id: string;
@@ -228,7 +238,7 @@ const runReorderSuggestionsQuery = async (
     const leadTimeDays = {
       measuredLeadTimeDays: row.lead_time_days_measured,
       contractedLeadTimeDays: row.lead_time_days_contracted,
-      minOrderValue: row.min_order_value ? money(row.min_order_value, 'USD') : null,
+      minOrderValue: row.min_order_value ? money(row.min_order_value, currency) : null,
     };
 
     const suggestion = suggestReorder({
@@ -239,7 +249,7 @@ const runReorderSuggestionsQuery = async (
       supplierProduct: {
         packSize: row.pack_size ? quantity(row.pack_size, baseUnit) : null,
       },
-      unitPrice: row.latest_unit_price ? money(row.latest_unit_price, 'USD') : null,
+      unitPrice: row.latest_unit_price ? money(row.latest_unit_price, currency) : null,
       coverageDays: new Decimal(DEFAULT_COVERAGE_DAYS),
     });
 
