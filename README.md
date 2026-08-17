@@ -1,8 +1,8 @@
-# RetailOS
+# Vyapaar
 
 Operations intelligence for food-service retail — cafés, bakeries, and restaurants.
 
-RetailOS reads POS sales and supplier prices, reconciles them against recipes and an append-only
+Vyapaar reads POS sales and supplier prices, reconciles them against recipes and an append-only
 stock ledger, and answers the question most small food businesses cannot answer:
 
 > **Where did my margin actually go?**
@@ -25,7 +25,7 @@ never partially summed, never estimated.
 
 That single rule shapes the schema, the type system, the metric layer, and the UI:
 
-| Situation | What most systems do | What RetailOS does |
+| Situation | What most systems do | What Vyapaar does |
 |---|---|---|
 | Ingredient has no confirmed price | Treat as `0` | Recipe cost reports **unknown** |
 | One lot's cost is unrecorded | Sum the rest | Period COGS reports **unknown** |
@@ -41,8 +41,10 @@ partial it is.
 
 ## What's built
 
-**Identity & multi-tenancy** — signup, email verification, password + Google OAuth login,
-invitations, password reset, role-based permissions, Redis-backed sessions with revocation.
+**Identity & multi-tenancy** — signup creates a real organization, store, and owner account in one
+transaction (email verification, password + Google OAuth login, invitations, password reset,
+role-based permissions, Redis-backed sessions with revocation), plus a team-management screen to
+invite, change roles, remove members, and revoke pending invitations.
 
 **Tenant isolation, enforced at four layers** — Postgres row-level security, `SET LOCAL` tenant
 context per transaction, an application-layer repository guard that refuses to build an unscoped
@@ -69,9 +71,15 @@ reconciliation sweep that catches missed webhooks without disturbing the increme
 CSV import with per-row content-hash idempotency, and a POS-item-to-menu-item mapping surface with
 fuzzy suggestions that a human always confirms.
 
-**Metrics & dashboard** — net revenue, actual COGS from real lot costs, theoretical COGS from
-recipes, cost variance, contribution margin, food cost percentage, and waste by reason — each a
-registered, unit-tested function consumed through a single code path.
+**Metrics & dashboards** — a registered catalog of ~60 business-number functions (sales, cost,
+margin and attribution, inventory, waste/shrinkage, purchasing, supplier performance, document
+health, anomaly detection) — every dashboard figure and every future AI answer reads through the
+same single code path, `executeMetric`, never a second ad-hoc query. Owner and manager dashboards
+show period-over-period deltas, 12-point sparklines, a deterministic exception feed, and top/bottom
+menu items by contribution, plus a real drill-through from any headline number back to the rows it
+was computed from. Hybrid lexical + vector search over supplier documents. Each org chooses its
+currency once at signup (no conversion logic exists anywhere — the choice is permanent by design)
+and every number for that org is computed and labelled in it, correctly, from day one.
 
 **Supplier invoice pipeline** — upload or email in an invoice; dual-provider extraction (a vision
 model primary, OCR fallback behind a circuit breaker) reads it; deterministic validation gates check
@@ -120,7 +128,7 @@ apps/worker      Background consumers
 
 packages/domain  Pure business logic, no I/O — costing, FEFO, recipe explosion
 packages/db      Schema, migrations, repositories, tenant guards
-packages/metrics The metric catalog — the only place a business number is computed
+packages/metrics The metric catalog — the only place a business number is computed, ~60 functions
 packages/ai      All model calls — document extraction, classification
 packages/pos     POS vendor adapters and the canonical sales model
 packages/authz   Permission model
@@ -209,7 +217,7 @@ number is **contribution margin**, and it's labelled as such.
 
 ## Roadmap
 
-Not yet built: deeper anomaly detection on top of the metric catalog, and a grounded natural-language
-assistant that routes questions to registered metric functions rather than computing an answer
-itself — the same "no ad-hoc arithmetic" discipline that already governs every dashboard number,
-applied to a conversational interface.
+Not yet built: a grounded natural-language assistant that routes questions to registered metric
+functions rather than computing an answer itself — the same "no ad-hoc arithmetic" discipline that
+already governs every dashboard number, applied to a conversational interface. Proactive
+notifications and a daily briefing built on the same metric catalog. A guided onboarding flow.
