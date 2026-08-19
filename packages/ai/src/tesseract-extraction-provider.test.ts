@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createTesseractExtractionProvider } from './tesseract-extraction-provider';
 
 /**
- * 007-06: real Docker containers (`jitesoft/tesseract-ocr`, `minidocks/poppler`), not mocked — a
+ * real Docker containers (`jitesoft/tesseract-ocr`, `minidocks/poppler`), not mocked — a
  * mock would only prove this project's own code shells out correctly, not that Tesseract/poppler
  * genuinely produce usable output on a real document. Slower than a unit test (each `docker run`
  * has real container-startup overhead), matching the project's established "real Redis/Postgres/S3
@@ -24,7 +24,7 @@ describe('createTesseractExtractionProvider', () => {
     expect(result.error).toBeNull();
     expect(result.provider).toBe('tesseract');
     // Tesseract's regex-based header parser is real but genuinely imperfect (confirmed by the
-    // EPIC-002 spike's own measured accuracy) — assert it found SOMETHING plausible, not perfect
+    // a later milestone spike's own measured accuracy) — assert it found SOMETHING plausible, not perfect
     // field-for-field accuracy, which would be an unrealistic/overfit assertion for this provider.
     expect(result.fields).not.toBeNull();
     expect(result.overallConfidence).toBeNull(); // Tesseract has no semantic confidence — never fabricated.

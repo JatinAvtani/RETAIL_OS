@@ -11,7 +11,7 @@ vi.mock('@google/genai', () => ({
 const { embedText, EMBEDDING_MODEL } = await import('./embedding-provider');
 
 /**
- * 009-18: `embedText`'s own contract, independent of a live Gemini call — a well-formed response
+ * `embedText`'s own contract, independent of a live Gemini call — a well-formed response
  * returns the real values, and every failure shape (missing embeddings array, empty values array)
  * throws rather than fabricating a zero vector (I7 applied to an embedding: a zero vector is a
  * real, specific point in the embedding space, not "no data"). The real end-to-end call against

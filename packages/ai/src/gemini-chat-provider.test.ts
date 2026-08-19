@@ -11,7 +11,7 @@ vi.mock('@google/genai', () => ({
 const { createGeminiChatProvider } = await import('./gemini-chat-provider');
 
 /**
- * 010-01: `createGeminiChatProvider`'s own contract, independent of a live Gemini call — matching
+ * `createGeminiChatProvider`'s own contract, independent of a live Gemini call — matching
  * `embedding-provider.test.ts`'s established mocking shape for this package. The real end-to-end
  * call against the actual API is verified manually (see NEXT_CHAT.md), not asserted here — a unit
  * test pinned to live model output would be flaky by construction.
@@ -69,8 +69,8 @@ describe('createGeminiChatProvider', () => {
 });
 
 /**
- * 010-03: `generateStructured`'s own contract — the schema-constrained JSON path 010-03's
- * `classifyIntent` (and, later, 010-05's planning stage) depends on. Same never-throw discipline
+ * `generateStructured`'s own contract — the schema-constrained JSON path earlier work's
+ * `classifyIntent` (and, later, earlier work's planning stage) depends on. Same never-throw discipline
  * as `generate`; additionally parses the response text as JSON and reports a malformed-JSON error
  * distinctly from an empty response, matching `document-classification.ts`'s established shape.
  */

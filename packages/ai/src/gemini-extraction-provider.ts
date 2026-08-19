@@ -40,9 +40,9 @@ const INVOICE_SCHEMA = {
 };
 
 /**
- * Verbatim (mechanically ported) from the EPIC-002 extraction spike's validated prompt
+ * Verbatim (mechanically ported) from the a later milestone extraction spike's validated prompt
  * (`spikes/extraction/src/providers/gemini.ts`) — this exact wording is what the spike's measured
- * 100%/85.7%→100% accuracy numbers were produced against. Confirmed separately (007-05, this
+ * 100%/85.7%→100% accuracy numbers were produced against. Confirmed separately (earlier work, this
  * session) that Gemini's `inlineData` genuinely reads a real PDF's content directly — a real
  * invoice PDF classified correctly at 0.95 confidence via the same inline-data mechanism used here
  * — so no PDF-to-image conversion step is needed, unlike the spike's own corpus generation (which

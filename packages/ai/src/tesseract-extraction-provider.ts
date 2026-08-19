@@ -72,8 +72,8 @@ const NULL_FIELD: ExtractedField = { value: null, confidence: null };
 const field = (value: string | null): ExtractedField => (value === null ? NULL_FIELD : { value, confidence: null });
 
 /**
- * 007-06 (plan.md Phase 2, "dual provider... circuit breaker; fall back on outage"): the real
- * secondary `ExtractionProvider`, ported from EPIC-002's own validated spike
+ * the real
+ * secondary `ExtractionProvider`, ported from the later milestone's own validated spike
  * (`spikes/extraction/src/providers/tesseract.ts`) — free, no API key, runs locally via one-off
  * Docker containers (Docker Desktop already runs Postgres/Redis/MinIO for this project, so this
  * adds no new infrastructure dependency locally; a real deployment would need Docker available to

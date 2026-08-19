@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { formatVariants } from './format-variants';
 
 /**
- * 010-11: `formatVariants`'s own contract — every string form a real bundle value could
- * plausibly appear as in a narration response. Confirmed via `AskUserQuestion` before writing:
+ * `formatVariants`'s own contract — every string form a real bundle value could
+ * plausibly appear as in a narration response. settled deliberately: before writing:
  * no currency-symbol variants ($/€/£) — `MetricResult` carries no currency code, so pre-allowing
  * a symbol would widen "grounded" beyond what this codebase actually knows.
  */

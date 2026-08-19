@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { buildMetricToolSurface, getMetricToolDefinition } from './tool-surface';
 
 /**
- * 010-04: tested against the REAL, full metric catalog (`@retailos/metrics`'s own `index.ts`
+ * tested against the REAL, full metric catalog (`@retailos/metrics`'s own `index.ts`
  * registers every real metric as a side effect of import — no `_resetRegistryForTests` escape
  * hatch is exported publicly, so this is the only way to test the tool surface at all, and it's
- * the more honest test anyway: this is exactly what 010-05's planning stage will actually see.
+ * the more honest test anyway: this is exactly what earlier work's planning stage will actually see.
  */
 describe('buildMetricToolSurface', () => {
   it('returns one tool definition per real registered metric, matching listMetricIds() exactly', async () => {

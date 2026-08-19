@@ -1,5 +1,5 @@
 /**
- * 009-18 (spec 11 §11.5) — the pure half of semantic search: the synthetic descriptive text a
+ * the pure half of semantic search: the synthetic descriptive text a
  * document's embedding is built from, and Reciprocal Rank Fusion for merging a lexical result list
  * with a vector result list. Both are pure/no-I/O — the embedding call itself, and the two searches
  * being fused, are real I/O the caller (`apps/worker`'s embedding job, `apps/api`'s search router)
@@ -20,7 +20,7 @@ export type ExtractedDocumentLine = { description?: ExtractedFieldValue };
  * No raw OCR text is persisted anywhere in this schema (confirmed with the user before building
  * this task) — Gemini's extraction path goes straight to structured JSON, and Tesseract's raw text
  * is computed then discarded. This assembles a real, honest synthetic description from the
- * ALREADY-EXTRACTED structured fields instead — spec 11 §11.5's own "entity descriptions" corpus
+ * ALREADY-EXTRACTED structured fields instead — the design's own "entity descriptions" corpus
  * type, not a fabricated substitute for literal OCR full-text. A field with `value: null` (I7 —
  * genuinely unextracted, not just empty) is omitted entirely rather than rendered as the literal
  * string "null" or an empty slot — an omitted fact should not shape what the embedding represents.
@@ -44,13 +44,13 @@ export type RankedResult = { id: string; rank: number };
 export type FusedResult = { id: string; score: number };
 
 /**
- * Reciprocal Rank Fusion (spec 10 §10.4): `score = Σ 1/(k + rank_i)` across every list a result
+ * Reciprocal Rank Fusion: `score = Σ 1/(k + rank_i)` across every list a result
  * appears in, `k = 60` (the spec's own literal constant — "requires no score normalization between
  * fundamentally different scoring scales, and is robust without per-tenant tuning"). A result
  * appearing in only one list still gets a real, valid score (just from that one list's term) —
  * RRF's whole point is not needing every list to agree before a result counts.
  *
- * Takes any number of RANKED lists (not just two) — spec 11 §11.4's global search already fuses
+ * Takes any number of RANKED lists (not just two) — the design's global search already fuses
  * across independently-ranked entity types elsewhere; this stays general rather than hardcoding
  * "exactly lexical + vector."
  */
@@ -70,7 +70,7 @@ export const fuseRankedResults = (lists: RankedResult[][]): FusedResult[] => {
 };
 
 /**
- * spec 11 §11.5's routing heuristic, verbatim: "short queries and identifier patterns → lexical
+ * the design's routing heuristic, verbatim: "short queries and identifier patterns → lexical
  * only. Long natural-language queries (>4 words, question-like) → hybrid with RRF." A question-like
  * query is one ending in '?' or starting with a common interrogative word — the two textbook
  * signals of a natural-language question, not an exhaustive NLP classifier (this task's own scope

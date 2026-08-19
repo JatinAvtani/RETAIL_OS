@@ -1,7 +1,7 @@
 import { Decimal } from 'decimal.js';
 
 /**
- * 007-07 (plan.md Phase 3) — "the anti-hallucination layer." Every check here is deterministic
+ * the plan — "the anti-hallucination layer." Every check here is deterministic
  * arithmetic/comparison (I1): the model that produced the extraction is never asked to verify its
  * own numbers, and nothing here computes a business number that gets posted anywhere — it only
  * flags whether the RAW extracted values are internally consistent enough to trust.
@@ -111,7 +111,7 @@ const monthsBefore = (date: Date, months: number): Date => {
 /**
  * Line arithmetic: `quantity * unitPrice` must match `lineTotal` within tolerance. A line missing
  * any of the three parseable values is skipped, not flagged — an OCR miss on `quantity` is a
- * confidence/completeness problem the routing gate (007-08) handles, not an arithmetic error this
+ * confidence/completeness problem the routing gate handles, not an arithmetic error this
  * gate can even evaluate.
  */
 const checkLineArithmetic = (lines: RawLine[]): ValidationIssue[] => {
@@ -183,7 +183,7 @@ const checkDuplicate = (candidates: DuplicateCandidate[]): ValidationIssue[] =>
         : `A document from the same supplier with the same document number already exists (${candidate.documentId}).`,
   }));
 
-/** Date plausibility: a future date or one older than 24 months is a WARN, not a BLOCK — plausible but worth a human glance, per plan.md. An unparseable date is skipped, not flagged. */
+/** Date plausibility: a future date or one older than 24 months is a WARN, not a BLOCK — plausible but worth a human glance, per the plan. An unparseable date is skipped, not flagged. */
 const checkDatePlausibility = (fields: RawFields, today: Date): ValidationIssue[] => {
   const docDate = parseDate(fields.documentDate.value);
   if (docDate === null) return [];
@@ -213,7 +213,7 @@ const checkDatePlausibility = (fields: RawFields, today: Date): ValidationIssue[
 
 /**
  * Price anomaly: an extracted unit price more than 5x above or below the median of confirmed
- * trailing prices for the same supplier+SKU — the highest-value gate per plan.md, since a
+ * trailing prices for the same supplier+SKU — the highest-value gate per the plan, since a
  * decimal-place OCR slip (e.g. $4.50 read as $45.00) is the most common and most damaging failure
  * class. A line with no confirmed trailing prices produces no issue at all (not a pass, not a
  * fail) — there being no comparison data is itself an "unknown," not evidence of correctness.
@@ -261,7 +261,7 @@ const medianOf = (values: Decimal[]): Decimal => {
 
 /**
  * Runs every gate and combines their issues. `canAutoApprove` is false whenever any BLOCK-severity
- * issue exists — WARN issues alone don't block auto-approval (007-08's routing gate also folds in
+ * issue exists — WARN issues alone don't block auto-approval (earlier work's routing gate also folds in
  * confidence, which this function knows nothing about; this is arithmetic/consistency only).
  */
 export const validateExtraction = (fields: RawFields, lines: RawLine[], context: ValidationContext): ValidationResult => {

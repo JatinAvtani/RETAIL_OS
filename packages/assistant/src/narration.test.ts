@@ -4,9 +4,9 @@ import { narrate } from './narration';
 import type { GroundingBundle } from './grounding-bundle';
 
 /**
- * 010-10: `narrate`'s own contract, tested against a fake `ChatProvider` — same reasoning as
+ * `narrate`'s own contract, tested against a fake `ChatProvider` — same reasoning as
  * every other assistant-layer test in this package. `narrate` itself does no validation of the
- * model's response (010-11, not built) — these tests prove the PROMPT is built honestly (never
+ * model's response (not built) — these tests prove the PROMPT is built honestly (never
  * leaks raw data, always includes real values only) and that the function's own I/O contract
  * (never throw, degrade to a real error) holds, not that a live model's prose is "correct."
  */

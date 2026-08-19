@@ -1,8 +1,8 @@
 import { GoogleGenAI, Type } from '@google/genai';
 
 /**
- * 007-04 (plan.md Phase 1, F3): classify an uploaded document into one of `documentTypeEnum`'s
- * values before extraction (007-05/06) exists. This is a routing label, not a business number —
+ * classify an uploaded document into one of `documentTypeEnum`'s
+ * values before extraction exists. This is a routing label, not a business number —
  * I1 is about arithmetic/money/quantity, not classification — but the same "never trust the model
  * past its own schema" discipline applies: an unrecognized label or a call that errors/times out
  * degrades to `'OTHER'` with zero confidence, never a guessed specific type (I7's reasoning,
@@ -52,7 +52,7 @@ If the document is illegible, ambiguous, or genuinely doesn't match any specific
 Return only the structured JSON matching the schema.`;
 
 /**
- * Real Gemini vision call — same model/schema-constrained-JSON shape the EPIC-002 extraction spike
+ * Real Gemini vision call — same model/schema-constrained-JSON shape the a later milestone extraction spike
  * validated (`spikes/extraction/src/providers/gemini.ts`), scoped down to a single label+confidence
  * instead of full field/line extraction. `mimeType` must be one of the formats
  * `packages/storage`'s `validateDocumentUpload` already verified by magic bytes — this function

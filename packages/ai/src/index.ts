@@ -8,3 +8,4 @@ export * from './chat-provider';
 export * from './gemini-chat-provider';
 export * from './model-config';
 export * from './intent-classification';
+export * from './prompt-safety';

@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { GroundingBundle } from './grounding-bundle';
 
 /**
- * 010-02: a real structural proof that `GroundingBundle.metrics` accepts an actual
+ * a real structural proof that `GroundingBundle.metrics` accepts an actual
  * `MetricResult` value (not just that the types compile) — a bundle with a genuinely computed
- * metric result is exactly what 010-09 (grounding bundle assembly, not built yet) will construct.
+ * metric result is exactly what earlier work (grounding bundle assembly, not built yet) will construct.
  */
 describe('GroundingBundle', () => {
   it('accepts a real MetricResult inside metrics[]', () => {

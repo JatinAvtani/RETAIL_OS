@@ -1,7 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 
 /**
- * 009-18 (spec 11 §11.5) — real Gemini embeddings, the SAME `GEMINI_API_KEY` already used for
+ * real Gemini embeddings, the SAME `GEMINI_API_KEY` already used for
  * extraction (`gemini-extraction-provider.ts`) and classification (`document-classification.ts`) —
  * no new cost, no new provider account (the project's standing "no card, no cost" constraint).
  *

@@ -10,6 +10,7 @@ import {
   documents,
   documentExtractions,
   documentEmbeddings,
+  documentChunkEmbeddings,
   auditLogs,
   outboxEvents,
   DocumentRepository,
@@ -27,7 +28,7 @@ const FAKE_VALUES = Array.from({ length: 768 }, (_, i) => i / 768);
 const fakeEmbed = async (_apiKey: string, _text: string) => ({ model: 'fake-embedding-v1', values: FAKE_VALUES });
 
 /**
- * 009-18 — real Postgres proof of the embedding processor's own orchestration (build text from the
+ * real Postgres proof of the embedding processor's own orchestration (build text from the
  * real latest extraction → embed via an injected FAKE provider, matching
  * `extraction-processor.test.ts`'s own established "fake provider, real everything else"
  * precedent — a real Gemini call would be slow/rate-limited and this test is about the processor's
@@ -42,6 +43,7 @@ describe('embedding processor', () => {
   afterEach(async () => {
     for (const orgId of createdOrgIds) {
       await adminDb.delete(documentEmbeddings).where(eq(documentEmbeddings.organizationId, orgId));
+      await adminDb.delete(documentChunkEmbeddings).where(eq(documentChunkEmbeddings.organizationId, orgId));
       await adminDb.delete(documentExtractions).where(eq(documentExtractions.organizationId, orgId));
       await adminDb.delete(auditLogs).where(eq(auditLogs.organizationId, orgId));
       await adminDb.delete(outboxEvents).where(eq(outboxEvents.organizationId, orgId));
@@ -95,6 +97,19 @@ describe('embedding processor', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]!.model).toBe('fake-embedding-v1');
     expect(rows[0]!.sourceText).toBe('Supplier: Flour Co. Document number: INV-1. Line items: Type 55 Flour');
+
+    // the SAME job also writes real per-chunk embeddings — one header chunk, one line-item
+    // chunk, never grouped, never split.
+    const chunkRows = await adminDb
+      .select()
+      .from(documentChunkEmbeddings)
+      .where(eq(documentChunkEmbeddings.documentId, doc.id))
+      .orderBy(documentChunkEmbeddings.chunkOrder);
+    expect(chunkRows).toHaveLength(2);
+    expect(chunkRows[0]).toMatchObject({ chunkKey: 'header', chunkType: 'header' });
+    expect(chunkRows[0]!.sourceText).toContain('Flour Co');
+    expect(chunkRows[1]).toMatchObject({ chunkKey: 'line-0', chunkType: 'line_item' });
+    expect(chunkRows[1]!.sourceText).toContain('Type 55 Flour');
   });
 
   it('re-running the job for the same document replaces the embedding row, never duplicates it', async () => {
@@ -126,6 +141,11 @@ describe('embedding processor', () => {
 
     const rows = await adminDb.select().from(documentEmbeddings).where(eq(documentEmbeddings.documentId, doc.id));
     expect(rows).toHaveLength(1);
+
+    // re-running also replaces the chunk set, never duplicating (upsertChunks' own
+    // delete-then-insert-all contract, DocumentChunkEmbeddingRepository).
+    const chunkRows = await adminDb.select().from(documentChunkEmbeddings).where(eq(documentChunkEmbeddings.documentId, doc.id));
+    expect(chunkRows).toHaveLength(1); // header only — this fixture has zero real lines
   });
 
   it('skips quietly (no row written) for a document still at REVIEW_REQUIRED, never embedding unconfirmed fields', async () => {
@@ -155,6 +175,8 @@ describe('embedding processor', () => {
 
     const rows = await adminDb.select().from(documentEmbeddings).where(eq(documentEmbeddings.documentId, doc.id));
     expect(rows).toHaveLength(0);
+    const chunkRows = await adminDb.select().from(documentChunkEmbeddings).where(eq(documentChunkEmbeddings.documentId, doc.id));
+    expect(chunkRows).toHaveLength(0);
   });
 
   it('skips quietly with no Gemini key configured, never attempting the call', async () => {
@@ -185,5 +207,7 @@ describe('embedding processor', () => {
 
     const rows = await adminDb.select().from(documentEmbeddings).where(eq(documentEmbeddings.documentId, doc.id));
     expect(rows).toHaveLength(0);
+    const chunkRows = await adminDb.select().from(documentChunkEmbeddings).where(eq(documentChunkEmbeddings.documentId, doc.id));
+    expect(chunkRows).toHaveLength(0);
   });
 });

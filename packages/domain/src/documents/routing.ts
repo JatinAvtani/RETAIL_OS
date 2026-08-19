@@ -1,7 +1,7 @@
 /**
- * plan.md Phase 4: "Auto-approve only when all high-confidence AND all gates pass. Everything else
+ * the plan Phase 4: "Auto-approve only when all high-confidence AND all gates pass. Everything else
  * → review queue. An auto-approved wrong document is far worse than a queued one, so bias
- * conservative." `validateExtraction` (007-07) already decides the gate half (`canAutoApprove`);
+ * conservative." `validateExtraction` already decides the gate half (`canAutoApprove`);
  * this is the confidence half, and the AND that combines them.
  *
  * A missing confidence (a field Gemini didn't score, or Tesseract's provider-wide `null` — it has
@@ -24,7 +24,7 @@ const HIGH_CONFIDENCE_THRESHOLD = 0.85;
 const meetsThreshold = (confidence: number | null): boolean => confidence !== null && confidence >= HIGH_CONFIDENCE_THRESHOLD;
 
 /**
- * `canAutoApprove` alone (007-07) only proves internal consistency — it says nothing about whether
+ * `canAutoApprove` alone only proves internal consistency — it says nothing about whether
  * the model was actually confident it read the document correctly. Both must hold: every gate
  * passes AND the overall confidence AND every present per-field confidence clears the threshold.
  */

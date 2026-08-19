@@ -6,14 +6,14 @@ import { executeSelections } from './execute-selections';
 import type { ValidatedSelection } from './planning';
 
 /**
- * 010-06: `executeSelections`'s own dispatch/categorization logic. `executeMetric` itself (the
+ * `executeSelections`'s own dispatch/categorization logic. `executeMetric` itself (the
  * permission check, the actual per-metric arithmetic) is already exhaustively tested in
  * `packages/metrics` — this test proves the try/catch dispatch correctly sorts a real
  * `executeMetric` outcome into `results`/`denied`/`failed`, not that any specific metric computes
  * the right number (that's `packages/metrics`'s own job).
  *
  * The permission-denied path needs no real database at all — `executeMetric` checks
- * `hasPermission` BEFORE `execute` ever runs (009-02), so a session with the wrong permission set
+ * `hasPermission` BEFORE `execute` ever runs, so a session with the wrong permission set
  * fails fast without ever touching a repository. One real success case does use a live Postgres
  * connection (a genuinely simple metric, `total_spend`, against a fresh org with zero purchase
  * orders — a real, honest `'0'` result, not a fabricated one) to prove the happy path actually
@@ -51,7 +51,7 @@ describe('executeSelections', () => {
     expect(result.denied[0]?.reason).toContain('financial:read');
   });
 
-  it('sorts an unregistered metricId into failed, not denied — a genuinely unexpected outcome since 010-05 already validates this, but not assumed unreachable', async () => {
+  it('sorts an unregistered metricId into failed, not denied — a genuinely unexpected outcome since already validates this, but not assumed unreachable', async () => {
     const selections: ValidatedSelection[] = [{ metricId: 'this_metric_does_not_exist', params: {} }];
 
     const result = await executeSelections(selections, auth(['financial:read']), { db: {} as never, organizationId: ORG_ID, storeIds: 'ALL' });

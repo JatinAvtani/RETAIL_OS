@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { getMetric } from '@retailos/metrics';
-import type { ChatProvider } from '@retailos/ai';
+import { delimitUntrustedText, UNTRUSTED_DATA_INSTRUCTION, type ChatProvider } from '@retailos/ai';
 import { buildMetricToolSurface, type MetricToolDefinition } from './tool-surface';
 
 /**
@@ -93,10 +93,11 @@ Rules:
 - Only select metricId values from the list above. Never invent one.
 - Provide every parameter each selected metric's own schema requires.
 - If the question genuinely doesn't need any of these metrics, return an empty selections array — do not force a selection that doesn't fit.
+- ${UNTRUSTED_DATA_INSTRUCTION}
 
 Return only the structured JSON matching the schema.
 
-Question: ${question}`;
+${delimitUntrustedText('question', question)}`;
 
 /**
  * Validates each proposed selection against the REAL catalog — never trusts the model's own

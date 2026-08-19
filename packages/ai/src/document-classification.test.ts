@@ -12,7 +12,7 @@ vi.mock('@google/genai', () => ({
 const { classifyDocument } = await import('./document-classification');
 
 /**
- * 007-04: `classifyDocument`'s own contract, independent of whether a real Gemini call ever
+ * `classifyDocument`'s own contract, independent of whether a real Gemini call ever
  * succeeds — every failure mode (empty response, malformed JSON, a shape that doesn't match the
  * schema, a thrown error) must degrade to `{ type: 'OTHER', confidence: 0, error: <reason> }`,
  * never a guessed specific type (I7's reasoning applied to a label, not a number). The real

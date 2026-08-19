@@ -2,8 +2,10 @@ import type { ChatProvider } from '@retailos/ai';
 import { classifyIntent, type IntentType } from '@retailos/ai';
 import type { AuthContext } from '@retailos/authz';
 import type { MetricContext } from '@retailos/metrics';
+import type { SearchRepository } from '@retailos/db';
 import { planMetricSelections, type RejectedSelection } from './planning';
 import { executeSelections, type DeniedSelection, type FailedSelection } from './execute-selections';
+import { retrievePassages } from './retrieval';
 import type { GroundingBundle } from './grounding-bundle';
 
 /**
@@ -14,13 +16,22 @@ import type { GroundingBundle } from './grounding-bundle';
  * classify/plan/execute together and that composition is genuinely this file's own scope, matching
  * the assistant's request pipeline framing where these steps flow together.
  *
- * **Retrieval does not exist yet.** A `RETRIEVAL`/`HYBRID`-intent question genuinely cannot be
- * fully answered today — this pipeline does NOT silently return an empty bundle that would look
- * like a real (if data-less) "no results" answer; it returns a distinct `unsupported` outcome
- * naming exactly why, matching I7's "degrade to unknown, never guess" discipline applied to
- * pipeline routing rather than a single number. `ACTION_DRAFT` (not built) and a real
- * `UNSUPPORTED` classification get the same honest treatment — this function makes no attempt to
- * force an answer out of a capability that isn't built yet.
+ * RETRIEVAL/HYBRID now route through `retrievePassages` (real document-chunk
+ * hybrid search) instead of an automatic `unsupported` refusal.** A `RETRIEVAL` question runs
+ * retrieval alone, producing a bundle with real `passages` and empty `metrics`. A `HYBRID`
+ * question runs BOTH the metric pipeline (classify already routed here; plan/execute run exactly
+ * as METRIC does) AND retrieval, producing a bundle with both real `metrics` and real `passages` —
+ * matching the design's own "genuinely needs both a computed number and retrieved context" framing.
+ * `entities` stays empty — synthetic entity descriptions (products/suppliers) were settled as
+ * real, deferred future scope, not built this pass; a caller must not assume
+ * `passages`-only retrieval also covers entity-description search. `retrievePassages` needs a real
+ * `SearchRepository`, so `ctx` gained an optional `searchRepository` field — RETRIEVAL/HYBRID
+ * questions asked without one (e.g. an older caller that hasn't been updated) degrade to an honest
+ * `unsupported` outcome rather than crashing on a missing dependency.
+ *
+ * `ACTION_DRAFT` (planning exists, but nothing in `runPipeline` invokes it yet — no real
+ * caller supplies a candidate list here) and a genuine `UNSUPPORTED` classification still get the
+ * same honest refusal treatment as before.
  */
 export type PipelineOutcome =
   | { kind: 'bundle'; intent: IntentType; bundle: GroundingBundle; denied: DeniedSelection[]; failed: FailedSelection[]; rejected: RejectedSelection[] }
@@ -28,8 +39,8 @@ export type PipelineOutcome =
   | { kind: 'error'; reason: string };
 
 const UNSUPPORTED_REASONS: Partial<Record<IntentType, string>> = {
-  RETRIEVAL: 'This question needs document/review search, which is not built yet.',
-  HYBRID: 'This question needs both a metric and document/review search; document search is not built yet.',
+  RETRIEVAL: 'Document search is not available (no search index configured for this caller).',
+  HYBRID: 'Document search is not available (no search index configured for this caller).',
   ACTION_DRAFT: 'Action requests (e.g. creating a draft purchase order) are not built yet.',
   UNSUPPORTED: 'This question is outside what this assistant can currently answer.',
 };
@@ -39,7 +50,8 @@ const UNSUPPORTED_REASONS: Partial<Record<IntentType, string>> = {
  * pipeline genuinely can't proceed. Every model call (`classifyIntent`, `planMetricSelections`)
  * already degrades to a real, typed result rather than throwing (their own established
  * contracts) — this function does not add a second layer of error handling on top, it reads what
- * those functions already report.
+ * those functions already report. `ctx.searchRepository`/`ctx.geminiApiKey` are optional —
+ * METRIC-only callers (every existing caller, before this task) never need to supply them.
  */
 export const runPipeline = async (
   question: string,
@@ -47,36 +59,46 @@ export const runPipeline = async (
   classifyModel: string,
   planModel: string,
   auth: AuthContext,
-  ctx: MetricContext
+  ctx: MetricContext & { searchRepository?: SearchRepository; geminiApiKey?: string }
 ): Promise<PipelineOutcome> => {
   const classification = await classifyIntent(provider, question, classifyModel);
   if (classification.error) {
     return { kind: 'error', reason: classification.error };
   }
 
-  if (classification.intent !== 'METRIC') {
-    return { kind: 'unsupported', intent: classification.intent, reason: UNSUPPORTED_REASONS[classification.intent] ?? 'This question is not currently supported.' };
+  const { intent } = classification;
+
+  if (intent === 'ACTION_DRAFT' || intent === 'UNSUPPORTED') {
+    return { kind: 'unsupported', intent, reason: UNSUPPORTED_REASONS[intent] ?? 'This question is not currently supported.' };
   }
 
-  const plan = await planMetricSelections(provider, question, planModel);
-  if (plan.error) {
-    return { kind: 'error', reason: plan.error };
+  if ((intent === 'RETRIEVAL' || intent === 'HYBRID') && !ctx.searchRepository) {
+    return { kind: 'unsupported', intent, reason: UNSUPPORTED_REASONS[intent] ?? 'This question is not currently supported.' };
   }
 
-  const execution = await executeSelections(plan.selections, auth, ctx);
+  let metrics: GroundingBundle['metrics'] = [];
+  let denied: DeniedSelection[] = [];
+  let failed: FailedSelection[] = [];
+  let rejected: RejectedSelection[] = [];
 
-  const bundle: GroundingBundle = {
-    metrics: execution.results,
-    passages: [],
-    entities: [],
-  };
+  if (intent === 'METRIC' || intent === 'HYBRID') {
+    const plan = await planMetricSelections(provider, question, planModel);
+    if (plan.error) {
+      return { kind: 'error', reason: plan.error };
+    }
+    const execution = await executeSelections(plan.selections, auth, ctx);
+    metrics = execution.results;
+    denied = execution.denied;
+    failed = execution.failed;
+    rejected = plan.rejected;
+  }
 
-  return {
-    kind: 'bundle',
-    intent: classification.intent,
-    bundle,
-    denied: execution.denied,
-    failed: execution.failed,
-    rejected: plan.rejected,
-  };
+  let passages: GroundingBundle['passages'] = [];
+  if (intent === 'RETRIEVAL' || intent === 'HYBRID') {
+    passages = await retrievePassages(question, { searchRepository: ctx.searchRepository!, geminiApiKey: ctx.geminiApiKey });
+  }
+
+  const bundle: GroundingBundle = { metrics, passages, entities: [] };
+
+  return { kind: 'bundle', intent, bundle, denied, failed, rejected };
 };

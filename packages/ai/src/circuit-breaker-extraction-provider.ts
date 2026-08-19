@@ -12,7 +12,7 @@ export interface CircuitBreakerOptions {
 }
 
 /**
- * 007-06 (plan.md Phase 2: "Primary + secondary configured. Circuit breaker; fall back on
+ * earlier work (the plan Phase 2: "Primary + secondary configured. Circuit breaker; fall back on
  * outage."). A small, real, hand-written implementation rather than a library — the state machine
  * itself is genuinely simple (three states, two transitions), and this project's own general bias
  * is toward owning simple logic rather than adding a dependency for something this size (no

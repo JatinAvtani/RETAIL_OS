@@ -55,5 +55,6 @@ export * from './fact-aggregation/fact-waste';
 export * from './fact-aggregation/aggregate-day';
 export * from './repositories/search-repository';
 export * from './repositories/document-embedding-repository';
+export * from './repositories/document-chunk-embedding-repository';
 export * from './repositories/conversation-repository';
 export * from './repositories/message-repository';

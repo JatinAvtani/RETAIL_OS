@@ -102,7 +102,8 @@ Rules:
 - Use ONLY the exact values listed above. Never calculate, estimate, round differently, or derive a new number from them.
 - Cite each figure by naming the metric it came from.
 - If "Computed metrics available" is "None." or doesn't actually answer the question, say so honestly and explain what's missing using the "Things that could NOT be answered" list if relevant — never guess or make up a plausible-sounding answer.
-- Write in plain, concise language a busy restaurant owner would understand. No jargon.${strict ? STRICT_ADDENDUM : ''}`;
+- Write in plain, concise language a busy restaurant owner would understand. No jargon.
+- Plain prose only — no markdown (no asterisks, backticks, bullets, or headings); your text renders exactly as written. Name each metric in ordinary words ("expiry risk value"), never its internal snake_case id.${strict ? STRICT_ADDENDUM : ''}`;
 };
 
 export const narrate = async (

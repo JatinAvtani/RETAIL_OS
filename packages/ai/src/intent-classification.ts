@@ -1,4 +1,5 @@
 import type { ChatProvider } from './chat-provider';
+import { delimitUntrustedText, UNTRUSTED_DATA_INSTRUCTION } from './prompt-safety';
 
 /**
  * "classify: LLM, cheap/fast model, METRIC | RETRIEVAL | HYBRID | ACTION_DRAFT | UNSUPPORTED."
@@ -40,9 +41,11 @@ const PROMPT_PREFIX = `You are routing a question a restaurant/café owner or ma
 
 If a question is ambiguous between two categories, choose the one requiring the LEAST assumption — do not guess a specific category you are not confident about; a lower-confidence UNSUPPORTED is safer than a confident wrong classification, since a wrong classification routes the question down entirely the wrong pipeline.
 
+${UNTRUSTED_DATA_INSTRUCTION}
+
 Return only the structured JSON matching the schema.
 
-Question: `;
+`;
 
 /**
  * Real Gemini call via the shared `ChatProvider` abstraction — no direct `@google/genai`
@@ -50,9 +53,14 @@ Question: `;
  * to its own internal callers too. `model` is the caller's responsibility to resolve via
  * `modelForTask('CLASSIFY')`, not hardcoded here — this function stays provider- and
  * model-agnostic, exactly what `ChatProvider` exists to make possible.
+ *
+ * The question is wrapped via `delimitUntrustedText` — a probabilistic,
+ * secondary defense on top of this pipeline's real one (the metric catalog + the numeric grounding
+ * validator downstream), not a substitute for it. See `prompt-safety.ts`'s own header comment for
+ * why the question itself, not just future retrieved passages, is a real untrusted-text channel.
  */
 export const classifyIntent = async (provider: ChatProvider, question: string, model: string): Promise<IntentClassificationResult> => {
-  const result = await provider.generateStructured(PROMPT_PREFIX + question, model, INTENT_SCHEMA);
+  const result = await provider.generateStructured(PROMPT_PREFIX + delimitUntrustedText('question', question), model, INTENT_SCHEMA);
 
   if (result.error) {
     return { intent: 'UNSUPPORTED', confidence: 0, error: result.error };

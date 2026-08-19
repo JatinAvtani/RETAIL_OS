@@ -5,14 +5,14 @@ import { users } from './users';
 import { idColumn, softDelete, timestamps, vector } from './columns';
 
 /**
- * EPIC-007 (plan.md Phase 1): supplier documents (mostly invoices) — the origin of the costing
- * chain. `type` and `source` match spec 05 §5.6.1 verbatim. `status` collapses the spec's own
+ * Supplier documents (mostly invoices) — the origin of the costing
+ * chain. `type` and `source` match the design verbatim. `status` collapses the spec's own
  * pipeline prose and event list into one enum — `EXTRACTED`/`DUPLICATE_DETECTED` aren't modeled as
  * resting states because they're not: extraction completing is what produces a
  * `document_extractions` row (the document itself moves straight to `REVIEW_REQUIRED` or
  * `AUTO_APPROVED`), and duplicate detection is one of several validation-gate outcomes that route
  * to `REVIEW_REQUIRED` or `REJECTED`, not a distinct status of its own. `08-database-planning.md`
- * §8.7's own literal index example (`WHERE status = 'REVIEW_REQUIRED'`) confirms that value's name.
+ * The database plan's own literal index example (`WHERE status = 'REVIEW_REQUIRED'`) confirms that value's name.
  */
 export const documentTypeEnum = pgEnum('document_type', [
   'INVOICE',
@@ -38,17 +38,17 @@ export const documentStatusEnum = pgEnum('document_status', [
 
 /**
  * The original file is immutable — a re-upload creates a new row (`version` + `supersedesId`), never
- * an overwrite (spec 05 §5.6, `08-database-planning.md` §8.4). Soft-deleted (`08` §8.3: "Soft delete
+ * an overwrite. Soft-deleted ("Soft delete
  * + storage retention — legal/audit requirements"), unlike ledger tables which get no deletion path
  * at all. Store-scoped like `pos_items`/`sales_transactions` — an invoice belongs to the store goods
  * were delivered to, not just the org.
  *
- * `contentHash` is indexed, deliberately NOT unique: duplicate detection (spec 05 §5.6.3) is a
+ * `contentHash` is indexed, deliberately NOT unique: duplicate detection is a
  * validation-gate outcome that routes a document to review, not a database constraint that blocks
  * the insert outright — a legitimate re-upload of the exact same file (e.g. re-scanning after a
  * failed extraction) must still be allowed to exist as its own row.
  *
- * `classificationConfidence` (007-04): the model's own subjective confidence in `type`, nullable —
+ * `classificationConfidence`: the model's own subjective confidence in `type`, nullable —
  * distinct from a real `0` (genuinely no confidence) and from "classification never ran" (still
  * `OTHER` from upload-time, no confidence recorded at all).
  */
@@ -80,14 +80,14 @@ export const documents = pgTable(
 
 /**
  * One extraction run over a document. Kept separate from `documents` (rather than columns on it)
- * because a document can be re-extracted with a better model — `08-database-planning.md` §8.4 names
+ * because a document can be re-extracted with a better model — the database plan names
  * this table directly as needing full-snapshot history, "for measuring whether accuracy is
- * improving." `fields`/`lines`/`validation` match plan.md Phase 1's shapes exactly.
+ * improving." `fields`/`lines`/`validation` match the plan Phase 1's shapes exactly.
  *
- * `fields` entries carry a `bbox` key in their JSONB shape per spec 07 §7.6 — but ADR-13 (the
+ * `fields` entries carry a `bbox` key in their JSONB shape per the design — but ADR-13 (the
  * provider decision) confirms the chosen provider, Gemini vision, does not return bounding boxes.
  * That key is structurally present in the shape and will be absent/null in every real row until a
- * provider that supports it is added; 007-09's review UI must not assume it's populated.
+ * provider that supports it is added; the review UI must not assume it's populated.
  *
  * `organizationId` is denormalized here directly, not looked up via a join to `documents` — same
  * convention `sales_transaction_lines` already established: every table `TenantScopedRepository`
@@ -113,7 +113,7 @@ export const documentExtractions = pgTable('document_extractions', {
 });
 
 /**
- * 009-18 (spec 11 §11.5) — one row per document, embedding a synthetic descriptive text assembled
+ * one row per document, embedding a synthetic descriptive text assembled
  * from its already-approved extracted fields (`buildDocumentEmbeddingText`, `@retailos/domain`) —
  * no raw OCR full-text is persisted anywhere in this schema (confirmed with the user before
  * building this), so this is the real, honest corpus. `embedding` is declared via the `vector`
@@ -137,11 +137,50 @@ export const documentEmbeddings = pgTable('document_embeddings', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const documentChunkTypeEnum = pgEnum('document_chunk_type', ['header', 'line_item']);
+
 /**
- * Every human correction to an extracted field, permanent (spec 05 §5.6, plan.md Phase 5) — feeds
- * two downstream consumers: supplier-SKU → product mappings become permanent rows (007-10,
+ * the PER-CHUNK half of document embeddings, deliberately separate from
+ * `document_embeddings` above rather than replacing it: `document_embeddings` is ONE row per whole
+ * document, serving `search.documents`' document-LIST UI where a title/subtitle per
+ * document is the right granularity; the assistant's retrieval stage (this task) needs
+ * chunk-granularity passages with real, citable snippet text — "never split a line item" (spec
+ * 10's own words) is meaningless at whole-document granularity. Both tables stay real, both get
+ * real writes from the same approval event, matching a document having two genuinely different
+ * consumers rather than one consumer being asked to serve a granularity it wasn't designed for.
+ *
+ * `chunkKey` (`'header'` or `'line-{index}'`, from `chunkDocument`, `@retailos/domain`) plus a
+ * UNIQUE `(document_id, chunk_key)` index makes re-chunking a re-approved document idempotent by
+ * upsert rather than delete-then-insert — a corrected line 2 gets its own chunk re-embedded in
+ * place, not the whole document's chunk set torn down and rebuilt (which would needlessly
+ * re-embed every UNCHANGED line too, real cost under this project's free-tier quota constraint).
+ */
+export const documentChunkEmbeddings = pgTable(
+  'document_chunk_embeddings',
+  {
+    id: idColumn(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    documentId: uuid('document_id')
+      .notNull()
+      .references(() => documents.id),
+    chunkKey: text('chunk_key').notNull(),
+    chunkType: documentChunkTypeEnum('chunk_type').notNull(),
+    chunkOrder: integer('chunk_order').notNull(),
+    model: text('model').notNull(),
+    sourceText: text('source_text').notNull(),
+    embedding: vector('embedding', 768).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex('document_chunk_embeddings_document_chunk_key_unique').on(table.documentId, table.chunkKey)]
+);
+
+/**
+ * Every human correction to an extracted field, permanent — feeds
+ * two downstream consumers: supplier-SKU → product mappings become permanent rows (
  * deterministic learning, I9), and per-supplier/per-field correction rate is the accuracy telemetry
- * 007-14 reads (spec's own accuracy targets in §5.6.4 are measured this way). `fieldPath` is a
+ * the accuracy telemetry reads (accuracy targets are measured this way). `fieldPath` is a
  * dotted/bracket path into the extraction's `fields`/`lines` JSONB (e.g. `lines[2].unitPrice`), not
  * a foreign key — the shape it points into is itself schemaless JSONB. `organizationId` is
  * denormalized directly, same reasoning as `document_extractions`.
@@ -164,13 +203,13 @@ export const extractionCorrections = pgTable('extraction_corrections', {
 });
 
 /**
- * Provenance: connects a document to every entity it produced or affected (spec 07 §7.6 — "enables
+ * Provenance: connects a document to every entity it produced or affected (the design — "enables
  * drill-through from any number to its source"). Polymorphic `entityType`/`entityId`, the same shape
  * `audit_logs` already established for the identical problem (a generic reference to a row in any
  * one of several unrelated tables) — no FK is possible across a polymorphic reference, so this
  * table is the one place in the schema where entity identity is trusted by convention, not
  * constraint, matching `audit_logs`' own precedent exactly. `relationship` names what the document
- * did to that entity (e.g. `PRICE_SOURCE`, `STOCK_RECEIPT`, `MATCH_SOURCE`) — 007-11's posting
+ * did to that entity (e.g. `PRICE_SOURCE`, `STOCK_RECEIPT`, `MATCH_SOURCE`) — the posting
  * engine is the only writer. `organizationId` is denormalized directly, same reasoning as
  * `document_extractions`.
  */

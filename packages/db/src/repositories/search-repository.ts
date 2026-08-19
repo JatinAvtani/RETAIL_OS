@@ -15,17 +15,17 @@ export type SearchResultRow = {
 };
 
 /**
- * 009-17/009-18 (spec 11 §11.3/§11.4/§11.5) — global search across the four MVP-relevant entities
- * (products, suppliers, purchase orders, documents): lexical (FTS + trigram, 009-17) for all four,
- * plus vector similarity over `document_embeddings` (009-18) for documents specifically — the only
+ * global search across the four MVP-relevant entities
+ * (products, suppliers, purchase orders, documents): lexical (FTS + trigram) for all four,
+ * plus vector similarity over `document_embeddings` for documents specifically — the only
  * entity this project generates embeddings for (see `document-embedding-repository.ts`'s own header
  * for why: no other entity has a real free-text corpus worth embedding yet).
  *
  * Every method issues its own real SQL against the tables/indexes `0041_search.sql`/
  * `0042_document_embeddings.sql` created — no ORM query builder abstraction layered on top, since
  * Postgres FTS/trigram/pgvector operators (`%`, `@@`, `plainto_tsquery`, `similarity`, `<=>`) have
- * no first-class representation in Drizzle 0.36's builder. Every query is parameterized (spec 11
- * §11.7 rule 5 — user text never reaches SQL as a raw fragment) via `sql` tagged-template
+ * no first-class representation in Drizzle 0.36's builder. Every query is parameterized (
+ * user text never reaches SQL as a raw fragment) via `sql` tagged-template
  * interpolation, which `postgres` binds as a real parameter, never string-concatenated.
  *
  * Deliberately extends `TenantScopedRepository<typeof products>` (matching `DashboardRepository`'s
@@ -40,7 +40,7 @@ export class SearchRepository extends TenantScopedRepository<typeof products> {
 
   /**
    * Products: exact SKU match scores highest, then trigram similarity on name (typo tolerance),
-   * then FTS rank on the combined name+SKU vector — matching spec 11 §11.3's own literal formula.
+   * then FTS rank on the combined name+SKU vector — matching the design's own literal formula.
    * `p.deleted_at IS NULL` excludes soft-deleted products (a search result pointing at a
    * soft-deleted row would be a dead link).
    */
@@ -63,7 +63,7 @@ export class SearchRepository extends TenantScopedRepository<typeof products> {
     ).then((rows) => rows.map((row) => ({ entityType: 'product' as const, id: row.id, title: row.name, subtitle: row.sku, score: Number(row.score) })));
   }
 
-  /** Suppliers: trigram on name + FTS on the same field — no exact-identifier field exists on suppliers (no SKU-equivalent), matching spec 11 §11.3's own "Name (trigram)" framing. */
+  /** Suppliers: trigram on name + FTS on the same field — no exact-identifier field exists on suppliers (no SKU-equivalent), matching the design's own "Name (trigram)" framing. */
   async searchSuppliers(query: string, limit: number): Promise<SearchResultRow[]> {
     return this.runScoped((db) =>
       db.execute<{ id: string; name: string; score: number }>(sql`
@@ -83,7 +83,7 @@ export class SearchRepository extends TenantScopedRepository<typeof products> {
   }
 
   /**
-   * Purchase orders: PO number is the one field users search constantly (spec 11 §11.3), so an
+   * Purchase orders: PO number is the one field users search constantly, so an
    * exact match scores highest, then trigram similarity for a partially-remembered number.
    * `s.name` (the supplier) is joined in only for the result's subtitle — never part of the score,
    * since matching "find PO-1042" shouldn't also surface every PO from a supplier named similarly.
@@ -108,11 +108,11 @@ export class SearchRepository extends TenantScopedRepository<typeof products> {
 
   /**
    * Documents: exact match on the extracted document number (the highest-value, most-searched
-   * field per spec 11 §11.3), plus a case-insensitive substring match on the extracted supplier
+   * field per the design), plus a case-insensitive substring match on the extracted supplier
    * name — reusing `DocumentRepository.search`'s own established `LIKE` pattern for this same
-   * jsonb field (007-13), since `document_extractions.fields` is unstructured jsonb, not a real
+   * jsonb field, since `document_extractions.fields` is unstructured jsonb, not a real
    * indexed text column. The LEXICAL half of document search — the vector/semantic half
-   * (`searchDocumentsByVector`, below) is 009-18's addition, and `search.hybrid`
+   * (`searchDocumentsByVector`, below) is the semantic-search addition, and `search.hybrid`
    * (`apps/api/src/trpc/routers/search.ts`) fuses the two via RRF for long/conceptual queries.
    * Matches on the MOST RECENT extraction per document only (`DISTINCT ON`), matching
    * `DocumentRepository.search`'s own "at least one extraction matches" semantics but scored,
@@ -157,7 +157,7 @@ export class SearchRepository extends TenantScopedRepository<typeof products> {
   }
 
   /**
-   * The vector half of document search (009-18, spec 11 §11.5) — cosine distance (`<=>`) against
+   * The vector half of document search (the design) — cosine distance (`<=>`) against
    * `document_embeddings.embedding`, HNSW-indexed (`0042_document_embeddings.sql`), ordered
    * nearest-first. Only documents with a real embedding row are candidates — a document never yet
    * approved (no embedding generated, `apps/worker`'s embedding job only runs on APPROVED) is
@@ -192,5 +192,51 @@ export class SearchRepository extends TenantScopedRepository<typeof products> {
       title: row.document_number ?? 'Untitled document',
       subtitle: row.supplier,
     }));
+  }
+
+  /**
+   * the LEXICAL half of chunk retrieval (the design's `BM25 (Postgres FTS, tenant-
+   * filtered) → top 50`). Real Postgres FTS via `document_chunk_embeddings.search_vector`
+   * (`0044_document_chunk_embeddings.sql`'s generated column), never a raw string match — matching
+   * `searchProducts`/`searchSuppliers`' own established FTS convention, extended to chunk
+   * granularity for the first time. `ts_rank` is the real relevance score; ordered nearest-first.
+   */
+  async searchDocumentChunksLexical(query: string, limit: number): Promise<{ id: string; rank: number; text: string; documentId: string; chunkType: 'header' | 'line_item' }[]> {
+    const rows = await this.runScoped((db) =>
+      db.execute<{ id: string; document_id: string; chunk_type: 'header' | 'line_item'; source_text: string }>(sql`
+        SELECT dce.id, dce.document_id, dce.chunk_type, dce.source_text
+        FROM document_chunk_embeddings dce
+        INNER JOIN documents d ON d.id = dce.document_id
+        WHERE dce.organization_id = ${this.organizationId}
+          AND d.deleted_at IS NULL
+          AND dce.search_vector @@ plainto_tsquery('english', ${query})
+        ORDER BY ts_rank(dce.search_vector, plainto_tsquery('english', ${query})) DESC
+        LIMIT ${limit}
+      `)
+    );
+    return rows.map((row, i) => ({ id: row.id, rank: i + 1, text: row.source_text, documentId: row.document_id, chunkType: row.chunk_type }));
+  }
+
+  /**
+   * the VECTOR half → top 50`),
+   * chunk-granular — matching `searchDocumentsByVector`'s own cosine-distance (`<=>`) convention,
+   * against `document_chunk_embeddings` instead of the whole-document `document_embeddings` table.
+   * A document with zero chunks (never approved, or approved with no extractable fields at all —
+   * `chunkDocument` returning `[]`) simply contributes no candidates here, never a fabricated match.
+   */
+  async searchDocumentChunksByVector(queryEmbedding: number[], limit: number): Promise<{ id: string; rank: number; text: string; documentId: string; chunkType: 'header' | 'line_item' }[]> {
+    const vectorLiteral = `[${queryEmbedding.join(',')}]`;
+    const rows = await this.runScoped((db) =>
+      db.execute<{ id: string; document_id: string; chunk_type: 'header' | 'line_item'; source_text: string }>(sql`
+        SELECT dce.id, dce.document_id, dce.chunk_type, dce.source_text
+        FROM document_chunk_embeddings dce
+        INNER JOIN documents d ON d.id = dce.document_id
+        WHERE dce.organization_id = ${this.organizationId}
+          AND d.deleted_at IS NULL
+        ORDER BY dce.embedding <=> ${vectorLiteral}::vector
+        LIMIT ${limit}
+      `)
+    );
+    return rows.map((row, i) => ({ id: row.id, rank: i + 1, text: row.source_text, documentId: row.document_id, chunkType: row.chunk_type }));
   }
 }

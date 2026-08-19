@@ -4,7 +4,7 @@ import type { AuthContext } from '@retailos/authz';
 import { runPipeline } from './pipeline';
 
 /**
- * 010-09: `runPipeline`'s own contract — a fake `ChatProvider` that returns different structured
+ * `runPipeline`'s own contract — a fake `ChatProvider` that returns different structured
  * responses per call lets these tests drive classify→plan→execute through the real functions
  * without a live model. Real Postgres is not needed here either: every test uses `[]` selections
  * (a genuinely valid plan proposing nothing) so `executeSelections` never calls `executeMetric`
@@ -49,7 +49,7 @@ describe('runPipeline', () => {
     });
   });
 
-  it('a RETRIEVAL-intent question returns unsupported, never a fabricated empty bundle — retrieval is not built yet', async () => {
+  it('a RETRIEVAL-intent question WITHOUT a searchRepository configured returns an honest unsupported outcome, never a fabricated empty bundle', async () => {
     const provider = sequencedProvider([ok({ intent: 'RETRIEVAL', confidence: 0.9 })]);
 
     const outcome = await runPipeline('Find the contract with Nova Foods', provider, 'classify-model', 'plan-model', auth, ctx);
@@ -57,11 +57,29 @@ describe('runPipeline', () => {
     expect(outcome.kind).toBe('unsupported');
     if (outcome.kind === 'unsupported') {
       expect(outcome.intent).toBe('RETRIEVAL');
-      expect(outcome.reason).toContain('not built yet');
+      expect(outcome.reason).toContain('not available');
     }
   });
 
-  it('a HYBRID-intent question also returns unsupported — half the answer (retrieval) does not exist yet', async () => {
+  it('a RETRIEVAL-intent question WITH a real searchRepository produces a real bundle with passages, empty metrics', async () => {
+    const provider = sequencedProvider([ok({ intent: 'RETRIEVAL', confidence: 0.9 })]);
+    const searchRepository = {
+      searchDocumentChunksLexical: vi.fn().mockResolvedValue([{ id: 'chunk-1', rank: 1, text: 'Supplier: Nova Foods', documentId: 'doc-1', chunkType: 'header' as const }]),
+      searchDocumentChunksByVector: vi.fn().mockResolvedValue([]),
+    } as unknown as import('@retailos/db').SearchRepository;
+
+    const outcome = await runPipeline('Find the contract with Nova Foods', provider, 'classify-model', 'plan-model', auth, { ...ctx, searchRepository });
+
+    expect(outcome.kind).toBe('bundle');
+    if (outcome.kind === 'bundle') {
+      expect(outcome.bundle.metrics).toEqual([]);
+      expect(outcome.bundle.passages).toHaveLength(1);
+      expect(outcome.bundle.passages[0]).toMatchObject({ sourceId: 'doc-1', text: 'Supplier: Nova Foods' });
+      expect(outcome.bundle.entities).toEqual([]);
+    }
+  });
+
+  it('a HYBRID-intent question WITHOUT a searchRepository configured returns an honest unsupported outcome', async () => {
     const provider = sequencedProvider([ok({ intent: 'HYBRID', confidence: 0.9 })]);
 
     const outcome = await runPipeline('Why did my food cost go up, check supplier notes', provider, 'classify-model', 'plan-model', auth, ctx);
@@ -70,7 +88,27 @@ describe('runPipeline', () => {
     if (outcome.kind === 'unsupported') expect(outcome.intent).toBe('HYBRID');
   });
 
-  it('an ACTION_DRAFT-intent question returns unsupported — draft actions are not built yet (010-14)', async () => {
+  it('a HYBRID-intent question WITH a real searchRepository runs BOTH the metric pipeline and retrieval, producing a bundle with real metrics AND real passages', async () => {
+    const provider = sequencedProvider([
+      ok({ intent: 'HYBRID', confidence: 0.9 }),
+      ok({ selections: [] }), // plan proposes no metric selections — genuinely valid, still checked separately from passages
+    ]);
+    const searchRepository = {
+      searchDocumentChunksLexical: vi.fn().mockResolvedValue([{ id: 'chunk-1', rank: 1, text: 'Supplier price change noted', documentId: 'doc-1', chunkType: 'line_item' as const }]),
+      searchDocumentChunksByVector: vi.fn().mockResolvedValue([]),
+    } as unknown as import('@retailos/db').SearchRepository;
+
+    const outcome = await runPipeline('Why did my food cost go up, check supplier notes', provider, 'classify-model', 'plan-model', auth, { ...ctx, searchRepository });
+
+    expect(outcome.kind).toBe('bundle');
+    if (outcome.kind === 'bundle') {
+      expect(outcome.bundle.metrics).toEqual([]); // the plan itself proposed none this time — a real, valid outcome
+      expect(outcome.bundle.passages).toHaveLength(1);
+      expect(outcome.bundle.passages[0]!.sourceId).toBe('doc-1');
+    }
+  });
+
+  it('an ACTION_DRAFT-intent question returns unsupported — draft actions are not built yet', async () => {
     const provider = sequencedProvider([ok({ intent: 'ACTION_DRAFT', confidence: 0.9 })]);
 
     const outcome = await runPipeline('Order more flour', provider, 'classify-model', 'plan-model', auth, ctx);

@@ -1,13 +1,13 @@
 /**
- * 007-05 (plan.md Phase 2): the `ExtractionProvider` interface, matching the shape EPIC-002's
+ * the `ExtractionProvider` interface, matching the shape the later milestone's
  * extraction spike validated (`spikes/extraction/src/providers/types.ts`/`gemini.ts`) — a dual
- * provider abstraction from day one (plan.md's own explicit design decision: "extraction accuracy
+ * provider abstraction from day one (the plan's own explicit design decision: "extraction accuracy
  * is the highest-risk dependency"), even though only Gemini ships this task. `extract` never
  * throws for a provider-side failure (empty response, malformed JSON, a rejected API call) — it
  * returns `error` set instead, so a queue worker can record a real (if empty) extraction attempt
  * rather than crashing the job. I1 discipline: this interface returns raw extracted values with the
  * model's own confidence, never a computed business number — arithmetic validation is a separate,
- * later concern (007-07).
+ * later concern.
  */
 
 export interface ExtractedField {
