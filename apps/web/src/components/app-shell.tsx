@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { trpc } from '@/lib/trpc';
@@ -23,6 +23,7 @@ const NAV_GROUPS: { label: string; items: { href: string; label: string }[] }[] 
       { href: '/dashboard', label: 'Overview' },
       { href: '/dashboard/manager', label: 'Manager view' },
       { href: '/purchase-orders/variance-queue', label: 'Variance queue' },
+      { href: '/assistant', label: 'Assistant' },
     ],
   },
   {
@@ -39,6 +40,7 @@ const NAV_GROUPS: { label: string; items: { href: string; label: string }[] }[] 
     items: [
       { href: '/inventory', label: 'Inventory' },
       { href: '/documents', label: 'Documents' },
+      { href: '/purchase-orders', label: 'Purchase orders' },
       { href: '/purchase-orders/suggestions', label: 'Reorder suggestions' },
       { href: '/purchase-orders/supplier-scorecard', label: 'Supplier scorecard' },
     ],
@@ -59,13 +61,26 @@ const COLLAPSE_KEY = 'retailos-nav-collapsed';
  * Exact match only for the two /dashboard routes — both are real, sibling top-level destinations
  * (Overview vs. Manager view) that share a Next.js layout for AuthGuard rather than being in a
  * parent/child relationship; a prefix match would highlight "Overview" while genuinely on
- * "Manager view". Same reasoning for the three /purchase-orders/* entries, which are siblings under
- * a path segment that is not itself a destination.
+ * "Manager view". Same reasoning for the three /purchase-orders/* entries — siblings under a path
+ * segment that is ALSO a destination now (the PO list), which is why `isActive` additionally needs
+ * its most-specific-wins rule below.
  */
 const EXACT_MATCH_ONLY = new Set(['/dashboard', '/purchase-orders/suggestions', '/purchase-orders/variance-queue', '/purchase-orders/supplier-scorecard']);
 
-const isActive = (href: string, pathname: string): boolean =>
-  EXACT_MATCH_ONLY.has(href) ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
+/** Every href any nav item links to — see the most-specific-wins rule in `isActive`. */
+const ALL_NAV_HREFS = new Set(NAV_GROUPS.flatMap((group) => group.items.map((item) => item.href)));
+
+/**
+ * Most specific wins: `/purchase-orders` is now a real destination (the PO list) AND the path
+ * parent of three sibling nav items, so a bare startsWith would light the parent up alongside
+ * whichever sibling is exact-active. A prefix match therefore only counts when the pathname is
+ * not itself some other nav item's exact destination.
+ */
+const isActive = (href: string, pathname: string): boolean => {
+  if (pathname === href) return true;
+  if (EXACT_MATCH_ONLY.has(href)) return false;
+  return pathname.startsWith(`${href}/`) && !ALL_NAV_HREFS.has(pathname);
+};
 
 /**
  * How wide the content column is, chosen per page rather than globally. One centred `max-w-6xl` for
@@ -73,7 +88,11 @@ const isActive = (href: string, pathname: string): boolean =>
  * wide table needs, while making a single-column form's eye travel from label to field across dead
  * space.
  *
- * - `dashboard` — a comfortable grid; beyond this tiles stretch into stripes.
+ * - `dashboard` — a comfortable grid; beyond this tiles stretch into stripes. 1440 rather than
+ *                 1280: on the 1690px working area a 1920 monitor leaves beside the sidebar, 1280
+ *                 abandoned a third of the screen to margin — dead space that read as an
+ *                 unfinished layout, not as restraint. Four tiles at 1440 are ~350px each, still
+ *                 tiles, not stripes.
  * - `table`     — full bleed, because columns ARE the content.
  * - `form`      — narrow and left-aligned, so the page doesn't reflow when moving between a table
  *                 and its own edit form.
@@ -81,9 +100,104 @@ const isActive = (href: string, pathname: string): boolean =>
 export type ContentWidth = 'dashboard' | 'table' | 'form';
 
 const CONTENT_WIDTH: Record<ContentWidth, string> = {
-  dashboard: 'mx-auto w-full max-w-[1280px]',
+  dashboard: 'mx-auto w-full max-w-[1440px]',
   table: 'w-full',
   form: 'w-full max-w-[720px]',
+};
+
+/** Path segment → human label for breadcrumbs. A segment not listed here is id-shaped and renders as "Detail". */
+const SEGMENT_LABELS: Record<string, string> = {
+  dashboard: 'Overview',
+  manager: 'Manager view',
+  assistant: 'Assistant',
+  products: 'Products',
+  categories: 'Categories',
+  recipes: 'Recipes',
+  suppliers: 'Suppliers',
+  inventory: 'Inventory',
+  lots: 'Lots',
+  movements: 'Movements',
+  stocktake: 'Stocktakes',
+  waste: 'Log waste',
+  documents: 'Documents',
+  search: 'Search',
+  'purchase-orders': 'Purchase orders',
+  new: 'New',
+  suggestions: 'Reorder suggestions',
+  'supplier-scorecard': 'Supplier scorecard',
+  'variance-queue': 'Variance queue',
+  'receive-walk-in': 'Receive walk-in',
+  receive: 'Receive',
+  'invoice-matches': 'Invoice matches',
+  integrations: 'Integrations',
+  'pos-items': 'POS mapping',
+  'sales-import': 'Sales import',
+  edit: 'Edit',
+  settings: 'Settings',
+};
+
+/**
+ * Crumbs only link where a page actually answers — `/invoice-matches` has no index route, so its
+ * crumb is plain text; linking it would be a 404 dressed as a path home.
+ */
+const LINKABLE_CRUMBS = new Set([
+  ...ALL_NAV_HREFS,
+  '/products',
+  '/suppliers',
+  '/recipes',
+  '/categories',
+  '/inventory/stocktake',
+  '/documents',
+  '/sales-import',
+]);
+
+/** Sibling routes that merely SHARE a path prefix — a breadcrumb would imply a parent/child relationship that doesn't exist. */
+const NO_BREADCRUMBS = new Set(['/dashboard/manager']);
+
+/**
+ * A deep route's path back out. Derived from the pathname (one rule for all 26 screens, no
+ * per-page wiring): each segment maps to its label, id-shaped segments render as "Detail", and
+ * the final crumb is the current page — plain text, since the entity's real name is in the
+ * PageHeader immediately below. Top-level pages get no breadcrumb; they ARE the top.
+ */
+const Breadcrumbs = ({ pathname }: { pathname: string }) => {
+  const segments = pathname.split('/').filter(Boolean);
+  if (segments.length < 2 || NO_BREADCRUMBS.has(pathname)) return null;
+  const crumbs = segments.map((segment, index) => {
+    const href = '/' + segments.slice(0, index + 1).join('/');
+    return {
+      href,
+      label: SEGMENT_LABELS[segment] ?? 'Detail',
+      isCurrent: index === segments.length - 1,
+      isLinkable: LINKABLE_CRUMBS.has(href),
+    };
+  });
+  return (
+    <nav aria-label="Breadcrumb" className="mb-4">
+      <ol className="flex flex-wrap items-center gap-1.5 text-sm text-content-muted">
+        {crumbs.map((crumb) => (
+          <li key={crumb.href} className="flex items-center gap-1.5">
+            {crumb !== crumbs[0] && (
+              <span aria-hidden="true" className="text-content-subtle">
+                /
+              </span>
+            )}
+            {crumb.isCurrent ? (
+              <span aria-current="page" className="font-medium text-content">
+                {crumb.label}
+              </span>
+            ) : crumb.isLinkable ? (
+              <Link href={crumb.href} className="hover:text-content hover:underline">
+                {crumb.label}
+              </Link>
+            ) : (
+              <span>{crumb.label}</span>
+            )}
+          </li>
+        ))}
+      </ol>
+    </nav>
+  );
 };
 
 const NavLinks = ({
@@ -160,6 +274,8 @@ export const AppShell = ({
   const [isMac, setIsMac] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const hamburgerRef = useRef<HTMLButtonElement>(null);
+  const asideRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     setIsMac(navigator.platform.toLowerCase().includes('mac'));
@@ -176,10 +292,35 @@ export const AppShell = ({
     setDrawerOpen(false);
   }, [pathname]);
 
+  // While the drawer is an overlay (mobile), it behaves as a modal: focus moves into it on open,
+  // Tab cycles within it, Escape closes it, and focus lands back on the hamburger that opened it —
+  // without the return, closing the drawer dumps a keyboard user at the top of the document.
   useEffect(() => {
-    if (!drawerOpen) return;
+    if (!drawerOpen) {
+      return;
+    }
+    const firstLink = asideRef.current?.querySelector<HTMLElement>('a, button');
+    firstLink?.focus();
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setDrawerOpen(false);
+      if (e.key === 'Escape') {
+        setDrawerOpen(false);
+        hamburgerRef.current?.focus();
+        return;
+      }
+      if (e.key !== 'Tab' || !asideRef.current) return;
+      const focusables = Array.from(
+        asideRef.current.querySelectorAll<HTMLElement>('a[href], button:not([disabled])')
+      );
+      if (focusables.length === 0) return;
+      const first = focusables[0]!;
+      const last = focusables[focusables.length - 1]!;
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
@@ -219,6 +360,9 @@ export const AppShell = ({
       )}
 
       <aside
+        ref={asideRef}
+        id="app-sidebar"
+        aria-label="Primary navigation"
         className={cx(
           'flex flex-col border-r border-border bg-surface-raised transition-[width]',
           'fixed inset-y-0 left-0 z-40 w-58 lg:sticky lg:top-0 lg:z-auto lg:h-screen',
@@ -283,9 +427,12 @@ export const AppShell = ({
         <header className="sticky top-0 z-20 border-b border-border bg-surface-raised/90 backdrop-blur">
           <div className="flex h-12 items-center gap-2 px-4">
             <button
+              ref={hamburgerRef}
               type="button"
               onClick={() => setDrawerOpen(true)}
               aria-label="Open navigation"
+              aria-expanded={drawerOpen}
+              aria-controls="app-sidebar"
               className="rounded-control px-2 py-1 text-content-muted transition-colors hover:bg-surface-sunken hover:text-content lg:hidden"
             >
               <span aria-hidden="true">☰</span>
@@ -314,7 +461,10 @@ export const AppShell = ({
           </div>
         </header>
 
-        <main className={cx('flex-1 px-6 py-7', CONTENT_WIDTH[width])}>{children}</main>
+        <main className={cx('flex-1 px-6 py-7', CONTENT_WIDTH[width])}>
+          <Breadcrumbs pathname={pathname} />
+          {children}
+        </main>
       </div>
 
       <CommandPalette />

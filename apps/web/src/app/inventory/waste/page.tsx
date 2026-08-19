@@ -30,7 +30,7 @@ const WASTE_REASONS = [
 ] as const;
 
 /**
- * plan.md Phase 7: "waste entry (3 taps, mobile)" — one screen, no navigation between steps: pick
+ * the plan Phase 7: "waste entry (3 taps, mobile)" — one screen, no navigation between steps: pick
  * the product, pick the reason, enter a quantity, submit. Uses `inventory.logWaste` (the FEFO-
  * default path) — the lot-override path (`logWasteFromLot`) isn't exposed here, since picking a
  * specific lot is the opposite of a 3-tap flow; it stays available as a distinct procedure for a

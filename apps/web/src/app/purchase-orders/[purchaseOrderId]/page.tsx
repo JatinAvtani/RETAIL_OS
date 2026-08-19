@@ -5,27 +5,14 @@ import { useParams } from 'next/navigation';
 import { TRPCClientError } from '@trpc/client';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
-import { Badge, Button, Card, ErrorNotice, LoadingState, PageHeader, Table, Td, Th, Tr, Value, type BadgeTone } from '@/components/ui';
+import { Badge, Button, Card, ErrorNotice, LoadingState, PageHeader, Table, Td, Th, Tr, Value } from '@/components/ui';
+import { statusTone } from '../status-tone';
+import { formatMoney, trimZeros } from '@/lib/format';
 
 type GetResult = Awaited<ReturnType<typeof trpc.purchaseOrders.get.query>>;
-type Status = GetResult['purchaseOrder']['status'];
 
 /**
- * No `'REJECTED'` status exists — `REJECT` (spec 05 §5.2.2's own diagram) returns a PO to `DRAFT`,
- * not a new terminal state, matching `packages/domain`'s `applyPurchaseOrderTransition` exactly.
- * A rejection is only visible via `rejectedAt`/`rejectionReason` staying set on an otherwise-DRAFT
- * row, not a distinct status value.
- */
-const statusTone = (status: Status): BadgeTone => {
-  if (status === 'RECEIVED' || status === 'CLOSED') return 'positive';
-  if (status === 'CANCELLED') return 'danger';
-  if (status === 'PENDING_APPROVAL') return 'warning';
-  if (status === 'APPROVED' || status === 'SENT' || status === 'PARTIALLY_RECEIVED') return 'accent';
-  return 'neutral';
-};
-
-/**
- * 008-05: the real HTTP surface for `purchase_orders`' state machine (008-01). Every action button
+ * The real HTTP surface for `purchase_orders`' state machine. Every action button
  * shown is only the ones actually legal from the CURRENT status — mirroring
  * `applyPurchaseOrderTransition`'s own domain rules on the client, so a manager never sees a button
  * that would just come back rejected. The server's own state-machine check (packages/domain) is
@@ -128,7 +115,7 @@ export default function PurchaseOrderDetailPage() {
           <div>
             <dt className="text-xs font-medium uppercase tracking-wide text-content-subtle">Total</dt>
             <dd className="mt-1 text-lg font-semibold text-content">
-              <Value value={total} unit={purchaseOrder.currency} />
+              <Value value={total !== null ? formatMoney(total, purchaseOrder.currency) : null} />
             </dd>
           </div>
           <div>
@@ -161,20 +148,28 @@ export default function PurchaseOrderDetailPage() {
               {lines.map((line) => (
                 <Tr key={line.id}>
                   <Td>{line.lineNumber}</Td>
+                  {/* Trailing storage zeros trimmed at the render boundary; each cell's title
+                      keeps the exact stored value inspectable. */}
                   <Td variant="numeric">
-                    {line.quantityOrderUnits}
+                    <span title={line.quantityOrderUnits}>{trimZeros(line.quantityOrderUnits)}</span>
                   </Td>
                   <Td variant="numeric">
-                    {line.quantityBaseUnits}
+                    <span title={line.quantityBaseUnits}>{trimZeros(line.quantityBaseUnits)}</span>
                   </Td>
                   <Td variant="numeric">
-                    {line.unitPrice}
+                    <span title={line.unitPrice}>{formatMoney(line.unitPrice, purchaseOrder.currency)}</span>
                   </Td>
                   <Td variant="numeric">
-                    {line.lineTotal}
+                    <span title={line.lineTotal}>{formatMoney(line.lineTotal, purchaseOrder.currency)}</span>
                   </Td>
                   <Td variant="numeric">
-                    <Value value={line.receivedQuantityBaseUnits} />
+                    <Value
+                      value={
+                        line.receivedQuantityBaseUnits !== null
+                          ? trimZeros(line.receivedQuantityBaseUnits)
+                          : null
+                      }
+                    />
                   </Td>
                 </Tr>
               ))}

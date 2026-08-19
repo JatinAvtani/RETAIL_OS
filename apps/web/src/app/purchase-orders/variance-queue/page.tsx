@@ -16,10 +16,10 @@ const severityTone = (severity: string | null): BadgeTone => {
 };
 
 /**
- * 008-12: the manager's real review queue — every `PENDING` three-way match with an actual
+ * the manager's real review queue — every `PENDING` three-way match with an actual
  * variance, worst severity first. A CLEAN match never appears here at all (filtered server-side in
  * `InvoiceMatchRepository.findPending`, confirmed with the user) — a queue full of clean invoices
- * would be exactly the alert fatigue 008-11's configurable tolerances exist to prevent.
+ * would be exactly the alert fatigue earlier work's configurable tolerances exist to prevent.
  */
 export default function VarianceQueuePage() {
   const [data, setData] = useState<PendingResult | null>(null);

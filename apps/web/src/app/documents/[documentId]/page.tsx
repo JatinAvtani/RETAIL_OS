@@ -41,7 +41,7 @@ const documentStatusTone = (status: ReviewData['document']['status']): BadgeTone
   return 'neutral';
 };
 
-/** A field row is visually flagged when its own confidence is missing or below the same 0.85 threshold 007-08's routing uses — the reviewer sees exactly what kept this document out of AUTO_APPROVED. */
+/** A field row is visually flagged when its own confidence is missing or below the same 0.85 threshold earlier work's routing uses — the reviewer sees exactly what kept this document out of AUTO_APPROVED. */
 const FieldRow = ({
   fieldKey,
   label,
@@ -86,11 +86,11 @@ const FieldRow = ({
 };
 
 /**
- * 007-10: maps one line's extracted SKU to a real product, creating/confirming a permanent
+ * maps one line's extracted SKU to a real product, creating/confirming a permanent
  * `supplier_products` row. Deliberately a plain dropdown over `products.list` (already existing,
  * simple substring search) — no fuzzy-suggestion matcher (confirmed with the user, since a single
  * invoice's line count is small enough that scanning a product list by name isn't a hardship, unlike
- * 006-11's higher-volume POS-item-mapping problem that fuzzy matching was built for).
+ * earlier work's higher-volume POS-item-mapping problem that fuzzy matching was built for).
  */
 const LineMapping = ({
   documentId,
@@ -149,8 +149,8 @@ const ENTITY_TYPE_LABELS: Record<string, string> = {
 };
 
 /**
- * 007-12 (plan.md: "provenance links — document -> every number it produced"). Real
- * `document_links` rows written by 007-11's `PostingService` — this is the forward half of the
+ * the plan. Real
+ * `document_links` rows written by earlier work's `PostingService` — this is the forward half of the
  * spec's drill-through promise ("any margin figure traces back to the invoice image"), rendered on
  * the document's own page since that's the one place a reviewer would ask "what did approving this
  * actually do." A `lot` link is clickable — `/inventory/lots` is the one entity-detail page that
@@ -175,7 +175,7 @@ const ProvenancePanel = ({ links }: { links: DocumentLink[] }) => {
 };
 
 /**
- * 008-10: for a POSTED invoice, the real three-way match already ran automatically inside
+ * for a POSTED invoice, the real three-way match already ran automatically inside
  * `documents.approve` — this just links to its own detail page rather than duplicating the line
  * table here. `null` (no match found via `getByDocument`) means either this document wasn't an
  * INVOICE, or the match genuinely failed after posting (see `documents.approve`'s own two-step-gap
@@ -198,7 +198,7 @@ const InvoiceMatchPanel = ({ invoiceMatch }: { invoiceMatch: InvoiceMatchSummary
 };
 
 /**
- * 007-09: the review workflow's actual screen — document image alongside every extracted field and
+ * the review workflow's actual screen — document image alongside every extracted field and
  * validation issue, so a reviewer can approve or reject in one place. Two real scope boundaries
  * (confirmed with the user before building): the document renders via a plain browser-native
  * `<iframe>`/`<img>` pointed at a presigned url — no PDF.js dependency, since ADR-13 already means
@@ -208,8 +208,8 @@ const InvoiceMatchPanel = ({ invoiceMatch }: { invoiceMatch: InvoiceMatchSummary
  * on the document image — the two panels stay independently scrollable, not literally synced,
  * which is the honest consequence of ADR-13, not a missing feature.
  *
- * 007-10: each line's SKU can be mapped to a real product via `LineMapping` — a permanent
- * `supplier_products` confirmation, the input 007-11's posting engine needs to know which real
+ * each line's SKU can be mapped to a real product via `LineMapping` — a permanent
+ * `supplier_products` confirmation, the input earlier work's posting engine needs to know which real
  * product a line refers to.
  */
 export default function DocumentReviewPage() {

@@ -13,6 +13,7 @@ import {
   ErrorNotice,
   Field,
   Input,
+  LoadingState,
   PageHeader,
   Select,
 } from '@/components/ui';
@@ -37,12 +38,18 @@ export default function NewRecipePage() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  // Gate the form until units/products arrive — empty ingredient dropdowns filling themselves a
+  // beat after paint read as a broken page.
+  const [referenceLoading, setReferenceLoading] = useState(true);
+
   useEffect(() => {
-    Promise.all([trpc.units.list.query(), trpc.products.list.query()]).then(([u, p]) => {
-      setUnits(u);
-      setProducts(p);
-      if (u.length > 0) setYieldUnitId(u[0]!.id);
-    });
+    Promise.all([trpc.units.list.query(), trpc.products.list.query()])
+      .then(([u, p]) => {
+        setUnits(u);
+        setProducts(p);
+        if (u.length > 0) setYieldUnitId(u[0]!.id);
+      })
+      .finally(() => setReferenceLoading(false));
   }, []);
 
   const addComponent = () => {
@@ -83,6 +90,17 @@ export default function NewRecipePage() {
       setSubmitting(false);
     }
   };
+
+  if (referenceLoading) {
+    return (
+      <>
+        <PageHeader title="New recipe" description="Add each ingredient and how much one batch uses." />
+        <Card>
+          <LoadingState />
+        </Card>
+      </>
+    );
+  }
 
   return (
     <>

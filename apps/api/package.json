@@ -15,6 +15,7 @@
     "@fastify/cookie": "^11.1.2",
     "@fastify/cors": "^10.0.1",
     "@retailos/ai": "workspace:*",
+    "@retailos/assistant": "workspace:*",
     "@retailos/authz": "workspace:*",
     "@retailos/db": "workspace:*",
     "@retailos/domain": "workspace:*",

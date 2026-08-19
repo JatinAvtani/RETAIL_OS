@@ -34,7 +34,7 @@ const statusLabel: Record<DocumentRow['status'], string> = {
 const DOCUMENT_TYPES = ['INVOICE', 'DELIVERY_NOTE', 'CREDIT_NOTE', 'QUOTE', 'CONTRACT', 'CERTIFICATE', 'OTHER'] as const;
 
 /**
- * 007-14: extraction accuracy telemetry (spec 12 §12.2's `extraction_auto_approval_rate` — "measures
+ * extraction accuracy telemetry (the design's `extraction_auto_approval_rate` — "measures
  * whether the pipeline saves labor"). `autoApprovalRate` renders `null` as "Unknown" via `StatTile`
  * (I7) — a period with zero extractions is a genuine absence of data, never a fabricated 0%.
  */
@@ -79,12 +79,12 @@ const TelemetryPanel = ({ telemetry }: { telemetry: Telemetry }) => {
 };
 
 /**
- * 007-02 (plan.md Phase 1): upload a supplier document (PDF or a phone photo — the exact two shapes
- * EPIC-002's extraction spike measured accuracy against), presigned direct-to-S3, drag-drop, bulk.
- * 007-04 classifies each document synchronously during upload (real Gemini vision call) — `type`
+ * upload a supplier document (PDF or a phone photo — the exact two shapes
+ * the later milestone's extraction spike measured accuracy against), presigned direct-to-S3, drag-drop, bulk.
+ * earlier work classifies each document synchronously during upload (real Gemini vision call) — `type`
  * reflects that classification when it succeeded, and stays `OTHER` (with no confidence shown) when
  * it didn't run (no API key) or failed, matching how `confirmUpload` behaves either way. Extraction
- * (007-05/06) and posting still don't exist — a classified type is not yet an extracted invoice.
+ * and posting still don't exist — a classified type is not yet an extracted invoice.
  */
 export default function DocumentsPage() {
   const { stores, selectedStoreId, setSelectedStoreId, loading: storesLoading } = useStores();

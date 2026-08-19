@@ -25,14 +25,29 @@ const requirePermission = (permissions: string[], permission: string) => {
 };
 
 /**
- * 008-11 (spec D8, "avoid alert fatigue on cents"): the real settings surface for the three-way
- * match's per-org tolerance override, confirmed with the user via `AskUserQuestion` as OWNER-only
+ * "Avoid alert fatigue on cents": the real settings surface for the three-way match's per-org
+ * tolerance override, deliberately OWNER-only
  * — a financial-control threshold, matching this project's existing pattern of gating sensitive
  * config (PO approval limits) to the top role rather than the broader `purchasing:*` permissions
  * MANAGER also holds. Reuses `settings:manage` (already OWNER-exclusive in `ROLE_PERMISSIONS`, no
  * new permission enum value needed) — the first real caller of that permission in this codebase.
  */
 export const settingsRouter = router({
+  /**
+   * The org facts every screen needs to FORMAT correctly — currently just the base currency, so a
+   * money figure can carry its real currency label instead of a hardcoded symbol (this repo has a
+   * genuine hardcoded-currency history). Deliberately open to every authenticated member, unlike
+   * the tolerance procedures below: knowing the org trades in INR is not a financial control.
+   */
+  organizationProfile: protectedProcedure.query(async ({ ctx }) => {
+    const repo = new OrganizationRepository(ctx.db, ctx.session.organizationId);
+    const org = await repo.findMine();
+    if (!org) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Organization not found.' });
+    }
+    return { name: org.name, baseCurrency: org.baseCurrency };
+  }),
+
   getMatchTolerances: protectedProcedure.query(async ({ ctx }) => {
     requirePermission(ctx.session.permissions, 'settings:manage');
     const repo = new OrganizationRepository(ctx.db, ctx.session.organizationId);

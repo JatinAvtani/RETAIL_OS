@@ -6,7 +6,7 @@ import { TRPCClientError } from '@trpc/client';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
 import { useStores } from '@/lib/use-stores';
-import { Button, Card, ErrorNotice, Field, Input, PageHeader, Select, Table, Td, Th, Tr } from '@/components/ui';
+import { Button, Card, ErrorNotice, Field, Input, LoadingState, PageHeader, Select, Table, Td, Th, Tr } from '@/components/ui';
 
 type Product = Awaited<ReturnType<typeof trpc.products.list.query>>[number];
 type Supplier = Awaited<ReturnType<typeof trpc.suppliers.list.query>>[number];
@@ -25,9 +25,9 @@ type DraftLine = {
 };
 
 /**
- * 008-09 (plan.md Phase 3, spec 05 §5.2.3): "receiving without a PO is supported (walk-in/emergency
- * purchases) and creates a standalone receipt that an invoice can later match against." Confirmed
- * with the user: any product can be picked here, with a manual unit cost entered per line — no
+ * Receiving without a PO is supported (walk-in/emergency purchases) and creates a standalone
+ * receipt that an invoice can later match against. A deliberate scope choice:
+ * any product can be picked here, with a manual unit cost entered per line — no
  * confirmed supplier-product mapping is required (unlike `/purchase-orders/new`'s PO-line picker),
  * since the whole point of this screen is the unplanned case a real supplier/SKU mapping doesn't
  * exist for yet. `GoodsReceiptRepository.confirmReceipt` already supports this shape (no
@@ -52,9 +52,17 @@ export default function ReceiveWalkInPage() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  // Gate the form until products/suppliers arrive — empty dropdowns filling themselves a beat
+  // after paint read as a broken page.
+  const [referenceLoading, setReferenceLoading] = useState(true);
+
   useEffect(() => {
-    trpc.products.list.query().then(setProducts);
-    trpc.suppliers.list.query().then(setSuppliers);
+    Promise.all([trpc.products.list.query(), trpc.suppliers.list.query()])
+      .then(([p, s]) => {
+        setProducts(p);
+        setSuppliers(s);
+      })
+      .finally(() => setReferenceLoading(false));
   }, []);
 
   const addDraftLine = () => {
@@ -115,6 +123,20 @@ export default function ReceiveWalkInPage() {
       setSubmitting(false);
     }
   };
+
+  if (referenceLoading) {
+    return (
+      <>
+        <PageHeader
+          title="Receive a walk-in purchase"
+          description="For a delivery with no purchase order. You can match it to an invoice later."
+        />
+        <Card>
+          <LoadingState />
+        </Card>
+      </>
+    );
+  }
 
   return (
     <>

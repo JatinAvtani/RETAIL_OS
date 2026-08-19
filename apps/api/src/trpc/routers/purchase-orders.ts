@@ -23,8 +23,8 @@ import { storageClient, PURCHASE_ORDER_PDFS_BUCKET } from '../context';
 import type { db as Db } from '../context';
 
 /**
- * 008-06: the same mocked transport for every `send` call in this process — matches this project's
- * "mock only the transport, keep the real code path real" precedent from Postmark inbound (007-03).
+ * the same mocked transport for every `send` call in this process — matches this project's
+ * "mock only the transport, keep the real code path real" precedent from Postmark inbound.
  * `onSend` is a no-op here (the caller persists the outcome via `recordSent` instead of relying on
  * this hook); a dedicated test constructs its own sender with a real `onSend` to assert on.
  */
@@ -39,6 +39,26 @@ const ensurePdfBucketOnce = async () => {
 };
 
 const suggestionsInput = z.object({ storeId: z.string().uuid() });
+
+const PO_STATUSES = [
+  'DRAFT',
+  'PENDING_APPROVAL',
+  'APPROVED',
+  'SENT',
+  'PARTIALLY_RECEIVED',
+  'RECEIVED',
+  'CLOSED',
+  'CANCELLED',
+] as const;
+
+const listInput = z.object({
+  storeId: z.string().uuid(),
+  status: z.enum(PO_STATUSES).optional(),
+  supplierId: z.string().uuid().optional(),
+  /** Keyset cursor: the last PO id the caller saw (UUID v7 — time-ordered), never a page OFFSET. */
+  cursor: z.string().uuid().optional(),
+  limit: z.number().int().min(1).max(100).default(25),
+});
 const createInput = z.object({
   storeId: z.string().uuid(),
   supplierId: z.string().uuid(),
@@ -97,8 +117,8 @@ const assertSupplierExists = async (db: typeof Db, organizationId: string, suppl
 };
 
 /**
- * 008-05: the first real caller of `canApproveAmount` (`packages/authz`, built ahead of any
- * consumer since EPIC-003/004) — spec 04 §4.3's "PO approval up to a configured threshold."
+ * the first real caller of `canApproveAmount` (`packages/authz`, built ahead of any
+ * consumer since a later milestone/004) — the design's "PO approval up to a configured threshold."
  * Deliberately reads the CURRENT `approvalLimit` fresh from `memberships` at approval time via
  * `MembershipRepository.findByUserAndOrg`, never a value cached on the session at login — a
  * manager's limit can change after they logged in, and `ctx.session` doesn't carry it at all
@@ -141,17 +161,30 @@ const assertCanApprove = async (
 };
 
 /**
- * 008-05: `purchase_orders`/`purchase_order_lines`' first real HTTP surface — create/addLine
+ * `purchase_orders`/`purchase_order_lines`' first real HTTP surface — create/addLine
  * (DRAFT-only editing, per `PurchaseOrderRepository.addLine`'s own state check), `get` (PO + its
  * lines + real total), and the full state-machine mutation surface (submit/approve/reject/send/
  * cancel), each a thin wrapper over `PurchaseOrderRepository.applyTransition`. `approve` is the
  * one mutation with a real business check beyond the state machine: the approval-threshold gate
- * (`assertCanApprove`), spec 04 §4.3.
+ * (`assertCanApprove`), the design
  */
 export const purchaseOrdersRouter = router({
   reorderSuggestions: protectedProcedure.input(suggestionsInput).query(async ({ ctx, input }) => {
     await assertStoreAccess(ctx.db, ctx.session, input.storeId);
     return findReorderSuggestions(ctx.db, ctx.session.organizationId, input.storeId);
+  }),
+
+  /** The purchasing front door: newest-first PO list, filterable by status/supplier, keyset-paginated. */
+  list: protectedProcedure.input(listInput).query(async ({ ctx, input }) => {
+    await assertStoreAccess(ctx.db, ctx.session, input.storeId);
+    const purchaseOrderRepository = new PurchaseOrderRepository(ctx.db, ctx.session.organizationId);
+    return purchaseOrderRepository.listForStore({
+      storeId: input.storeId,
+      ...(input.status !== undefined ? { status: input.status } : {}),
+      ...(input.supplierId !== undefined ? { supplierId: input.supplierId } : {}),
+      ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
+      limit: input.limit,
+    });
   }),
 
   create: protectedProcedure.input(createInput).mutation(async ({ ctx, input }) => {
@@ -248,10 +281,10 @@ export const purchaseOrdersRouter = router({
   }),
 
   /**
-   * 008-06: spec 05 §5.2.2, "SENT triggers PDF generation + email to the supplier contact." The
+   * the design, "SENT triggers PDF generation + email to the supplier contact." The
    * state transition itself (immutability boundary) happens first and is authoritative regardless
    * of what follows — matching `recordSent`'s own doc comment: a PDF/email failure after a genuine
-   * SEND must not leave the PO stuck in a half-transitioned state, since spec 08 §8.2's optimistic
+   * SEND must not leave the PO stuck in a half-transitioned state, since the design's optimistic
    * lock has already been consumed by a real, valid transition. `contactEmail === null` (no
    * confirmed supplier contact on file) is a real, visible failure — I7: this project never
    * silently treats "no email to send to" as "sent successfully."

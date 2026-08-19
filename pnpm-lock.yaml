@@ -41,6 +41,9 @@ importers:
       '@retailos/ai':
         specifier: workspace:*
         version: link:../../packages/ai
+      '@retailos/assistant':
+        specifier: workspace:*
+        version: link:../../packages/assistant
       '@retailos/authz':
         specifier: workspace:*
         version: link:../../packages/authz

@@ -22,7 +22,7 @@ const CURRENCIES = [
  * itself only ever created a `users` row with no organization to belong to (only `seed-demo.mts`, a
  * raw offline script, ever created one). `createOrganizationWithOwner` (`@retailos/db`) now runs
  * inside `auth.signup` itself, so this form collects the workspace's name/store/currency alongside
- * the account's own email/password — confirmed with the user via `AskUserQuestion` as the real,
+ * the account's own email/password — settled deliberately: as the real,
  * complete version of "sign up" rather than leaving the very first user with no path in.
  *
  * The currency choice is real and one-time — no conversion/exchange-rate logic exists anywhere in

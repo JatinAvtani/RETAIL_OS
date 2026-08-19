@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { TRPCClientError } from '@trpc/client';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
-import { Button, Card, ErrorNotice, Field, Input, PageHeader, Select } from '@/components/ui';
+import { Button, Card, ErrorNotice, Field, Input, LoadingState, PageHeader, Select } from '@/components/ui';
 
 type Unit = Awaited<ReturnType<typeof trpc.units.list.query>>[number];
 type Category = Awaited<ReturnType<typeof trpc.categories.list.query>>[number];
@@ -25,12 +25,18 @@ export default function NewProductPage() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  // The form's selects are useless until units/categories arrive — gate the whole form on this
+  // rather than flashing empty dropdowns that fill themselves a beat later.
+  const [referenceLoading, setReferenceLoading] = useState(true);
+
   useEffect(() => {
-    Promise.all([trpc.units.list.query(), trpc.categories.list.query()]).then(([u, c]) => {
-      setUnits(u);
-      setCategories(c);
-      if (u.length > 0) setBaseUnitId(u[0]!.id);
-    });
+    Promise.all([trpc.units.list.query(), trpc.categories.list.query()])
+      .then(([u, c]) => {
+        setUnits(u);
+        setCategories(c);
+        if (u.length > 0) setBaseUnitId(u[0]!.id);
+      })
+      .finally(() => setReferenceLoading(false));
   }, []);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -55,6 +61,17 @@ export default function NewProductPage() {
       setSubmitting(false);
     }
   };
+
+  if (referenceLoading) {
+    return (
+      <>
+        <PageHeader title="New product" description="The base unit is what stock is counted in." />
+        <Card>
+          <LoadingState />
+        </Card>
+      </>
+    );
+  }
 
   return (
     <>

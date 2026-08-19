@@ -26,6 +26,7 @@ import {
   GoodsReceiptRepository,
   InvoiceMatchRepository,
   InvitationRepository,
+  ConversationRepository,
 } from '@retailos/db';
 import { eq } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
@@ -37,7 +38,7 @@ import { PRODUCT_IMAGES_BUCKET, SALES_CSV_IMPORTS_BUCKET, DOCUMENTS_BUCKET, GOOD
 type Db = ReturnType<typeof createDb>['db'];
 
 /**
- * Task 003-13, spec 14 §14.3: "enumerate every registered route; for each, call with tenant B's
+ * The design: "enumerate every registered route; for each, call with tenant B's
  * session against a tenant A resource id. Expect 403/404, never 200." This is the registry half of
  * that suite (see `cross-tenant.test.ts` for the runner) — a real, generic auto-attacker can't be
  * built without SOME per-endpoint knowledge, because there is no mechanical way to derive "what a
@@ -131,7 +132,7 @@ const seedMembership = async (db: Db, organizationId: string): Promise<string> =
   return membershipId;
 };
 
-/** Seeds a real store — the same shape as the `stores.get` entry below, factored out since 005-16's endpoints are all store-scoped too. */
+/** Seeds a real store — the same shape as the `stores.get` entry below, factored out since the inventory endpoints are all store-scoped too. */
 const seedStore = async (db: Db, organizationId: string): Promise<string> => {
   const storeId = generateId();
   await db.insert(stores).values({
@@ -143,7 +144,7 @@ const seedStore = async (db: Db, organizationId: string): Promise<string> => {
   return storeId;
 };
 
-/** Seeds a real store + product + default variant together — the shape every 005-16 inventory endpoint needs (they're store-scoped, not just product-scoped). Returns the store id, since `assertStoreAccess` is always the FIRST check these procedures run — attacking with tenant A's storeId is the actual cross-tenant surface being tested, exactly as it is for `stores.get` itself. `seedProduct` (a plain raw insert, written for entries that never needed a variant) does NOT insert a `product_variants` row — the real `ProductRepository.create` does that as its own invariant, but this registry seeds fixtures directly rather than through the repository, so the variant is inserted explicitly here. */
+/** Seeds a real store + product + default variant together — the shape every inventory endpoint needs (they're store-scoped, not just product-scoped). Returns the store id, since `assertStoreAccess` is always the FIRST check these procedures run — attacking with tenant A's storeId is the actual cross-tenant surface being tested, exactly as it is for `stores.get` itself. `seedProduct` (a plain raw insert, written for entries that never needed a variant) does NOT insert a `product_variants` row — the real `ProductRepository.create` does that as its own invariant, but this registry seeds fixtures directly rather than through the repository, so the variant is inserted explicitly here. */
 const seedStoreAndProduct = async (
   db: Db,
   organizationId: string
@@ -251,7 +252,7 @@ const seedStoreSupplierAndSupplierProduct = async (
 ): Promise<{ storeId: string; supplierId: string; productId: string; supplierProductId: string }> => {
   const { storeId, productId } = await seedStoreAndProduct(db, organizationId);
   const supplierId = generateId();
-  // A real contact email — `purchaseOrders.send`'s own-resource case (008-06) needs one to
+  // A real contact email — `purchaseOrders.send`'s own-resource case needs one to
   // genuinely reach a 200; every OTHER registry entry using this shared fixture only reads
   // storeId/supplierId/productId/supplierProductId, so this addition is inert for them.
   await db.insert(suppliers).values({
@@ -314,7 +315,7 @@ const seedApprovedPurchaseOrder = async (db: Db, organizationId: string): Promis
 };
 
 /**
- * 008-07: a real SENT purchase order — `goodsReceipts.confirmReceipt`'s own-resource starting
+ * a real SENT purchase order — `goodsReceipts.confirmReceipt`'s own-resource starting
  * state. Returns the PO's real `purchaseOrderLineId` (not the PO id itself) since that's the
  * actual attack surface: `confirmReceipt` takes a `purchaseOrderLineId` per line, and the real
  * cross-tenant risk is tenant B posting a receipt against tenant A's real PO line.
@@ -337,7 +338,7 @@ const seedGoodsReceipt = async (db: Db, organizationId: string): Promise<string>
 };
 
 /**
- * 008-08: a real confirmed goods-receipt LINE — `goodsReceipts.requestPhotoUpload`/
+ * a real confirmed goods-receipt LINE — `goodsReceipts.requestPhotoUpload`/
  * `.confirmPhotoUpload`'s own-resource starting state, since both take a `goodsReceiptLineId`
  * directly, not a `goodsReceiptId`. Shares the same confirm-a-real-receipt logic
  * `seedGoodsReceipt` uses, factored out so both can return whichever id their own registry entry
@@ -410,7 +411,7 @@ if (!process.env.SQUARE_REDIRECT_URI) process.env.SQUARE_REDIRECT_URI = 'http://
 if (!process.env.POS_TOKEN_ENCRYPTION_KEY) process.env.POS_TOKEN_ENCRYPTION_KEY = 'cross-tenant-registry-test-key';
 
 /**
- * 007-04: `documents.confirmUpload`'s own-resource-succeeds case below runs the REAL router
+ * `documents.confirmUpload`'s own-resource-succeeds case below runs the REAL router
  * mutation, which now classifies via a real Gemini call if `GEMINI_API_KEY` is set — same
  * "avoid a real, unreliable external call in the merge-gate suite" reasoning as
  * `patchFetchForSquare` below, opposite direction (there's nothing to fake a response WITH here,
@@ -421,7 +422,7 @@ delete process.env.GEMINI_API_KEY;
 
 /**
  * `integrations.syncSquareCatalog`/`syncSquareOrders` call Square's real Catalog/Orders APIs — no
- * live Square sandbox app exists in this codebase yet (006-03/006-04/006-05's standing limitation),
+ * live Square sandbox app exists in this codebase yet,
  * so their "own resource succeeds with a genuine 200" case cannot go over the real network the way
  * `square-routes.test.ts` accepts for OAuth's error-path tests. Unlike those, THIS suite's second
  * `it.each` genuinely asserts 200, which a real, unreachable Square sandbox cannot produce — so
@@ -551,7 +552,7 @@ const seedDocumentAwaitingReview = async (db: Db, organizationId: string): Promi
 };
 
 /**
- * 008-10: a real `InvoiceMatch` — `invoiceMatches.get`/`.getByDocument`'s own-resource starting
+ * a real `InvoiceMatch` — `invoiceMatches.get`/`.getByDocument`'s own-resource starting
  * state. Reuses `seedStoreSupplierAndSupplierProduct`'s real confirmed mapping and calls
  * `InvoiceMatchRepository.runMatch` directly (the same repository `documents.approve` calls
  * internally) rather than driving a full document-approve flow — this line is intentionally
@@ -585,10 +586,10 @@ const seedInvoiceMatch = async (db: Db, organizationId: string): Promise<{ store
 };
 
 /**
- * 007-10: `documents.confirmLineMapping`'s own-resource case needs MORE than
+ * `documents.confirmLineMapping`'s own-resource case needs MORE than
  * `seedDocumentAwaitingReview` — a real line item with a real SKU, and a real `suppliers` row whose
  * name exactly matches the extraction's `fields.supplier.value` (the endpoint's own resolution rule,
- * matching 007-07's validation-gate precedent), plus a real product to map to. Returns just the
+ * matching the extraction validation-gate precedent), plus a real product to map to. Returns just the
  * document id (the resource under attack, matching every other entry's shape) — `buildInput` looks
  * up a real product fresh via `organizationId` (always tenant A's, per the runner's own contract:
  * `buildInput(resourceId, tenantA.organizationId, db)` regardless of which tenant is calling), since
@@ -650,6 +651,29 @@ const seedMappedCsvImport = async (db: Db, organizationId: string): Promise<stri
     })
     .where(eq(salesCsvImports.id, importId));
   return importId;
+};
+
+/**
+ * a real `Conversation` — `assistant.getConversation`'s own-resource starting state, and
+ * `assistant.ask`'s CONTINUING-an-existing-conversation case (see below). The real risk here is
+ * exactly what the design's own "grounding bundle retained for dispute resolution" design creates a
+ * NEW incentive to leak: a conversation transcript can carry real cited business figures, so
+ * tenant B reading — or, for `assistant.ask`, APPENDING TO — tenant A's conversation by guessed/
+ * observed `conversationId` is a genuine data leak/tamper risk, not just an access-control
+ * nicety. **A first version of this comment claimed `assistant.ask` had no id-scoped attack
+ * surface at all, reasoning it only ever CREATES a conversation — wrong, caught by the registry's
+ * own completeness check, not by manual review**: `askInput`'s `conversationId` is a real,
+ * optional id-shaped field, and a caller supplying another tenant's real conversationId would be
+ * attempting exactly this attack. The router's own `ConversationRepository.findById` (tenant-
+ * scoped) already correctly rejects it with a 404 — this entry proves that live, not just trusts
+ * the code reading correct.
+ */
+const seedConversation = async (db: Db, organizationId: string): Promise<string> => {
+  const userId = generateId();
+  await db.insert(users).values({ id: userId, email: `cross-tenant-probe-conversation-user-${userId}@example.test` });
+  const conversationRepository = new ConversationRepository(db, organizationId);
+  const { id } = await conversationRepository.create({ userId });
+  return id;
 };
 
 export const resourceScopedProcedures: ResourceScopedProcedure[] = [
@@ -804,7 +828,7 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
   },
   {
     // Attacks with tenant A's storeId — assertStoreAccess (canAccessStore) is the FIRST check
-    // every 005-16 inventory endpoint runs, before any product/variant lookup, so this is the
+    // every inventory endpoint runs, before any product/variant lookup, so this is the
     // real cross-tenant surface being tested here, same shape as stores.get itself.
     path: 'inventory.levels',
     type: 'query',
@@ -1016,7 +1040,7 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     buildInput: (resourceId) => ({ storeId: resourceId }),
   },
   {
-    // 006-09: same store-scoped mutation shape as syncSquareOrders — assertStoreAccess-equivalent
+    // same store-scoped mutation shape as syncSquareOrders — assertStoreAccess-equivalent
     // check runs before pos_connections is ever looked at, same patched-fetch approach.
     path: 'integrations.reconcileSquareOrders',
     type: 'mutation',
@@ -1024,7 +1048,7 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     buildInput: (resourceId) => ({ storeId: resourceId }),
   },
   {
-    // 006-10: requestUpload is store-scoped, not importId-scoped (no import row exists yet at this
+    // requestUpload is store-scoped, not importId-scoped (no import row exists yet at this
     // point in the flow) — same store-ownership check shape as every other store-scoped mutation.
     path: 'csvImport.requestUpload',
     type: 'mutation',
@@ -1121,7 +1145,7 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     buildInput: (resourceId) => ({ storeId: resourceId, days: 30 }),
   },
   {
-    // 009-15, same store-scoped shape as dashboard.summary — the manager dashboard's own
+    // same store-scoped shape as dashboard.summary — the manager dashboard's own
     // store-ownership check runs first, before any of its metrics/repository queries.
     path: 'dashboard.managerSummary',
     type: 'query',
@@ -1129,7 +1153,7 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     buildInput: (resourceId) => ({ storeId: resourceId, days: 30 }),
   },
   {
-    // 009-16, same store-scoped shape as dashboard.summary — the real risk is tenant B passing
+    // same store-scoped shape as dashboard.summary — the real risk is tenant B passing
     // tenant A's real storeId to read its source rows behind a figure.
     path: 'dashboard.drillThrough',
     type: 'query',
@@ -1185,7 +1209,7 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     buildInput: (resourceId) => ({ storeId: resourceId }),
   },
   {
-    // 007-13, same store-scoped shape as documents.list.
+    // same store-scoped shape as documents.list.
     path: 'documents.search',
     type: 'query',
     seedResource: async (db, organizationId) => {
@@ -1222,7 +1246,7 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     buildInput: (resourceId) => ({ documentId: resourceId }),
   },
   {
-    // 007-10. buildInput looks up a real product belonging to `organizationId` fresh — the runner
+    // buildInput looks up a real product belonging to `organizationId` fresh — the runner
     // always passes tenant A's organizationId here (see cross-tenant.test.ts), so this is a real
     // product to map to in BOTH the attack (tenant B calling with tenant A's documentId) and the
     // own-resource (tenant A calling with their own documentId) cases.
@@ -1250,6 +1274,15 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     // Store-scoped, same shape as inventory.levels/dashboard.summary — the store-ownership check
     // is the first thing reorderSuggestions' router runs, before findReorderSuggestions is called.
     path: 'purchaseOrders.reorderSuggestions',
+    type: 'query',
+    seedResource: seedStore,
+    buildInput: (resourceId) => ({ storeId: resourceId }),
+  },
+  {
+    // Store-scoped, same shape as reorderSuggestions above — the store-ownership check is the
+    // first thing the list router runs. `supplierId`/`cursor` are also id-shaped but only ever
+    // FILTER rows already org-scoped by the repository; the storeId is the actual attack surface.
+    path: 'purchaseOrders.list',
     type: 'query',
     seedResource: seedStore,
     buildInput: (resourceId) => ({ storeId: resourceId }),
@@ -1313,7 +1346,7 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     buildInput: (resourceId) => ({ purchaseOrderId: resourceId, expectedVersion: 3 }),
   },
   {
-    // 008-06: id-scoped by purchaseOrderId — a DRAFT PO (never sent) is a valid own-resource case,
+    // id-scoped by purchaseOrderId — a DRAFT PO (never sent) is a valid own-resource case,
     // since `getPdfUrl` must return `{ url: null }` rather than error for one (I7), same as `get`.
     path: 'purchaseOrders.getPdfUrl',
     type: 'query',
@@ -1327,7 +1360,7 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     buildInput: (resourceId) => ({ purchaseOrderId: resourceId, expectedVersion: 1 }),
   },
   {
-    // 008-07: id-scoped by purchaseOrderLineId — the real risk is tenant B posting a receipt (and
+    // id-scoped by purchaseOrderLineId — the real risk is tenant B posting a receipt (and
     // thereby a real lot + RECEIPT movement + PO state transition) against tenant A's real PO line.
     // `buildInput` re-derives storeId/purchaseOrderId/supplierId from the SEEDED line itself (via a
     // real join), not the calling org — attacking with tenant A's line must fail regardless of what
@@ -1360,7 +1393,7 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     buildInput: (resourceId) => ({ goodsReceiptId: resourceId }),
   },
   {
-    // 008-08: id-scoped by goodsReceiptLineId — the real risk is tenant B obtaining a real presigned
+    // id-scoped by goodsReceiptLineId — the real risk is tenant B obtaining a real presigned
     // upload URL for tenant A's receipt line (a genuine information/write-surface leak even though
     // the URL alone doesn't touch photoObjectKeys until confirmPhotoUpload).
     path: 'goodsReceipts.requestPhotoUpload',
@@ -1476,11 +1509,42 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     buildInput: (resourceId) => ({ storeId: resourceId }),
   },
   {
-    // 008-12: the real risk is tenant B resolving tenant A's real invoice match (a genuine
+    // the real risk is tenant B resolving tenant A's real invoice match (a genuine
     // financial-control action, not just a read) via a guessed/observed invoiceMatchId.
     path: 'invoiceMatches.resolve',
     type: 'mutation',
     seedResource: async (db, organizationId) => (await seedInvoiceMatch(db, organizationId)).invoiceMatchId,
     buildInput: (resourceId) => ({ invoiceMatchId: resourceId, resolutionNotes: 'Cross-tenant probe resolution note.' }),
+  },
+  {
+    // tenant B reading tenant A's real conversation transcript (which can carry real cited
+    // business figures via the grounding bundle) by guessed/observed conversationId.
+    path: 'assistant.getConversation',
+    type: 'query',
+    seedResource: async (db, organizationId) => seedConversation(db, organizationId),
+    buildInput: (resourceId) => ({ conversationId: resourceId }),
+  },
+  {
+    // tenant B APPENDING a message to tenant A's real conversation by guessed/observed
+    // conversationId — a genuinely different risk shape from the read-only entry above (tamper,
+    // not just leak), on the SAME underlying resource. `assistant.ask` calling out to a real
+    // Gemini API mid-request is a real, accepted cost of this entry (matching
+    // `integrations.syncSquareCatalog`'s own precedent for a registry entry that calls a real
+    // external vendor) — no card/cost risk since this project's one GEMINI_API_KEY is already
+    // free-tier.
+    path: 'assistant.ask',
+    type: 'mutation',
+    seedResource: async (db, organizationId) => seedConversation(db, organizationId),
+    buildInput: (resourceId) => ({ conversationId: resourceId, question: 'Cross-tenant probe question — what is my net revenue?' }),
+  },
+  {
+    // the daily briefing is store-scoped, the same shape as dashboard.summary — tenant B
+    // must not be able to read tenant A's exception set (which carries real cited money figures)
+    // by supplying tenant A's storeId. No live model call is involved in the rejection path: the
+    // store-ownership check runs long before any narration.
+    path: 'assistant.briefing',
+    type: 'query',
+    seedResource: seedStore,
+    buildInput: (resourceId) => ({ storeId: resourceId }),
   },
 ];

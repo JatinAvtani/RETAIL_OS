@@ -6,7 +6,8 @@ import { TRPCClientError } from '@trpc/client';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
 import { useStores } from '@/lib/use-stores';
-import { Button, Card, ErrorNotice, Field, Input, PageHeader, Select, Table, Td, Th, Tr } from '@/components/ui';
+import { Button, Card, ErrorNotice, Field, Input, LoadingState, PageHeader, Select, Table, Td, Th, Tr } from '@/components/ui';
+import { addDecimal, formatMoney, multiplyDecimal } from '@/lib/format';
 
 type Supplier = Awaited<ReturnType<typeof trpc.suppliers.list.query>>[number];
 type ConfirmedProduct = Awaited<ReturnType<typeof trpc.suppliers.confirmedProducts.query>>[number];
@@ -22,10 +23,10 @@ type DraftLine = {
 };
 
 /**
- * 008-05: create a real DRAFT purchase order, then add real lines one at a time
+ * Create a real DRAFT purchase order, then add real lines one at a time
  * (`PurchaseOrderRepository.addLine` — DRAFT-only, server-computed line totals). Pre-fills
- * store/supplier from `/purchase-orders/suggestions`' "Create PO" link when present (008-04's own
- * integration point), but never pre-fills lines automatically — every line is a real, explicit
+ * store/supplier from `/purchase-orders/suggestions`' "Create PO" link when present,
+ * but never pre-fills lines automatically — every line is a real, explicit
  * `addLine` call the manager confirms by picking a quantity and price, matching I9 ("AI/suggestions
  * draft, humans approve") even though this task itself has no AI involvement at all.
  */
@@ -53,8 +54,15 @@ function NewPurchaseOrderForm() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  // Gate the form until suppliers arrive — an empty supplier dropdown filling itself a beat
+  // after paint reads as a broken page.
+  const [suppliersLoading, setSuppliersLoading] = useState(true);
+
   useEffect(() => {
-    trpc.suppliers.list.query().then(setSuppliers);
+    trpc.suppliers.list
+      .query()
+      .then(setSuppliers)
+      .finally(() => setSuppliersLoading(false));
   }, []);
 
   // Applies the /purchase-orders/suggestions "Create PO" link's pre-fill once, on mount, from the
@@ -140,7 +148,25 @@ function NewPurchaseOrderForm() {
     }
   };
 
-  const total = lines.reduce((sum, l) => sum + Number(l.quantityOrderUnits) * Number(l.unitPrice), 0);
+  // Exact string-decimal preview, never float money math: the server computes the authoritative
+  // total on create; this preview must agree with it to the digit or it trains distrust. A line
+  // whose fields are mid-edit (invalid decimal) contributes null, and the whole preview shows
+  // an em dash rather than a total that silently excludes that line.
+  const total = lines.reduce<string | null>(
+    (sum, l) => (sum === null ? null : addDecimal(sum, multiplyDecimal(l.quantityOrderUnits, l.unitPrice) ?? '')),
+    '0'
+  );
+
+  if (storesLoading || suppliersLoading) {
+    return (
+      <>
+        <PageHeader title="New purchase order" description="A draft — you can change it until you submit it." />
+        <Card className="max-w-3xl">
+          <LoadingState />
+        </Card>
+      </>
+    );
+  }
 
   return (
     <>
@@ -246,7 +272,10 @@ function NewPurchaseOrderForm() {
                         {line.unitPrice}
                       </Td>
                       <Td variant="numeric">
-                        {(Number(line.quantityOrderUnits) * Number(line.unitPrice)).toFixed(2)}
+                        {(() => {
+                          const lineTotal = multiplyDecimal(line.quantityOrderUnits, line.unitPrice);
+                          return lineTotal !== null ? formatMoney(lineTotal) : <span className="text-content-subtle">—</span>;
+                        })()}
                       </Td>
                       <Td align="right">
                         <Button type="button" variant="ghost" onClick={() => removeDraftLine(line.key)}>
@@ -260,7 +289,9 @@ function NewPurchaseOrderForm() {
             )}
 
             {lines.length > 0 && (
-              <p className="mt-3 text-right text-sm font-medium text-content">Total: {total.toFixed(2)}</p>
+              <p className="mt-3 text-right text-sm font-medium text-content">
+                Total: {total !== null ? formatMoney(total) : '—'}
+              </p>
             )}
           </div>
 

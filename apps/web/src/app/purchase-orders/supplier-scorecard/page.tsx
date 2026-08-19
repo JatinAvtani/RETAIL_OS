@@ -39,8 +39,8 @@ const trendDelta = (direction: TrendDirection, higherIsBetter: boolean) => ({
 });
 
 /**
- * 008-13/008-15's scorecard: real components side by side, each drillable to the events that
- * produced it — never a single composite score (spec 05 §5.3.3 is explicit this is a fabricated-
+ * related work's scorecard: real components side by side, each drillable to the events that
+ * produced it — never a single composite score (the design is explicit this is a fabricated-
  * scoring anti-pattern the product exists to avoid). `StatTile`'s own `null`-is-"Unknown" rule
  * (I7 at the UI layer) means a supplier with no measured history yet renders as honestly unknown,
  * never a guessed 0%/100%.

@@ -20,6 +20,7 @@ import { invoiceMatchesRouter } from './routers/invoice-matches';
 import { settingsRouter } from './routers/settings';
 import { supplierPerformanceRouter } from './routers/supplier-performance';
 import { searchRouter } from './routers/search';
+import { assistantRouter } from './routers/assistant';
 
 export const appRouter = router({
   auth: authRouter,
@@ -43,6 +44,7 @@ export const appRouter = router({
   settings: settingsRouter,
   supplierPerformance: supplierPerformanceRouter,
   search: searchRouter,
+  assistant: assistantRouter,
 });
 
 export type AppRouter = typeof appRouter;

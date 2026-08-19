@@ -393,9 +393,20 @@ export const Sparkline = ({ points, width = 140, height = 30 }: { points: number
  * `position: sticky` lives on the `<th>` rather than the row — sticky inside an `overflow` ancestor
  * only resolves against that ancestor.
  */
-export const Table = ({ children, className }: { children: ReactNode; className?: string }) => (
+export const Table = ({
+  children,
+  className,
+  'aria-label': ariaLabel,
+}: {
+  children: ReactNode;
+  className?: string;
+  /** Names the table for assistive tech — a screen-reader user landing in a grid of numbers needs to know WHICH numbers before reading any of them. */
+  'aria-label'?: string;
+}) => (
   <div className={cx('relative max-h-[70vh] overflow-auto', className)}>
-    <table className="w-full border-collapse text-sm">{children}</table>
+    <table className="w-full border-collapse text-sm" {...(ariaLabel !== undefined ? { 'aria-label': ariaLabel } : {})}>
+      {children}
+    </table>
   </div>
 );
 
@@ -416,6 +427,9 @@ export const Th = ({
   className?: string;
 }) => (
   <th
+    // Every Th in this codebase heads a column (row headers would use a raw <th scope="row">), so
+    // the scope is declared here once rather than remembered at 26 call sites.
+    scope="col"
     className={cx(
       'sticky top-0 z-10 border-b border-border-strong bg-surface-sunken px-4 py-2.5',
       'text-xs font-semibold uppercase tracking-wide text-content-subtle',
@@ -546,16 +560,32 @@ export const Select = ({ className, ...props }: SelectHTMLAttributes<HTMLSelectE
 export const Field = ({
   label,
   hint,
+  error,
   children,
 }: {
   label: string;
   hint?: ReactNode;
+  /**
+   * A field-level validation message. Rendered inside the wrapping label (so assistive tech reads
+   * it with the field's name) with an icon AND text — the invalid state is never colour alone.
+   * Pass `aria-invalid` on the input itself at the call site; this renders the human explanation.
+   */
+  error?: string;
   children: ReactNode;
 }) => (
+  // The wrapping <label> associates the field name programmatically without threading ids — a
+  // control inside a label IS labelled by it.
   <label className="block">
     <span className="mb-1.5 block text-sm font-medium text-content">{label}</span>
     {children}
-    {hint && <span className="mt-1 block text-xs text-content-subtle">{hint}</span>}
+    {error ? (
+      <span role="alert" className="mt-1 flex items-center gap-1 text-xs font-medium text-danger">
+        <span aria-hidden="true">⚠</span>
+        {error}
+      </span>
+    ) : (
+      hint && <span className="mt-1 block text-xs text-content-subtle">{hint}</span>
+    )}
   </label>
 );
 

@@ -4,6 +4,10 @@ const nextConfig = {
   // no build step ships to a dist/ Next.js would resolve otherwise) — Next.js needs to be told to
   // transpile them itself rather than treating them as pre-built node_modules packages.
   transpilePackages: ['@retailos/domain', '@retailos/ui'],
+  // The floating dev-route indicator sits exactly over the sidebar's Collapse control at this
+  // layout's breakpoints, which reads as broken UI in any dev-server demo or screenshot. It
+  // carries no information the terminal doesn't already show; production builds never render it.
+  devIndicators: false,
   typescript: {
     // `pnpm typecheck` (this repo's real gate, one tsc --noEmit per package) already covers
     // apps/web. next build's own bundled typecheck pass is redundant with that AND more

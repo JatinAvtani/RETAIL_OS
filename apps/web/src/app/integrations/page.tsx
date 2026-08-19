@@ -36,7 +36,7 @@ const describeFreshness = (freshness: HealthSummary['freshness']) => {
 };
 
 /**
- * 006-13's own health metric had zero UI anywhere until now (a real gap the audit found —
+ * earlier work's own health metric had zero UI anywhere until now (a real gap the audit found —
  * `integrations.health`/`syncSquareCatalog`/`syncSquareOrders`/`reconcileSquareOrders` all existed,
  * exercised only by tests). Org-wide, not store-scoped, matching `health`'s own return shape: every
  * store the caller can see, each either showing its connection's real status/freshness/error or an

@@ -17,7 +17,7 @@ const STATUS_TONES: Record<CsvImportRow['status'], BadgeTone> = {
 };
 
 /**
- * 006-10's own CSV import flow had zero UI anywhere until now (all 8 `csvImport` procedures
+ * earlier work's own CSV import flow had zero UI anywhere until now (all 8 `csvImport` procedures
  * existed, exercised only by tests). Same presigned-upload shape `documents.requestUpload`/
  * `confirmUpload` already established (direct-to-S3 PUT, bytes verified server-side after) — the
  * one real difference is the fixed `text/csv` content-type `csvImport.requestUpload`'s presigned

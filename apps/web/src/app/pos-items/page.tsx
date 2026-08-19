@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { trpc } from '@/lib/trpc';
 import { useStores } from '@/lib/use-stores';
+import { formatMoney } from '@/lib/format';
+import { useOrgCurrency } from '@/lib/use-org-currency';
 import {
   Badge,
   Button,
@@ -21,13 +23,14 @@ import {
 type UnmappedItem = Awaited<ReturnType<typeof trpc.posItems.listUnmapped.query>>[number];
 
 /**
- * 006-11 (plan.md Phase 6, the last task in EPIC-006): unmapped POS items ranked by sales volume
+ * unmapped POS items ranked by sales volume
  * descending ("mapping the top 20 items covers ~80% of revenue"), each with fuzzy-suggested menu
  * item matches. The human always confirms or ignores explicitly (I9) — nothing here maps
  * automatically, even when a suggestion's score is 1 (an exact name match).
  */
 export default function PosItemsPage() {
   const { stores, selectedStoreId, setSelectedStoreId, loading: storesLoading } = useStores();
+  const orgCurrency = useOrgCurrency();
   const [items, setItems] = useState<UnmappedItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -140,7 +143,7 @@ export default function PosItemsPage() {
                       {item.totalRevenue === '0' ? (
                         <span className="text-content-subtle">—</span>
                       ) : (
-                        item.totalRevenue
+                        formatMoney(item.totalRevenue, orgCurrency)
                       )}
                     </Td>
                     <Td>

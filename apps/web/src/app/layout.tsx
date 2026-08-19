@@ -5,7 +5,15 @@ import './globals.css';
 export const metadata: Metadata = {
   title: 'Vyapaar',
   description: 'Know where your margin goes.',
-  icons: { icon: '/icon.svg' },
+  icons: {
+    // Both forms on purpose: the SVG is the primary declared icon, but plenty of consumers
+    // (Safari, link unfurlers, older chrome) request /favicon.ico unconditionally and use only
+    // that — with a 404 there they show a blank tab icon regardless of this declaration.
+    icon: [
+      { url: '/icon.svg', type: 'image/svg+xml' },
+      { url: '/favicon.ico', sizes: '32x32' },
+    ],
+  },
 };
 
 /*

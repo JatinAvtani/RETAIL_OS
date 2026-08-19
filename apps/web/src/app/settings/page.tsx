@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { TRPCClientError } from '@trpc/client';
 import { trpc } from '@/lib/trpc';
+import { shiftDecimalPoint } from '@/lib/format';
 import { Badge, Button, Card, CardHeader, ErrorNotice, Field, Input, LoadingState, PageHeader, Select, Table, Th, Td, Tr } from '@/components/ui';
 
 type Tolerances = Awaited<ReturnType<typeof trpc.settings.getMatchTolerances.query>>;
@@ -10,8 +11,15 @@ type Member = Awaited<ReturnType<typeof trpc.invitations.listMembers.query>>[num
 type PendingInvitation = Awaited<ReturnType<typeof trpc.invitations.listPending.query>>[number];
 
 const DEFAULT_PRICE_PERCENT_LABEL = '2%';
-const DEFAULT_PRICE_ABSOLUTE_LABEL = '$5';
+// No currency symbol: the tolerance compares against invoice amounts in the org's own currency,
+// and this UI does not know a symbol for it — "$" on an INR org's screen was a real, visible leak.
+const DEFAULT_PRICE_ABSOLUTE_LABEL = '5.00';
 const DEFAULT_QUANTITY_PERCENT_LABEL = '2%';
+
+/** Stored fraction → displayed percent: '0.02' → '2'. String decimal-shift — no float arithmetic on a business threshold. */
+const fractionToPercent = (fraction: string): string => shiftDecimalPoint(fraction, 2);
+/** Typed percent → stored fraction: '2' → '0.02'. */
+const percentToFraction = (percent: string): string => shiftDecimalPoint(percent, -2);
 
 const ROLES = ['OWNER', 'MANAGER', 'STAFF', 'VIEWER_FINANCE'] as const;
 
@@ -239,13 +247,15 @@ const TeamPanel = () => {
 };
 
 /**
- * 008-11 (spec D8, "avoid alert fatigue on cents"): the real settings surface for the three-way
- * match's per-org tolerance override — OWNER-only, confirmed with the user. Each field is a plain
- * decimal (0.02, not "2") to match exactly what `settings.updateMatchTolerances` stores and what
- * `classifyLineMatch` compares against — no unit conversion happens in this UI layer (I6: a
- * percent-to-fraction conversion at the UI boundary is exactly the kind of implicit arithmetic this
- * project avoids). An empty field means "use the default," submitted as `null`, never a fabricated
- * zero.
+ * "Avoid alert fatigue on cents": the real settings surface for the three-way
+ * match's per-org tolerance override — OWNER-only. The percent fields DISPLAY and ACCEPT percent
+ * ("2" under a "(%)" label) while `settings.updateMatchTolerances` stores the fraction (0.02) that
+ * `classifyLineMatch` compares against — converted exactly once, at this boundary, by a string
+ * decimal-point shift (`fractionToPercent`/`percentToFraction`), never float arithmetic. An
+ * earlier version pushed the storage unit onto the user ("enter as 0.02" under a "(%)" label) in
+ * the name of avoiding conversion; that was a label/value unit mismatch, which is the very error
+ * class explicit-single-boundary conversion exists to prevent, not an application of it. An empty
+ * field means "use the default," submitted as `null`, never a fabricated zero.
  */
 export default function SettingsPage() {
   const [data, setData] = useState<Tolerances | null>(null);
@@ -265,9 +275,9 @@ export default function SettingsPage() {
       .query()
       .then((result) => {
         setData(result);
-        setPricePercent(result.matchPriceTolerancePercent ?? '');
+        setPricePercent(result.matchPriceTolerancePercent ? fractionToPercent(result.matchPriceTolerancePercent) : '');
         setPriceAbsolute(result.matchPriceToleranceAbsolute ?? '');
-        setQuantityPercent(result.matchQuantityTolerancePercent ?? '');
+        setQuantityPercent(result.matchQuantityTolerancePercent ? fractionToPercent(result.matchQuantityTolerancePercent) : '');
       })
       .catch((err) => {
         const message = err instanceof TRPCClientError ? err.message : 'Could not load settings.';
@@ -286,9 +296,9 @@ export default function SettingsPage() {
     setError(null);
     try {
       const result = await trpc.settings.updateMatchTolerances.mutate({
-        matchPriceTolerancePercent: pricePercent.trim() === '' ? null : pricePercent.trim(),
+        matchPriceTolerancePercent: pricePercent.trim() === '' ? null : percentToFraction(pricePercent.trim()),
         matchPriceToleranceAbsolute: priceAbsolute.trim() === '' ? null : priceAbsolute.trim(),
-        matchQuantityTolerancePercent: quantityPercent.trim() === '' ? null : quantityPercent.trim(),
+        matchQuantityTolerancePercent: quantityPercent.trim() === '' ? null : percentToFraction(quantityPercent.trim()),
       });
       setData(result);
       setSaved(true);
@@ -337,15 +347,15 @@ export default function SettingsPage() {
         </p>
 
         <div className="grid gap-4 sm:grid-cols-3">
-          <Field label="Price can be off by (%)" hint={`Default ${DEFAULT_PRICE_PERCENT_LABEL} — enter as 0.02`}>
+          <Field label="Price can be off by (%)" hint={`Default ${DEFAULT_PRICE_PERCENT_LABEL} — enter 2 for 2%`}>
             <Input
               value={pricePercent}
               onChange={(e) => setPricePercent(e.target.value)}
-              placeholder="0.02"
+              placeholder="2"
               inputMode="decimal"
             />
           </Field>
-          <Field label="Or off by this amount" hint={`Default ${DEFAULT_PRICE_ABSOLUTE_LABEL}`}>
+          <Field label="Or off by this amount" hint={`In your currency — default ${DEFAULT_PRICE_ABSOLUTE_LABEL}`}>
             <Input
               value={priceAbsolute}
               onChange={(e) => setPriceAbsolute(e.target.value)}
@@ -353,11 +363,11 @@ export default function SettingsPage() {
               inputMode="decimal"
             />
           </Field>
-          <Field label="Quantity can be off by (%)" hint={`Default ${DEFAULT_QUANTITY_PERCENT_LABEL} — enter as 0.02`}>
+          <Field label="Quantity can be off by (%)" hint={`Default ${DEFAULT_QUANTITY_PERCENT_LABEL} — enter 2 for 2%`}>
             <Input
               value={quantityPercent}
               onChange={(e) => setQuantityPercent(e.target.value)}
-              placeholder="0.02"
+              placeholder="2"
               inputMode="decimal"
             />
           </Field>

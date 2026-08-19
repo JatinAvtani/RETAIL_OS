@@ -23,7 +23,7 @@ type LineDraft = {
 };
 
 /**
- * 008-07 (plan.md Phase 3, spec 05 §5.2.3): a real delivery arrives, a manager records what
+ * a real delivery arrives, a manager records what
  * actually showed up per PO line — received qty (defaults to what's still outstanding), lot
  * number, expiry, and a discrepancy code if something's off. Every line still un-fully-received
  * (per `quantityBaseUnits` minus the PO line's own `receivedQuantityBaseUnits`, which accumulates
@@ -109,7 +109,7 @@ export default function ReceivePurchaseOrderPage() {
       });
 
       // A goods_receipt_line's real id only exists AFTER confirmReceipt creates it — photo upload
-      // (008-08) needs that real id, so a line with a discrepancy code gets a follow-up "attach
+      // needs that real id, so a line with a discrepancy code gets a follow-up "attach
       // photos" step on this same page rather than navigating away immediately. A clean receipt
       // (no discrepancies) has nothing to photograph and goes straight back to the PO.
       const anyDiscrepancy = lines.some((l) => l.discrepancyCode !== undefined);

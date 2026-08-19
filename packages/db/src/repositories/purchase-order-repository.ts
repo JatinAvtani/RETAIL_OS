@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, isNotNull, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNotNull, lt, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { generateId } from '@retailos/domain';
 import {
@@ -22,7 +22,7 @@ import {
 } from '../schema/index';
 import { TenantScopedRepository } from '../tenant-repository';
 
-/** Spec 05 §5.2.2's named events (`po.created`/`po.approved`/`po.sent`/`po.cancelled`), extended
+/** the design's named events (`po.created`/`po.approved`/`po.sent`/`po.cancelled`), extended
  * with symmetric ones the spec is silent on (`po.submitted`/`po.rejected`) — the same precedent
  * `documents.ts`'s `document.rejected` already established (spec names `document.approved` only). */
 const EVENT_TYPE_BY_TRANSITION: Record<PurchaseOrderEvent, string> = {
@@ -56,11 +56,11 @@ export type AddLineResult =
   | { readonly ok: false; readonly reason: 'NOT_FOUND' | 'NOT_EDITABLE' };
 
 /**
- * 008-01's schema-task repository for `purchase_orders`/`purchase_order_lines` — deliberately
+ * earlier work's schema-task repository for `purchase_orders`/`purchase_order_lines` — deliberately
  * narrow, matching every prior schema task's precedent (`DocumentRepository`, `StockMovementRepository`):
  * schema plus the minimal operations that prove it's real and correctly tenant-scoped. Reorder
- * suggestion generation (008-02, already built in packages/domain), approval-threshold enforcement
- * (008-05), PDF/email (008-06), and receiving (008-07+) are all separate, later tasks. This class
+ * suggestion generation (already built in packages/domain), approval-threshold enforcement
+ * PDF/email, and receiving are all separate, later tasks. This class
  * does not compute reorder quantities, enforce approval thresholds, or post any stock movement.
  */
 export class PurchaseOrderRepository extends TenantScopedRepository<typeof purchaseOrders> {
@@ -69,7 +69,7 @@ export class PurchaseOrderRepository extends TenantScopedRepository<typeof purch
   }
 
   /**
-   * `po.created` (spec 05 §5.2.2's named event) + an audit log entry, both in the SAME transaction
+   * `po.created` + an audit log entry, both in the SAME transaction
    * as the insert (I8) — matching `DocumentRepository.reviewDecision`'s established pattern. Only
    * written when `createdByUserId` is provided (a real actor) — a system-seeded PO with no real
    * actor (none exists in this codebase yet, but the method signature allows it) skips the audit
@@ -135,13 +135,66 @@ export class PurchaseOrderRepository extends TenantScopedRepository<typeof purch
   }
 
   /**
-   * A DRAFT-only add — 008-05 (PO create/edit) is the real editing surface. Refuses to add a line
+   * The purchase-order list view: newest first, keyset-paginated on `id` — ids are UUID v7
+   * (time-ordered), so `id < cursor` IS "strictly older than the last row the caller saw", with
+   * none of OFFSET's skipped/duplicated rows when new POs land between pages. The page total is a
+   * real SQL SUM over the PO's own lines (money is summed in SQL, never re-derived in JS) — NULL
+   * means the PO genuinely has no lines yet (SUM over zero rows), which the caller must present as
+   * that fact, never as a zero total: a figure of 0.00 on a draft nobody has priced reads as a
+   * real amount.
+   *
+   * Returns one row beyond `limit` so the caller can tell "there is another page" apart from
+   * "this page happened to be exactly full" without a second COUNT query.
+   */
+  async listForStore(input: {
+    storeId: string;
+    status?: PurchaseOrderStatus;
+    supplierId?: string;
+    cursor?: string;
+    limit: number;
+  }) {
+    const rows = await this.runScoped((db, scopedWhere) =>
+      db
+        .select({
+          id: purchaseOrders.id,
+          poNumber: purchaseOrders.poNumber,
+          status: purchaseOrders.status,
+          currency: purchaseOrders.currency,
+          createdAt: purchaseOrders.createdAt,
+          supplierId: purchaseOrders.supplierId,
+          supplierName: suppliers.name,
+          total: sql<string | null>`(SELECT SUM(${purchaseOrderLines.lineTotal}) FROM ${purchaseOrderLines} WHERE ${purchaseOrderLines.purchaseOrderId} = ${purchaseOrders.id})`,
+        })
+        .from(purchaseOrders)
+        .leftJoin(suppliers, eq(suppliers.id, purchaseOrders.supplierId))
+        .where(
+          scopedWhere(
+            and(
+              eq(purchaseOrders.storeId, input.storeId),
+              ...(input.status !== undefined ? [eq(purchaseOrders.status, input.status)] : []),
+              ...(input.supplierId !== undefined ? [eq(purchaseOrders.supplierId, input.supplierId)] : []),
+              ...(input.cursor !== undefined ? [lt(purchaseOrders.id, input.cursor)] : [])
+            )
+          )
+        )
+        .orderBy(desc(purchaseOrders.id))
+        .limit(input.limit + 1)
+    );
+    const page = rows.slice(0, input.limit);
+    return {
+      orders: page,
+      nextCursor: rows.length > input.limit ? (page[page.length - 1]?.id ?? null) : null,
+    };
+  }
+
+  /**
+   * A DRAFT-only add — earlier work (PO create/edit) is the real editing surface. Refuses to add a line
    * to an immutable PO (`isPurchaseOrderImmutable`, packages/domain) — the same state-machine
    * module `applyTransition` uses, so "can this PO still be edited" is answered identically
    * everywhere, never re-derived ad hoc per call site.
    *
    * Returns a typed `NOT_FOUND`/`NOT_EDITABLE` reason rather than a bare `null` — the caller
-   * (008-05's router) needs to distinguish "doesn't exist / belongs to another org" (404, matching
+   * needs to distinguish "doesn't exist / belongs to another org" (404, matching
    * every other cross-tenant convention in this codebase) from "exists but can't be edited right
    * now" (400, a real validation error, not an access question). Collapsing both into one `null`
    * would leak a cross-org attacker a 400 instead of a 404 — a real, confirmed gap found by this
@@ -218,7 +271,7 @@ export class PurchaseOrderRepository extends TenantScopedRepository<typeof purch
   }
 
   /**
-   * The real order VALUE (sum of every line's `lineTotal`) — 008-05's approval-threshold check
+   * The real order VALUE (sum of every line's `lineTotal`) — earlier work's approval-threshold check
    * needs this to compare against a manager's `approvalLimit`. Returns `null` (never a fabricated
    * `'0'`) for a PO with zero lines — I7: "nothing has been priced yet" is a different fact from
    * "this order is worth $0," and a $0 order would trivially clear ANY approval threshold, which
@@ -235,7 +288,7 @@ export class PurchaseOrderRepository extends TenantScopedRepository<typeof purch
   }
 
   /**
-   * 008-06: assembles everything `generatePurchaseOrderPdf` (packages/domain, a pure function with
+   * assembles everything `generatePurchaseOrderPdf` (packages/domain, a pure function with
    * no DB access of its own) needs — the PO header, store, supplier, and every line joined to its
    * product/unit/supplier-SKU names. Returns `null` if the PO doesn't exist in this org (the
    * standard cross-tenant-safe 404 shape every other `findById`-style method here uses).
@@ -323,12 +376,12 @@ export class PurchaseOrderRepository extends TenantScopedRepository<typeof purch
   }
 
   /**
-   * 008-06: records the outcome of a real SEND — the object storage key the generated PDF landed
+   * records the outcome of a real SEND — the object storage key the generated PDF landed
    * at, and who the (mocked) email was addressed to. Deliberately a separate write from
    * `applyTransition`'s SEND branch: PDF generation + a mock email call are not database
    * operations, so they cannot happen INSIDE that method's transaction — this runs immediately
    * after, once both have genuinely succeeded. If the caller failed before reaching this (a PDF
-   * generation error, an email-send failure), the PO is still correctly `SENT` — spec 05 §5.2.2
+   * generation error, an email-send failure), the PO is still correctly `SENT` — the design
    * ties immutability to the state transition itself, not to whether the notification succeeded.
    */
   async recordSent(purchaseOrderId: string, pdfObjectKey: string, emailSentTo: string): Promise<void> {
@@ -342,18 +395,18 @@ export class PurchaseOrderRepository extends TenantScopedRepository<typeof purch
 
   /**
    * Combines the pure domain state machine (`applyPurchaseOrderTransition`) with the real database
-   * write, guarded by spec 08 §8.2's own literal optimistic-locking example
+   * write, guarded by the design's own literal optimistic-locking example
    * (`WHERE id = $1 AND version = $2`) — prevents two concurrent approvals of the same PO from
    * silently racing. `expectedVersion` must match the row's CURRENT version or this returns
-   * `{ ok: false }` with a conflict reason; the caller (008-05's real approval endpoint) is
-   * responsible for surfacing that as a 409, matching spec 08 §8.2's stated intent.
+   * `{ ok: false }` with a conflict reason; the caller is
+   * responsible for surfacing that as a 409, matching the design's stated intent.
    *
    * The event-specific actor/timestamp columns (`approvedAt`/`approvedByUserId`,
    * `rejectedAt`/`rejectedByUserId`, etc.) are set only for the event that actually fired — never
    * retroactively cleared on a later transition, so "who approved this" stays answerable even after
    * the PO later moves to SENT/RECEIVED/CLOSED.
    *
-   * The status update, the outbox event (spec 05 §5.2.2's own named events, `EVENT_TYPE_BY_TRANSITION`
+   * The status update, the outbox event (the design's own named events, `EVENT_TYPE_BY_TRANSITION`
    * above), and an audit log entry all write inside this SAME transaction (I8) — matching
    * `DocumentRepository.reviewDecision`'s established pattern, since composing them from outside
    * would silently run as separate transactions.
@@ -439,7 +492,7 @@ export class PurchaseOrderRepository extends TenantScopedRepository<typeof purch
     });
   }
 
-  /** POs at or past `APPROVED` — the real "someone signed off on this spend" gate, confirmed with the user as the source for `total_spend`/`spend_by_category` (spec 12 §F), since this codebase has no invoice-level approval concept. */
+  /** POs at or past `APPROVED` — the real "someone signed off on this spend" gate, confirmed with the user as the source for `total_spend`/`spend_by_category`, since this codebase has no invoice-level approval concept. */
   private static readonly APPROVED_OR_LATER_STATUSES: PurchaseOrderStatus[] = [
     'APPROVED',
     'SENT',
@@ -541,7 +594,7 @@ export class PurchaseOrderRepository extends TenantScopedRepository<typeof purch
     return { poCount: row ? Number(row.poCount) : 0, totalSpend: row?.totalSpend ?? null };
   }
 
-  /** POs SENT to a supplier but not yet fully received — `pending_receipts_count`'s real input (009-15). `PARTIALLY_RECEIVED` counts too: a PO in that state still has real outstanding lines awaiting a further delivery. */
+  /** POs SENT to a supplier but not yet fully received — `pending_receipts_count`'s real input. `PARTIALLY_RECEIVED` counts too: a PO in that state still has real outstanding lines awaiting a further delivery. */
   private static readonly PENDING_RECEIPT_STATUSES: PurchaseOrderStatus[] = ['SENT', 'PARTIALLY_RECEIVED'];
 
   async countPendingReceipts(storeId: string): Promise<number> {
@@ -555,7 +608,7 @@ export class PurchaseOrderRepository extends TenantScopedRepository<typeof purch
   }
 
   /**
-   * `open_po_count`'s real input (009-15) — a count of POs at ONE given status for a store, matching
+   * `open_po_count`'s real input — a count of POs at ONE given status for a store, matching
    * this codebase's established one-call-per-dimension precedent (`spend_by_category`/
    * `waste_by_reason`) for a metric that would otherwise need to return a breakdown the catalog's
    * fixed scalar `MetricResult` contract can't carry.
@@ -571,15 +624,15 @@ export class PurchaseOrderRepository extends TenantScopedRepository<typeof purch
   }
 
   /**
-   * `fact_purchase_lines`'s real input (009-01) — every real PO line whose PARENT PO was CREATED
+   * `fact_purchase_lines`'s real input — every real PO line whose PARENT PO was CREATED
    * within the resolved local day (`date` = PO `createdAt`, confirmed with the user over the
    * goods-receipt date, matching `total_spend`/`spend_by_category`'s own already-established
-   * `createdAt`-based period convention, 009-08). Deliberately NOT filtered to
+   * `createdAt`-based period convention, earlier work). Deliberately NOT filtered to
    * approved-or-later status — a real order line placed and later rejected/cancelled is still a
    * real purchasing event that happened on this day, and `total_spend`'s own status filter is that
    * metric's separate, later decision about which lines count as committed spend, not a fact this
    * table should pre-decide. `poId` is the SINGLE PO a line came from — a day with multiple POs to
-   * the same supplier/product produces multiple fact rows, never merged, so drill-through (009-16)
+   * the same supplier/product produces multiple fact rows, never merged, so drill-through
    * always has one real source to point at.
    */
   async findLinesForFactAggregation(storeId: string, from: Date, to: Date) {

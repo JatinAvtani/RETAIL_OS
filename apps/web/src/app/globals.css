@@ -36,13 +36,22 @@
   --color-surface-raised: #fbfaf8;
   --color-surface-sunken: #e8e5de;
   --color-border: #d8d3c9;
-  --color-border-strong: #bcb5a8;
+  /* 3.01:1 against surface-raised — WCAG 1.4.11 non-text minimum for a control boundary. The
+     previous #bcb5a8 measured 1.95:1: an input's only resting-state identifier was invisible at a
+     contrast level the standard treats as not-there. Decorative hairlines stay on --color-border. */
+  --color-border-strong: #969186;
 
   --color-content: #1c1b19;
   --color-content-muted: #5e5a53;
-  --color-content-subtle: #8c867c;
+  /* 4.54:1 on surface-sunken (its hardest ground — table headers), 5.02:1 on surface. The previous
+     #8c867c measured 2.87:1 on sunken: caption-grade text below AA. This sits close to
+     content-muted by design necessity; the hierarchy between them is carried by size and weight,
+     which survive the compression. */
+  --color-content-subtle: #6a665e;
 
-  --color-accent: #8a6a1f;
+  /* 4.87:1 on surface, 4.54:1 on accent-soft. The previous #8a6a1f measured 4.43:1 on surface —
+     under AA for the link/figure text this token colours. Same brass hue, one step deeper. */
+  --color-accent: #82641d;
   --color-accent-hover: #6e5416;
   --color-accent-soft: #f0e8d4;
   --color-accent-content: #fbfaf8;
@@ -56,9 +65,11 @@
 
   /* The I7 colour. A dead, fully-desaturated grey belonging to no status family — because "we don't
      know" is emphatically not a status, and must never be mistaken for either a good or a bad
-     reading. Deliberately distinct from --color-content-subtle, which is for labels and captions
-     (real text that happens to be quiet) rather than for absent data. */
-  --color-unknown: #7a7168;
+     reading. Deliberately distinct in ROLE from --color-content-subtle (labels and captions — real
+     text that happens to be quiet); after both were darkened to meet AA the two greys sit close,
+     and the visible distinction is carried by the italic style and the words themselves.
+     4.55:1 on surface-sunken (was 4.20:1 on surface — an unknown a reader couldn't quite read). */
+  --color-unknown: #6d655d;
 
   /* 3px, not 0.75rem. `rounded-lg` on every surface is the most recognisable tell of generic 2020s
      SaaS; at 3px the components read as ruled and printed rather than soft-carded, which is the
@@ -77,11 +88,14 @@
   --color-surface-raised: #1f1d1a;
   --color-surface-sunken: #100f0d;
   --color-border: #332f2a;
-  --color-border-strong: #4a443c;
+  /* 3.03:1 against surface-raised — same WCAG 1.4.11 boundary minimum as the light theme; the
+     previous #4a443c measured 1.75:1. */
+  --color-border-strong: #6c6861;
 
   --color-content: #ede9e2;
   --color-content-muted: #a8a196;
-  --color-content-subtle: #7d766c;
+  /* 4.54:1 on surface-raised (its hardest dark ground); the previous #7d766c measured 3.75:1. */
+  --color-content-subtle: #8a847b;
 
   --color-accent: #c9a24e;
   --color-accent-hover: #ddb865;
@@ -111,6 +125,31 @@ body {
   color: var(--color-content);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+}
+
+/* Keyboard focus: one global, token-based ring for EVERY interactive element, so a link in a
+   table row is exactly as findable by keyboard as a primary button. :focus-visible (not :focus)
+   keeps the ring off mouse clicks. The accent measures 4.87:1 on the light surface and 7.61:1 on
+   the dark one — both clear of the 3:1 non-text minimum — and the 2px offset keeps the ring
+   legible on top of any card or badge background. Components may layer their own focus styles;
+   this rule is the floor nothing interactive can fall below. */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* Vestibular safety: when the OS asks for reduced motion, transitions and animations collapse to
+   effectively instant rather than being removed — state changes still happen, they just don't
+   travel. The skeleton pulse below documents the same principle locally. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* Tabular figures everywhere a quantity or money value is rendered — columns of numbers that don't

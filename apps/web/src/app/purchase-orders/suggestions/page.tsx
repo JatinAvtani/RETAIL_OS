@@ -15,10 +15,10 @@ const confidenceTone = (confidence: SupplierGroup['suggestions'][number]['sugges
 };
 
 /**
- * 008-04: the first real caller of 008-02's `suggestReorder`. Grouped by supplier (spec D10 —
- * "manager orders per supplier, not per item"), each row shows the plain-language explanation
- * `plan.md` itself specifies, so a manager can verify the reasoning at a glance rather than trust
- * a bare number. "Create PO" (008-05) links to `/purchase-orders/new` with the store/supplier
+ * The first real caller of `suggestReorder`. Grouped by supplier —
+ * "manager orders per supplier, not per item" — each row shows the plain-language explanation
+ * the plan itself specifies, so a manager can verify the reasoning at a glance rather than trust
+ * a bare number. "Create PO" links to `/purchase-orders/new` with the store/supplier
  * pre-selected — a deliberate integration point between the two tasks, not two unrelated screens —
  * but adds no lines automatically; a manager still confirms every line by hand on the create page.
  */
@@ -62,8 +62,11 @@ export default function ReorderSuggestionsPage() {
               </Select>
             )}
             <Link href="/purchase-orders/receive-walk-in">
-              <Button type="button" variant="ghost">
-                Receive walk-in purchase
+              {/* whitespace-nowrap: at narrow widths this label wrapped onto three lines inside
+                  its own button — a button tall enough to look like a card. The label is short
+                  enough to keep whole; the flex toolbar wraps BETWEEN controls instead. */}
+              <Button type="button" variant="ghost" className="whitespace-nowrap">
+                Receive walk-in
               </Button>
             </Link>
           </div>

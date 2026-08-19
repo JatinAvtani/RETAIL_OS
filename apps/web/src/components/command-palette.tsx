@@ -33,7 +33,7 @@ const resultHref = (result: SearchResult): string => {
 };
 
 /**
- * 009-17 (spec 11 §11.4) — "the primary navigation mechanism for power users." A real global
+ * "the primary navigation mechanism for power users." A real global
  * Cmd/Ctrl+K overlay mounted once in `AppShell` (every authenticated page renders through it), not
  * a per-page search box. Debounced at 150ms (the spec's own literal number). Results are grouped by
  * entity type (never a single re-ranked list — cross-entity score normalization is a genuinely
@@ -46,20 +46,30 @@ export const CommandPalette = () => {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResults>(EMPTY_RESULTS);
   const [loading, setLoading] = useState(false);
+  /** The ↑/↓ highlight position across ALL visible results, -1 = nothing highlighted yet. */
+  const [activeIndex, setActiveIndex] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Whatever had keyboard focus when the palette opened — focus must land back there on close, or a keyboard user is dumped at the top of the page. */
+  const triggerRef = useRef<HTMLElement | null>(null);
 
   const close = useCallback(() => {
     setOpen(false);
     setQuery('');
     setResults(EMPTY_RESULTS);
+    setActiveIndex(-1);
+    triggerRef.current?.focus();
+    triggerRef.current = null;
   }, []);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
-        setOpen((prev) => !prev);
+        setOpen((prev) => {
+          if (!prev && document.activeElement instanceof HTMLElement) triggerRef.current = document.activeElement;
+          return !prev;
+        });
       } else if (e.key === 'Escape') {
         close();
       }
@@ -68,7 +78,10 @@ export const CommandPalette = () => {
     // a sibling rather than a parent of this component, and a custom event is a smaller surface
     // than lifting this component's entire query/results state up into the shell just to expose
     // one `open()` call.
-    const onOpenRequest = () => setOpen(true);
+    const onOpenRequest = () => {
+      if (document.activeElement instanceof HTMLElement) triggerRef.current = document.activeElement;
+      setOpen(true);
+    };
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('retailos:open-search', onOpenRequest);
     return () => {
@@ -111,6 +124,8 @@ export const CommandPalette = () => {
   };
 
   const totalResults = GROUPS.reduce((sum, g) => sum + results[g.key].length, 0);
+  /** Every visible result in display order — the list ↑/↓ walk and Enter selects from. */
+  const flatResults = GROUPS.flatMap((group) => results[group.key]);
 
   if (!open) return null;
 
@@ -120,13 +135,46 @@ export const CommandPalette = () => {
       onClick={close}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Search"
+        onKeyDown={(e) => {
+          // The footer promises "↑↓ to navigate · Enter to select" — this handler is that promise.
+          // Focus STAYS on the input the whole time (the roving highlight is aria-activedescendant,
+          // not a focus move), so typing is never interrupted by navigating.
+          if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            setActiveIndex((prev) => (flatResults.length === 0 ? -1 : (prev + 1) % flatResults.length));
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            setActiveIndex((prev) => (flatResults.length === 0 ? -1 : (prev - 1 + flatResults.length) % flatResults.length));
+          } else if (e.key === 'Enter') {
+            const active = activeIndex >= 0 ? flatResults[activeIndex] : flatResults[0];
+            if (active) {
+              e.preventDefault();
+              navigate(active);
+            }
+          } else if (e.key === 'Tab') {
+            // The palette is a modal: the only tab stop is the input itself, so Tab must not
+            // escape into the page underneath. Result selection is arrows + Enter, per the footer.
+            e.preventDefault();
+          }
+        }}
         className="w-full max-w-xl overflow-hidden rounded-card border border-border-strong bg-surface-raised shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <input
           ref={inputRef}
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setActiveIndex(-1);
+          }}
+          role="combobox"
+          aria-expanded={totalResults > 0}
+          aria-controls="command-palette-results"
+          aria-activedescendant={activeIndex >= 0 ? `palette-result-${activeIndex}` : undefined}
+          aria-label="Search products, suppliers, purchase orders, documents"
           placeholder="Search products, suppliers, purchase orders, documents…"
           className="w-full border-b border-border bg-transparent px-5 py-4 text-[15px] text-content outline-none placeholder:text-content-subtle"
         />
@@ -144,29 +192,47 @@ export const CommandPalette = () => {
               Nothing matches &ldquo;{query}&rdquo;.
             </p>
           )}
-          {!loading &&
-            GROUPS.map(
-              (group) =>
-                results[group.key].length > 0 && (
+          {!loading && (
+            <div id="command-palette-results" role="listbox" aria-label="Search results">
+              {GROUPS.map((group) => {
+                if (results[group.key].length === 0) return null;
+                // The flat position of this group's first result — activeIndex and the rendered
+                // list must count through the SAME ordering or ↑/↓ highlights the wrong row.
+                const offset = GROUPS.slice(0, GROUPS.indexOf(group)).reduce(
+                  (sum, g) => sum + results[g.key].length,
+                  0
+                );
+                return (
                   <div key={group.key} className="py-1.5">
                     <p className="px-5 py-1.5 text-xs font-semibold uppercase tracking-wide text-content-subtle">{group.label}</p>
-                    {results[group.key].map((result) => (
-                      <button
-                        key={result.id}
-                        type="button"
-                        onClick={() => navigate(result)}
-                        className={cx(
-                          'flex w-full items-center justify-between gap-3 px-5 py-2 text-left text-sm',
-                          'text-content hover:bg-surface-sunken'
-                        )}
-                      >
-                        <span className="truncate font-medium">{result.title}</span>
-                        {result.subtitle && <span className="shrink-0 truncate text-xs text-content-subtle">{result.subtitle}</span>}
-                      </button>
-                    ))}
+                    {results[group.key].map((result, indexInGroup) => {
+                      const flatIndex = offset + indexInGroup;
+                      const isHighlighted = flatIndex === activeIndex;
+                      return (
+                        <button
+                          key={result.id}
+                          id={`palette-result-${flatIndex}`}
+                          type="button"
+                          role="option"
+                          aria-selected={isHighlighted}
+                          tabIndex={-1}
+                          onClick={() => navigate(result)}
+                          onMouseMove={() => setActiveIndex(flatIndex)}
+                          className={cx(
+                            'flex w-full items-center justify-between gap-3 px-5 py-2 text-left text-sm text-content',
+                            isHighlighted ? 'bg-surface-sunken' : 'hover:bg-surface-sunken'
+                          )}
+                        >
+                          <span className="truncate font-medium">{result.title}</span>
+                          {result.subtitle && <span className="shrink-0 truncate text-xs text-content-subtle">{result.subtitle}</span>}
+                        </button>
+                      );
+                    })}
                   </div>
-                )
-            )}
+                );
+              })}
+            </div>
+          )}
         </div>
         <div className="flex items-center justify-between border-t border-border px-5 py-2.5 text-xs text-content-subtle">
           <span>↑↓ to navigate · Enter to select</span>

@@ -12,7 +12,10 @@ import { registerDocumentEmailWebhookRoute } from './webhooks/document-email-web
 const WEB_ORIGIN = process.env.WEB_ORIGIN ?? 'http://localhost:3000';
 
 export const buildServer = (options: { logger?: boolean } = {}) => {
-  const app = Fastify({ logger: options.logger ?? true });
+  // tRPC batches every query a page fires into one URL path segment. Fastify's 100-char default
+  // rejects those with a 414 *before* CORS headers are attached, so the browser reports it as an
+  // opaque CORS failure rather than a 414 — a real bug that only shows on query-heavy pages.
+  const app = Fastify({ logger: options.logger ?? true, maxParamLength: 5000 });
 
   // No signing secret configured: the session cookie's value is an opaque, unguessable
   // Redis-backed token (packages/session), not a value whose integrity depends on a signature —

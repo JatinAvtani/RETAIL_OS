@@ -36,9 +36,9 @@ const fmt = (m: { amount: string; currency: string } | null): string | null =>
 const humanizeStatus = (status: string) => status.toLowerCase().replace(/_/g, ' ');
 
 /**
- * 009-15's real UI consumer — `dashboard.managerSummary` shipped with zero `apps/web` page in its
+ * earlier work's real UI consumer — `dashboard.managerSummary` shipped with zero `apps/web` page in its
  * own session (API-only, confirmed as the real scope at the time). This closes that gap: the six
- * sections spec 12 §12.5 names for the manager dashboard, each a real number from the metric
+ * sections the design names for the manager dashboard, each a real number from the metric
  * catalog, laid out the same "stat tiles + cards" shape the owner dashboard (`/dashboard`) already
  * established rather than inventing a second visual language.
  *

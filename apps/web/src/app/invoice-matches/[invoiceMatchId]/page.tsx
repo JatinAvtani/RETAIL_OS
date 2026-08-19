@@ -39,7 +39,7 @@ const SEVERITY_LABELS: Record<string, string> = {
 };
 
 /**
- * 008-10 (plan.md Phase 4, spec 05 §5.2.4): "the financial control that catches real money" —
+ * "the financial control that catches real money" —
  * this is the screen a manager actually reads to see it. Runs automatically after
  * `documents.approve` for an INVOICE-type document (no manual "run match" button here — matching
  * `PostingService`'s own confirmed-with-the-user precedent of running inline, not as a separate

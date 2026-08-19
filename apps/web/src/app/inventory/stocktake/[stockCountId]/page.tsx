@@ -34,7 +34,7 @@ const STATUS_TONES: Record<string, BadgeTone> = {
 };
 
 /**
- * The actual "stocktake sheet" plan.md Phase 7 describes — lines already arrive ordered by
+ * The actual "stocktake sheet" the plan Phase 7 describes — lines already arrive ordered by
  * physical storage location from `stocktake.get` (`findLinesOrderedByStorageLocation`), so this
  * page renders them in that order as-is rather than re-sorting client-side.
  */

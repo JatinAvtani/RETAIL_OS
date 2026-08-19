@@ -32,7 +32,7 @@ type RecipeCost = Awaited<ReturnType<typeof trpc.recipes.cost.query>>;
 const formatMoneyAmount = (amount: unknown): string => Number(amount).toFixed(2);
 
 /**
- * "Live computed cost" (plan.md Phase 5): the cost panel is fetched fresh from `recipes.cost`
+ * "Live computed cost": the cost panel is fetched fresh from `recipes.cost`
  * (packages/metrics' `computeRecipeCost`, the ONLY function allowed to sum these numbers, I2) on
  * load — a real, server-computed number, never estimated client-side. `total === 'unknown'`
  * renders as "Cost unknown," never `$0.00` (I7): a recipe missing even one confirmed supplier

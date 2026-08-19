@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
+import { trimZeros } from '@/lib/format';
 import {
   Button,
   Card,
@@ -64,7 +65,7 @@ export default function RecipesPage() {
                 <Tr key={recipe.recipeGroupId}>
                   <Td className="font-medium">{recipe.name}</Td>
                   <Td variant="numeric">
-                    {recipe.yieldQuantity}
+                    {trimZeros(recipe.yieldQuantity)}
                   </Td>
                   <Td variant="actions">
                     <Link

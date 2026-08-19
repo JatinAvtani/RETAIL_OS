@@ -8,11 +8,11 @@ import { Badge, Card, EmptyState, ErrorNotice, Input, LoadingState, PageHeader, 
 type SearchResult = Awaited<ReturnType<typeof trpc.search.documents.query>>;
 
 /**
- * 009-18's real UI consumer — `search.documents` shipped with zero `apps/web` page in its own
+ * earlier work's real UI consumer — `search.documents` shipped with zero `apps/web` page in its own
  * session (confirmed as separate, deferred UI work at the time; the command palette already covers
  * quick lookup via `search.global`, but has no room to show WHICH search mode ran or a longer
  * result list). This page is that dedicated surface: a plain search box, a real mode indicator
- * (`Lexical` vs. `Hybrid` — spec 11 §11.5's own routing decision made visible, not hidden), and a
+ * (`Lexical` vs. `Hybrid` — the design's own routing decision made visible, not hidden), and a
  * full result list linking to each document's real review page.
  */
 export default function DocumentsSearchPage() {

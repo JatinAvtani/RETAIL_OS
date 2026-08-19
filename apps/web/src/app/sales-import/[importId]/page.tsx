@@ -25,7 +25,7 @@ const OPTIONAL_FIELDS = [
 ] as const;
 
 /**
- * The mapping + commit screen — the real work of 006-10's flow. `detectedHeaders` is only present
+ * The mapping + commit screen — the real work of earlier work's flow. `detectedHeaders` is only present
  * once (recorded by `confirmUpload`, read back here rather than re-parsed) — this page never
  * downloads or parses the file itself, matching the "server verifies bytes once" boundary the
  * upload step already established. Committing is blocked until every REQUIRED field has a mapped
