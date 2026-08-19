@@ -4,6 +4,7 @@ import {
   auditLogs,
   createDb,
   categories,
+  conversations,
   documentExtractions,
   documents,
   extractionCorrections,
@@ -17,6 +18,7 @@ import {
   lots,
   memberships,
   menuItems,
+  messages,
   organizations,
   outboxEvents,
   posConnections,
@@ -51,7 +53,7 @@ import { extractionQueue } from './context';
 import type { FastifyInstance } from 'fastify';
 
 /**
- * Task 003-13, spec 14 §14.3, the closing merge-gate suite: for every registered route that fetches
+ * The design, the closing merge-gate suite: for every registered route that fetches
  * a resource by id, prove that tenant B's session can never read tenant A's resource — 403/404,
  * never 200. Two enforcement mechanisms in one file:
  *
@@ -64,7 +66,7 @@ import type { FastifyInstance } from 'fastify';
  *    a real tenant B user, call the real endpoint over real HTTP with tenant B's session against
  *    tenant A's resource id, assert the response is never a 200.
  */
-describe('cross-tenant suite (003-13 merge gate)', () => {
+describe('cross-tenant suite (merge gate)', () => {
   let app: FastifyInstance;
   const { db } = createDb(
     process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/retailos'
@@ -80,7 +82,7 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
 
   afterEach(async () => {
     // Full dependency-ordered teardown, deepest dependents first. Every table below was added as
-    // 005-16's registry entries surfaced it via a real FK violation, one at a time, each fix
+    // the inventory registry entries surfaced it via a real FK violation, one at a time, each fix
     // cascading into the next until the actual full dependency graph was worked out explicitly
     // (rather than continuing to patch reactively) — recorded here so it doesn't need
     // re-discovering:
@@ -94,19 +96,19 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
     //   recipe_components -> recipes, products
     //   recipes -> organizations
     //   product_variants -> products
-    //   pos_items -> menu_items (menuItemId, 006-11)
+    //   pos_items -> menu_items (menuItemId)
     //   products -> categories, units, storage_locations
     //   storage_locations -> stores
     //   categories -> organizations
     //   stores -> organizations
-    //   documents -> stores, users (uploadedByUserId, 007-02) — must be gone before BOTH the
+    //   documents -> stores, users (uploadedByUserId) — must be gone before BOTH the
     //     createdUserIds loop below AND the stores delete further down; found the same way as
     //     every entry above it, a real FK violation surfacing once documents.confirmUpload's
     //     registry entry became the first to genuinely write a documents row in this shared file.
     // Every row referencing a user (stock_counts' three *ByUserId columns, stock_movements'/
     // audit_logs' actorUserId, documents' uploadedByUserId) must be gone BEFORE the createdUserIds
     // loop deletes those users — a first version of this cleanup deleted users first (matching the
-    // position of every pre-005-16 seeded-resource cleanup, none of which reference users), which
+    // position of every earlier seeded-resource cleanup, none of which reference users), which
     // genuinely failed with a real FK violation and — because afterEach itself threw — silently
     // corrupted every subsequent test's isolation in the same run, cascading into failures on
     // entries this session never touched (stores.get, products.get, ...).
@@ -118,7 +120,7 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
       await db.delete(stockCounts).where(eq(stockCounts.organizationId, orgId));
       await db.delete(stockMovements).where(eq(stockMovements.organizationId, orgId));
       await db.delete(auditLogs).where(eq(auditLogs.organizationId, orgId));
-      // 007-05: documents.confirmUpload's registry entry now enqueues a real BullMQ job
+      // documents.confirmUpload's registry entry now enqueues a real BullMQ job
       // (jobId === documentId) — cleaned up before the row itself is deleted, same reasoning as
       // documents.test.ts's own afterEach, so this shared suite doesn't leave real jobs behind in
       // Redis on every run.
@@ -126,19 +128,19 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
       for (const doc of orgDocuments) {
         await (await extractionQueue.getJob(doc.id))?.remove();
       }
-      // 007-09/007-10: documents.getForReview/.approve/.reject/.confirmLineMapping's registry
+      // documents.getForReview/.approve/.reject/.confirmLineMapping's registry
       // entries now seed real document_extractions AND extraction_corrections rows
       // (extraction_corrections.extraction_id -> document_extractions.id, which itself references
       // documents.id) — both must be deleted before the documents delete below, or the FK blocks it.
       // Same recurring FK-teardown-order bug class this shared fixture has hit repeatedly.
       await db.delete(extractionCorrections).where(eq(extractionCorrections.organizationId, orgId));
       await db.delete(documentExtractions).where(eq(documentExtractions.organizationId, orgId));
-      // 008-10: invoiceMatches.get/.getByDocument/.pending's registry entries seed real
+      // invoiceMatches.get/.getByDocument/.pending's registry entries seed real
       // invoice_matches/invoice_match_lines rows referencing documents, purchase_order_lines, AND
       // goods_receipt_lines — all three must be gone before this SAME loop's own documents/
       // purchase_order_lines/goods_receipt_lines deletes further down, the same recurring
       // FK-teardown-order bug class this shared fixture has hit repeatedly.
-      // 008-13: supplierPerformance.components/.events registry entries + the runMatch/confirmReceipt
+      // supplierPerformance.components/.events registry entries + the runMatch/confirmReceipt
       // calls the invoiceMatches/goodsReceipts entries above already make all write real
       // supplier_performance_events rows referencing documents/goods_receipts/purchase_orders — must
       // be gone before every one of those parent-table deletes in this same function.
@@ -146,7 +148,7 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
       await db.delete(invoiceMatchLines).where(eq(invoiceMatchLines.organizationId, orgId));
       await db.delete(invoiceMatches).where(eq(invoiceMatches.organizationId, orgId));
       await db.delete(documents).where(eq(documents.organizationId, orgId));
-      // 008-07: goodsReceipts.confirmReceipt/.get's registry entries seed real
+      // goodsReceipts.confirmReceipt/.get's registry entries seed real
       // goods_receipts/goods_receipt_lines rows referencing purchase_order_lines — must be gone
       // BEFORE purchase_order_lines is deleted below, not just before lots further down (this is
       // an earlier iteration of the SAME loop deleting purchase_order_lines, so the ordering
@@ -156,7 +158,7 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
       await db.update(lots).set({ goodsReceiptLineId: null }).where(eq(lots.organizationId, orgId));
       await db.delete(goodsReceiptLines).where(eq(goodsReceiptLines.organizationId, orgId));
       await db.delete(goodsReceipts).where(eq(goodsReceipts.organizationId, orgId));
-      // 008-05: purchaseOrders.create/addLine/submit/approve/reject/send/cancel's registry entries
+      // purchaseOrders.create/addLine/submit/approve/reject/send/cancel's registry entries
       // now seed real purchase_order_lines/purchase_orders rows — purchase_orders references users
       // via createdByUserId/submittedByUserId/approvedByUserId/rejectedByUserId/sentByUserId/
       // cancelledByUserId, so both must be gone before the createdUserIds loop below, the same
@@ -173,6 +175,19 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
       // never imported/cleaned up a table no prior entry ever exercised" class this project's
       // memory has documented many times.
       await db.delete(invitations).where(eq(invitations.organizationId, orgId));
+    }
+
+    // conversations.userId references users — and NOT only the probe users below: assistant.ask's
+    // own-resource case creates a conversation owned by a REGULAR seeded tenant user (that endpoint
+    // creates a conversation for whoever asks), so both messages and conversations must be gone
+    // before the createdUserIds loop deletes those users, not just before the probe-user delete
+    // further down. A version of this cleanup that ran only after the createdUserIds loop still hit
+    // a real `conversations_user_id_users_id_fk` violation on `users` — the same recurring
+    // FK-teardown-order bug class this shared fixture has hit repeatedly, this time positioned
+    // after the wrong user delete rather than missing entirely.
+    for (const orgId of createdOrgIds) {
+      await db.delete(messages).where(eq(messages.organizationId, orgId));
+      await db.delete(conversations).where(eq(conversations.organizationId, orgId));
     }
 
     for (const userId of createdUserIds) {
@@ -193,6 +208,9 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
     // of this cleanup deleted the probe users directly and hit a real
     // `memberships_user_id_users_id_fk` violation, which — because afterEach itself threw —
     // cascaded into failures on unrelated entries in the same run.
+    // seedConversation creates an EXTRA real probe user too (matching the same shape), referenced
+    // via conversations.userId — the messages/conversations delete above (which runs for every
+    // created org) covers that row before this probe-user delete as well.
     const probeUsers = await db.select({ id: users.id }).from(users).where(like(users.email, 'cross-tenant-probe-%'));
     for (const probeUser of probeUsers) {
       await db.delete(memberships).where(eq(memberships.userId, probeUser.id));
@@ -212,7 +230,7 @@ describe('cross-tenant suite (003-13 merge gate)', () => {
       }
       await db.delete(recipes).where(eq(recipes.organizationId, orgId));
 
-      // 007-10: documents.confirmLineMapping's registry entry now seeds real supplier_products
+      // documents.confirmLineMapping's registry entry now seeds real supplier_products
       // rows (references both products AND suppliers) — must be gone before either parent table's
       // rows are deleted below.
       await db.delete(supplierProducts).where(eq(supplierProducts.organizationId, orgId));

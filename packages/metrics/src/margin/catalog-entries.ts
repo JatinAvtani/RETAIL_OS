@@ -28,9 +28,9 @@ import {
  *
  * `storeId` is required on every metric here (not the full `storeIds` scope) because every
  * underlying `DashboardRepository` method is single-store-bounded — a cross-store rollup is a
- * genuinely different, unbuilt aggregation (009-01's fact tables), not a trivial loop over stores.
+ * genuinely different, unbuilt aggregation, not a trivial loop over stores.
  *
- * `resolveRecipeUnitCost` (009-01, `../recipes/recipe-cost-resolver.js`) is passed on `MetricContext`
+ * `resolveRecipeUnitCost` (`../recipes/recipe-cost-resolver.js`) is passed on `MetricContext`
  * rather than called directly here: this module stays free of concrete repository wiring
  * (`RecipeRepository`, `ProductRepository`, etc. construction), taking its collaborators as
  * parameters instead — matching how `PostingService`/`MovementService` already take collaborators
@@ -72,6 +72,33 @@ const serialize = (value: Money | 'unknown'): string | 'unknown' =>
   value === 'unknown' ? 'unknown' : value.amount.toFixed(4);
 
 const period = (params: MarginMetricParams) => ({ from: params.from, to: params.to });
+
+/**
+ * The population-mismatch gate. `findSalesLines` counts revenue from EVERY sold line, but only
+ * lines whose POS item is mapped to a menu item generate consumption or carry a recipe cost — so
+ * any metric that compares a cost to revenue, or presents "what sold items should have cost",
+ * silently drops unmapped lines from its cost side while (for the ratios) keeping them in its
+ * revenue side. With even one unmapped sold line the two sides cover different populations and
+ * the ratio overstates margin — a confident wrong number, the exact failure this system refuses.
+ * A percentage threshold ("only gate above N% unmapped") would itself be an invented tolerance,
+ * so the gate is all-or-nothing, matching `computeCogsActual`/`computeCogsTheoretical`'s own
+ * one-unknown-poisons-the-total convention.
+ *
+ * `net_revenue` itself deliberately stays ungated: revenue from an unmapped line is real revenue
+ * (unmapped sales are quarantined, counted, and surfaced as a gap — never dropped). It is the
+ * cost-versus-revenue comparison that is invalid while lines are unmapped, not the revenue.
+ * `cogs_actual` also stays ungated: it reports what RECORDED consumption cost, a true statement
+ * about the ledger regardless of mapping coverage — its own lot-cost unknown-propagation already
+ * guards its honesty.
+ */
+const unmappedSoldLinesGate = async (
+  dashboard: DashboardRepository,
+  params: MarginMetricParams
+): Promise<string | null> => {
+  const unmapped = await dashboard.countUnmappedSoldLines(params.storeId, params.from, params.to);
+  if (unmapped === 0) return null;
+  return `${unmapped} sold line(s) in this period come from POS items with no mapped menu item, so the cost of part of what was sold is unknown.`;
+};
 
 export const fetchConsumptionLines = async (
   dashboard: DashboardRepository,
@@ -190,8 +217,16 @@ export const cogsTheoreticalMetric = defineMetric<MarginMetricParams>({
     const ctx = requireMarginContext(rawCtx, 'cogs_theoretical');
     const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
-    const soldItemLines = await fetchSoldItemLines(ctx, dashboard, params, currency);
-    const cogsTheoretical = computeCogsTheoretical(soldItemLines, currency);
+    // The underlying fetch is restricted to MAPPED lines — an unmapped sold line is a sold item
+    // whose recipe cost is unresolvable, exactly the case computeCogsTheoretical's own
+    // one-unknown-poisons-the-total rule covers, except the fetch would silently hide it. The
+    // gate restores that rule at the fetch boundary.
+    const [gateReason, soldItemLines] = await Promise.all([
+      unmappedSoldLinesGate(dashboard, params),
+      fetchSoldItemLines(ctx, dashboard, params, currency),
+    ]);
+    const computed = computeCogsTheoretical(soldItemLines, currency);
+    const cogsTheoretical = gateReason === null ? computed : ('unknown' as const);
     return {
       metricId: 'cogs_theoretical',
       value: serialize(cogsTheoretical),
@@ -201,7 +236,7 @@ export const cogsTheoreticalMetric = defineMetric<MarginMetricParams>({
       freshness: new Date(),
       provenance: [{ table: 'sales_transaction_lines', rowCount: soldItemLines.length }],
       ...(cogsTheoretical === 'unknown'
-        ? { unknownReason: 'One or more sold items had no fully-resolvable recipe cost.' }
+        ? { unknownReason: gateReason ?? 'One or more sold items had no fully-resolvable recipe cost.' }
         : {}),
     };
   },
@@ -218,13 +253,15 @@ export const costVarianceMetric = defineMetric<MarginMetricParams>({
     const ctx = requireMarginContext(rawCtx, 'cost_variance');
     const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
-    const [consumptionLines, soldItemLines] = await Promise.all([
+    const [gateReason, consumptionLines, soldItemLines] = await Promise.all([
+      unmappedSoldLinesGate(dashboard, params),
       fetchConsumptionLines(dashboard, params, currency),
       fetchSoldItemLines(ctx, dashboard, params, currency),
     ]);
     const cogsActual = computeCogsActual(consumptionLines, currency);
     const cogsTheoretical = computeCogsTheoretical(soldItemLines, currency);
-    const { variance } = computeCostVariance(cogsActual, cogsTheoretical);
+    const { variance: computed } = computeCostVariance(cogsActual, cogsTheoretical);
+    const variance = gateReason === null ? computed : ('unknown' as const);
     return {
       metricId: 'cost_variance',
       value: serialize(variance),
@@ -236,7 +273,9 @@ export const costVarianceMetric = defineMetric<MarginMetricParams>({
         { table: 'stock_movements', rowCount: consumptionLines.length },
         { table: 'sales_transaction_lines', rowCount: soldItemLines.length },
       ],
-      ...(variance === 'unknown' ? { unknownReason: 'Actual or theoretical COGS is unknown.' } : {}),
+      ...(variance === 'unknown'
+        ? { unknownReason: gateReason ?? 'Actual or theoretical COGS is unknown.' }
+        : {}),
     };
   },
 });
@@ -251,7 +290,8 @@ export const contributionMarginMetric = defineMetric<MarginMetricParams>({
   async execute(params, ctx): Promise<MetricResult> {
     const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
-    const [salesLines, consumptionLines] = await Promise.all([
+    const [gateReason, salesLines, consumptionLines] = await Promise.all([
+      unmappedSoldLinesGate(dashboard, params),
       dashboard.findSalesLines(params.storeId, params.from, params.to),
       fetchConsumptionLines(dashboard, params, currency),
     ]);
@@ -260,7 +300,8 @@ export const contributionMarginMetric = defineMetric<MarginMetricParams>({
       currency
     );
     const cogsActual = computeCogsActual(consumptionLines, currency);
-    const contributionMargin = computeContributionMargin(netRevenue, cogsActual);
+    const computed = computeContributionMargin(netRevenue, cogsActual);
+    const contributionMargin = gateReason === null ? computed : ('unknown' as const);
     return {
       metricId: 'contribution_margin',
       value: serialize(contributionMargin),
@@ -272,7 +313,9 @@ export const contributionMarginMetric = defineMetric<MarginMetricParams>({
         { table: 'sales_transaction_lines', rowCount: salesLines.length },
         { table: 'stock_movements', rowCount: consumptionLines.length },
       ],
-      ...(contributionMargin === 'unknown' ? { unknownReason: 'Actual COGS is unknown.' } : {}),
+      ...(contributionMargin === 'unknown'
+        ? { unknownReason: gateReason ?? 'Actual COGS is unknown.' }
+        : {}),
     };
   },
 });
@@ -287,7 +330,8 @@ export const foodCostPercentageMetric = defineMetric<MarginMetricParams>({
   async execute(params, ctx): Promise<MetricResult> {
     const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
-    const [salesLines, consumptionLines] = await Promise.all([
+    const [gateReason, salesLines, consumptionLines] = await Promise.all([
+      unmappedSoldLinesGate(dashboard, params),
       dashboard.findSalesLines(params.storeId, params.from, params.to),
       fetchConsumptionLines(dashboard, params, currency),
     ]);
@@ -296,7 +340,8 @@ export const foodCostPercentageMetric = defineMetric<MarginMetricParams>({
       currency
     );
     const cogsActual = computeCogsActual(consumptionLines, currency);
-    const foodCostPercentage = computeFoodCostPercentage(cogsActual, netRevenue);
+    const computed = computeFoodCostPercentage(cogsActual, netRevenue);
+    const foodCostPercentage = gateReason === null ? computed : ('unknown' as const);
     return {
       metricId: 'food_cost_percentage',
       value: foodCostPercentage === 'unknown' ? 'unknown' : foodCostPercentage.toFixed(2),
@@ -309,7 +354,7 @@ export const foodCostPercentageMetric = defineMetric<MarginMetricParams>({
         { table: 'stock_movements', rowCount: consumptionLines.length },
       ],
       ...(foodCostPercentage === 'unknown'
-        ? { unknownReason: 'Actual COGS is unknown, or net revenue is zero.' }
+        ? { unknownReason: gateReason ?? 'Actual COGS is unknown, or net revenue is zero.' }
         : {}),
     };
   },
@@ -325,7 +370,8 @@ export const contributionMarginPercentageMetric = defineMetric<MarginMetricParam
   async execute(params, ctx): Promise<MetricResult> {
     const currency = await resolveCurrency(ctx);
     const dashboard = new DashboardRepository(ctx.db, ctx.organizationId);
-    const [salesLines, consumptionLines] = await Promise.all([
+    const [gateReason, salesLines, consumptionLines] = await Promise.all([
+      unmappedSoldLinesGate(dashboard, params),
       dashboard.findSalesLines(params.storeId, params.from, params.to),
       fetchConsumptionLines(dashboard, params, currency),
     ]);
@@ -335,7 +381,8 @@ export const contributionMarginPercentageMetric = defineMetric<MarginMetricParam
     );
     const cogsActual = computeCogsActual(consumptionLines, currency);
     const contributionMargin = computeContributionMargin(netRevenue, cogsActual);
-    const pct = computeContributionMarginPercentage(contributionMargin, netRevenue);
+    const computed = computeContributionMarginPercentage(contributionMargin, netRevenue);
+    const pct = gateReason === null ? computed : ('unknown' as const);
     return {
       metricId: 'contribution_margin_percentage',
       value: pct === 'unknown' ? 'unknown' : pct.toFixed(2),
@@ -348,7 +395,7 @@ export const contributionMarginPercentageMetric = defineMetric<MarginMetricParam
         { table: 'stock_movements', rowCount: consumptionLines.length },
       ],
       ...(pct === 'unknown'
-        ? { unknownReason: 'Contribution margin is unknown, or net revenue is zero.' }
+        ? { unknownReason: gateReason ?? 'Contribution margin is unknown, or net revenue is zero.' }
         : {}),
     };
   },

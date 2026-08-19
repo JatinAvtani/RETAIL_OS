@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { extractNumericTokens } from './extract-numeric-tokens';
 
 /**
- * 010-11: covers plan.md's own exact test list verbatim — "currency symbols · thousands
+ * covers the plan's own exact test list verbatim — "currency symbols · thousands
  * separators · percentages · ranges · dates excluded · ordinals excluded · abbreviated forms ·
  * numbers inside quoted source text · numbers the model derived by arithmetic (must be caught)."
  *
- * Confirmed via `AskUserQuestion`: ambiguous cases are biased toward FLAGGING, not excluding — a
+ * A deliberate bias choice: ambiguous cases are biased toward FLAGGING, not excluding — a
  * bare number that merely resembles a year/date with no real surrounding date context is NOT
  * excluded, since an undetected fabricated number is the one outcome this product cannot survive.
  */
@@ -47,8 +47,12 @@ describe('extractNumericTokens', () => {
     expect(extractNumericTokens('Revenue was 1.2k this week.')).toEqual(['1.2']);
   });
 
-  it('excludes a number inside a quoted span — it is cited source text, not a claim', () => {
-    expect(extractNumericTokens('The invoice said "total: 999" but the real figure is 500.')).toEqual(['500']);
+  it('a number inside a quoted span is STILL extracted — a quoted figure is a claim the reader acts on', () => {
+    // An earlier version excluded quoted spans as "cited source text". That was an open bypass:
+    // wrapping a fabricated figure in quotes exempted it from validation entirely, and a single
+    // apostrophe opened a phantom span that swallowed every number after it. Quoting does not
+    // launder a number; it validates like any other token.
+    expect(extractNumericTokens('The invoice said "total: 999" but the real figure is 500.')).toEqual(['999', '500']);
   });
 
   it('a number the model derived by arithmetic (e.g. an average it computed itself) is caught, not excluded', () => {

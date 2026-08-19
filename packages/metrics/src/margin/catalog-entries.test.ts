@@ -8,8 +8,10 @@ import {
   auditLogs,
   createDb,
   lots,
+  menuItems,
   organizations,
   outboxEvents,
+  posItems,
   products,
   productVariants,
   salesTransactionLines,
@@ -61,6 +63,10 @@ describe('registered margin metrics', () => {
       await adminDb.delete(lots).where(eq(lots.organizationId, orgId));
       await adminDb.delete(salesTransactionLines).where(eq(salesTransactionLines.organizationId, orgId));
       await adminDb.delete(salesTransactions).where(eq(salesTransactions.organizationId, orgId));
+      // sales_transaction_lines references pos_items, and pos_items references menu_items —
+      // both must go after the lines above and before stores/organizations below.
+      await adminDb.delete(posItems).where(eq(posItems.organizationId, orgId));
+      await adminDb.delete(menuItems).where(eq(menuItems.organizationId, orgId));
       const orgProducts = await adminDb
         .select({ id: products.id })
         .from(products)
@@ -240,6 +246,36 @@ describe('registered margin metrics', () => {
       sourceType: 'test',
     });
 
+    // The sold line must come from a MAPPED POS item: the population-mismatch gate (correctly)
+    // refuses to compare COGS against revenue while any sold line is unmapped, so a fixture whose
+    // line has no POS item at all would make every ratio here 'unknown' — an earlier version of
+    // this fixture did exactly that, which was this test quietly embodying the same
+    // revenue-without-cost mismatch the gate now exists to catch.
+    const menuItemId = generateId();
+    const posItemId = generateId();
+    await db.transaction((tx) =>
+      withTenantContext(tx, organizationId, async () => {
+        await tx.insert(menuItems).values({
+          id: menuItemId,
+          organizationId,
+          name: 'Costed Plate',
+          recipeGroupId: generateId(),
+          price: '40.0000',
+          priceValidFrom: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+        });
+        await tx.insert(posItems).values({
+          id: posItemId,
+          organizationId,
+          storeId,
+          source: 'square',
+          externalId: `CAT-C-POS-${organizationId}`,
+          name: 'Costed Plate',
+          menuItemId,
+          mappingStatus: 'MAPPED',
+        });
+      })
+    );
+
     const salesRepo = new SalesTransactionRepository(db, organizationId);
     await salesRepo.recordIfNew({
       storeId,
@@ -251,7 +287,7 @@ describe('registered margin metrics', () => {
       tax: '0.0000',
       total: '40.0000',
       currency: 'USD',
-      lines: [{ quantity: '1.000000', unitPrice: '40.0000', discount: '0.0000', lineTotal: '40.0000' }],
+      lines: [{ posItemId, quantity: '1.000000', unitPrice: '40.0000', discount: '0.0000', lineTotal: '40.0000' }],
     });
 
     const to = new Date();
@@ -270,6 +306,52 @@ describe('registered margin metrics', () => {
     expect(contributionMargin.value).toBe('28.0000');
     // 12 / 40 = 30%.
     expect(foodCostPercentage.value).toBe('30.00');
+  });
+
+  it('an unmapped sold line makes every cost-vs-revenue metric unknown — never a confident ratio over mismatched populations', async () => {
+    const { organizationId, storeId } = await setUpOrg();
+
+    // One real sold line with NO POS item at all — quarantined revenue with no possible
+    // consumption or recipe cost behind it. Revenue counts it (that is real money the till took);
+    // any metric comparing a cost against that revenue must refuse, because the cost side
+    // structurally excludes this line and the resulting ratio would overstate margin.
+    const salesRepo = new SalesTransactionRepository(db, organizationId);
+    await salesRepo.recordIfNew({
+      storeId,
+      source: 'square',
+      externalId: `CAT-G-SALE-${organizationId}`,
+      occurredAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+      subtotal: '25.0000',
+      discount: '0.0000',
+      tax: '0.0000',
+      total: '25.0000',
+      currency: 'USD',
+      lines: [{ quantity: '1.000000', unitPrice: '25.0000', discount: '0.0000', lineTotal: '25.0000' }],
+    });
+
+    const to = new Date();
+    const from = new Date(to.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const params = { storeId, from, to };
+    const ctx = ctxFor(organizationId);
+
+    const [netRevenue, contributionMargin, contributionMarginPct, foodCostPercentage, cogsTheoretical, costVariance] =
+      await Promise.all([
+        executeMetric('net_revenue', params, auth(), ctx),
+        executeMetric('contribution_margin', params, auth(), ctx),
+        executeMetric('contribution_margin_percentage', params, auth(), ctx),
+        executeMetric('food_cost_percentage', params, auth(), ctx),
+        executeMetric('cogs_theoretical', params, auth(), ctx),
+        executeMetric('cost_variance', params, auth(), ctx),
+      ]);
+
+    // Revenue itself stays real — an unmapped sale is still a sale, deliberately ungated.
+    expect(netRevenue.value).toBe('25.0000');
+
+    for (const result of [contributionMargin, contributionMarginPct, foodCostPercentage, cogsTheoretical, costVariance]) {
+      expect(result.value).toBe('unknown');
+      expect(result.unknownReason).toContain('1 sold line(s)');
+      expect(result.unknownReason).toContain('no mapped menu item');
+    }
   });
 
   it('executeMetric refuses a caller without financial:read for any margin metric', async () => {

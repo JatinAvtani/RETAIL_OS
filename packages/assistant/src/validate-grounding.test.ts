@@ -4,8 +4,8 @@ import { validateGrounding, narrateAndValidate } from './validate-grounding';
 import type { GroundingBundle } from './grounding-bundle';
 
 /**
- * 010-11 ⚠️ THE CORE SAFETY MECHANISM. `validateGrounding` is pure and deterministic (no model
- * involvement) — these tests prove the real algorithm spec 10 names: every numeric token in a
+ * ⚠️ THE CORE SAFETY MECHANISM. `validateGrounding` is pure and deterministic (no model
+ * involvement) — these tests prove the real algorithm the design names: every numeric token in a
  * response must match a real bundle value (within formatting tolerance), or it's a violation.
  * `narrateAndValidate` tests the fail-closed regenerate-once/discard wrapper against a fake
  * `ChatProvider` that can be scripted to return a grounded or ungrounded response per call.
@@ -148,5 +148,79 @@ describe('narrateAndValidate — the fail-closed wrapper', () => {
 
     expect(result.text).toBeNull();
     expect(result.grounded).toBe(false);
+  });
+});
+
+/**
+ * Adversarial responses — each of these once PASSED validation. They are the bypasses found by
+ * attacking the validator with a response deliberately built to smuggle a fabricated figure past
+ * it, and they stay here as regression armour: every case asserts the fabrication is now caught.
+ * The one bypass that deliberately remains open (numbers written out as words) is asserted as
+ * such at the bottom, so the boundary of what this validator guarantees is tested, not implied.
+ */
+describe('validateGrounding — adversarial responses', () => {
+  const bundle: GroundingBundle = {
+    metrics: [{ ...realMetric, value: '1000.00' }],
+    passages: [],
+    entities: [],
+  };
+
+  it('a fabricated figure inside double quotes is a violation — quoting does not launder a number', () => {
+    const result = validateGrounding('Your margin was "4200" this month.', bundle);
+    expect(result.ok).toBe(false);
+  });
+
+  it('an apostrophe earlier in the sentence does not open a span that hides later figures', () => {
+    // The old quoted-span rule treated the apostrophe in "store's" as an opening single quote,
+    // swallowing every number after it for the rest of the response.
+    const result = validateGrounding("The store's margin was 4200 and it's rising.", bundle);
+    expect(result).toEqual({ ok: false, violations: ['4200'] });
+  });
+
+  it('a 4-digit figure wearing an ordinal suffix is a violation — real ordinals stay small', () => {
+    const result = validateGrounding('You ranked 4200th in cost.', bundle);
+    expect(result.ok).toBe(false);
+  });
+
+  it('a genuine small ordinal is still excluded, not flagged', () => {
+    const result = validateGrounding('Your top item held 1st place; revenue was 1000.00.', bundle);
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('a sign-flipped figure is a violation — -1000.00 is not the bundle value 1000.00', () => {
+    const result = validateGrounding('Your margin was -1000.00 this month.', bundle);
+    expect(result).toEqual({ ok: false, violations: ['-1000.00'] });
+  });
+
+  it('a genuinely negative bundle value validates with its sign, and its sign-dropped form does not', () => {
+    const negativeBundle: GroundingBundle = {
+      metrics: [{ ...realMetric, metricId: 'cost_variance', value: '-250.00' }],
+      passages: [],
+      entities: [],
+    };
+    expect(validateGrounding('Variance was -250.00.', negativeBundle)).toEqual({ ok: true });
+    // Dropping the sign changes the direction of the money — that is a different claim.
+    expect(validateGrounding('Variance was 250.00.', negativeBundle).ok).toBe(false);
+  });
+
+  it('a hyphen joining a range does not turn the second bound negative', () => {
+    const rangeBundle: GroundingBundle = {
+      metrics: [
+        { ...realMetric, metricId: 'a', value: '10' },
+        { ...realMetric, metricId: 'b', value: '15' },
+      ],
+      passages: [],
+      entities: [],
+    };
+    expect(validateGrounding('Between 10-15 units.', rangeBundle)).toEqual({ ok: true });
+  });
+
+  it('KNOWN residual gap: a figure written out as words is NOT caught — the boundary is digits', () => {
+    // Deliberate: word-number extraction has a false-positive rate that would burn the single
+    // regeneration on innocent prose. The guarantee this validator makes is that no DIGIT-shaped
+    // fabrication survives; this test pins that boundary so a future change is a decision, not
+    // an accident.
+    const result = validateGrounding('You lost forty-two hundred rupees.', bundle);
+    expect(result).toEqual({ ok: true });
   });
 });

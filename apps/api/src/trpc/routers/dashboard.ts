@@ -62,7 +62,7 @@ const summaryInput = z.object({
 });
 
 /**
- * 009-16 — the finite set of owner/manager dashboard figures with a real drill-through source.
+ * the finite set of owner/manager dashboard figures with a real drill-through source.
  * Not every registered metric is here (67 exist, most have no dashboard presence yet) — confirmed
  * with the user: this covers exactly the figures `summary`/`managerSummary` currently render.
  * `items_by_contribution`/`below_reorder_point`/`expiry_queue` are deliberately absent — each
@@ -101,12 +101,12 @@ const moneyOrNull = (value: string | 'unknown', currency: string) =>
 
 /**
  * The owner dashboard's read surface. Every figure it returns is resolved through
- * `executeMetric` — the catalog registered in `packages/metrics/src/catalog` (009-02) — rather
- * than computed inline. This is what makes "dashboard and AI produce identical values" (spec 12's
+ * `executeMetric` — the catalog registered in `packages/metrics/src/catalog` — rather
+ * than computed inline. This is what makes "dashboard and AI produce identical values" (the design's
  * own acceptance criterion) true by construction: both call the same registered function, not two
  * independently-written code paths that happen to agree today.
  *
- * `resolveRecipeUnitCost` (009-01, `@retailos/metrics`) is still injected onto `MarginMetricContext`
+ * `resolveRecipeUnitCost` (`@retailos/metrics`) is still injected onto `MarginMetricContext`
  * here rather than called directly inside the catalog entry — see `catalog-entries.ts`'s own header:
  * the catalog module stays free of concrete DB-repository wiring, taking its collaborators as
  * parameters instead, the same pattern `PostingService`/`MovementService` already use.
@@ -163,7 +163,7 @@ export const dashboardRouter = router({
     const dashboard = new DashboardRepository(ctx.db, ctx.session.organizationId);
 
     // The comparison period is the immediately preceding window of the SAME length — the same
-    // period-over-period convention `supplierPerformance.trend` (008-15) already established for
+    // period-over-period convention `supplierPerformance.trend` already established for
     // this codebase, not a bucketed time series.
     const priorTo = from;
     const priorFrom = new Date(from.getTime() - input.days * 24 * 60 * 60 * 1000);
@@ -243,9 +243,9 @@ export const dashboardRouter = router({
     const wasteBreakdown = computeWasteBreakdown(wasteLines, currency);
 
     /**
-     * The exception feed (spec 12 §12.5's "same content as the daily briefing"). Confirmed with the
-     * user: EPIC-010's AI narration doesn't exist yet, so this is the DETERMINISTIC HALF of spec 05
-     * §5.7.4's own pipeline ("compute exception set" -> rank -> take top N) — every card here is a
+     * The exception feed — the DETERMINISTIC HALF of the briefing pipeline ("compute exception
+     * set" -> rank -> take top N); AI narration over the same exceptions is layered separately in
+     * the assistant, never mixed into this feed. Every card here is a
      * plain fact from an already-registered metric, zero LLM prose. `tryMetric` degrades a
      * permission gap to "this exception type omitted," never a hard failure for the whole feed.
      * `cost_spike` (needs a specific `supplierProductId`) and `stockout_events` (needs a specific
@@ -294,10 +294,21 @@ export const dashboardRouter = router({
       exceptions.push({ id: 'negative_stock_incidents', severity: 'danger', label: `${negativeStockIncidents.value} product(s) showing negative stock` });
     }
     if (unmappedPosItemsCount && unmappedPosItemsCount.value !== 'unknown' && Number(unmappedPosItemsCount.value) > 0) {
-      exceptions.push({ id: 'unmapped_pos_items_count', severity: 'warning', label: `${unmappedPosItemsCount.value} POS item(s) still unmapped — consumption data is incomplete` });
+      // Both counts on purpose: the mapping PAGE shows one row per item, while the completeness
+      // panel counts sold lines — a reader following "42 to map" to a page with 3 rows concludes
+      // one of the numbers is wrong unless the relationship is stated where they start.
+      exceptions.push({
+        id: 'unmapped_pos_items_count',
+        severity: 'warning',
+        label: `${unmappedPosItemsCount.value} POS item(s) still unmapped (${unmappedSoldLines} sold line(s) affected) — consumption data is incomplete`,
+      });
     }
     if (expiryRiskValue && expiryRiskValue.value !== 'unknown' && new Decimal(expiryRiskValue.value).greaterThan(0)) {
-      exceptions.push({ id: 'expiry_risk_value', severity: 'warning', label: `${money(expiryRiskValue.value, currency).amount.toFixed(2)} of stock expiring within 7 days` });
+      // 'danger', not 'warning': this is real money on a countdown — stock that expires unsold is
+      // a loss nothing can recover, unlike a mapping or review backlog that waits patiently. The
+      // feed's two levels are "act this week or lose money" vs "tidy this when you can", and
+      // rendering both with the same badge (as an earlier version did) erased that distinction.
+      exceptions.push({ id: 'expiry_risk_value', severity: 'danger', label: `${money(expiryRiskValue.value, currency).amount.toFixed(2)} ${currency} of stock expiring within 7 days` });
     }
     if (menuItemsWithoutRecipe && menuItemsWithoutRecipe.value !== 'unknown' && Number(menuItemsWithoutRecipe.value) > 0) {
       exceptions.push({ id: 'menu_items_without_recipe', severity: 'warning', label: `${menuItemsWithoutRecipe.value} menu item(s) with no linked recipe — margin is incomplete for these` });
@@ -316,6 +327,12 @@ export const dashboardRouter = router({
         exceptions.push({ id: `data_freshness_lag_${connections[i]!.id}`, severity: 'warning', label: `POS data for ${connections[i]!.vendor} hasn't synced in over a day` });
       }
     }
+
+    // Most urgent first — the feed is ranked by impact, not by the incidental order the checks
+    // above happen to run in. Within a severity the check order stands (it already goes roughly
+    // ledger-integrity → money → data-completeness).
+    const severityRank = { danger: 0, warning: 1 } as const;
+    exceptions.sort((a, b) => severityRank[a.severity] - severityRank[b.severity]);
 
     return {
       period: { from: from.toISOString(), to: to.toISOString(), days: input.days },
@@ -344,11 +361,23 @@ export const dashboardRouter = router({
       foodCostPercentage: numberOrNull(foodCostPercentage.value),
       stockValue: stockValue ? moneyOrNull(stockValue.value, currency) : null,
       /**
-       * Period-over-period deltas for the top-row stat tiles (spec 12 §12.5: "each with
+       * The metric's own reason for each null above. A tile must explain an absence with the REAL
+       * cause ("N sold lines come from unmapped POS items"), not a static guess that may name the
+       * wrong one — an unknown from unmapped sales and an unknown from an uncosted lot need
+       * different fixes, and only the metric knows which happened.
+       */
+      unknownReasons: {
+        contributionMargin: contributionMargin.unknownReason ?? null,
+        contributionMarginPercentage: contributionMarginPercentage.unknownReason ?? null,
+        foodCostPercentage: foodCostPercentage.unknownReason ?? null,
+        costVariance: costVariance.unknownReason ?? null,
+      },
+      /**
+       * Period-over-period deltas for the top-row stat tiles (the design: "each with
        * period-over-period delta"). `direction: null` means no real comparison basis exists (either
        * period is unknown) — never a fabricated verdict, matching `supplierPerformance.trend`'s own
-       * established convention (008-15). `stock_value` has no prior-period figure at all (it's
-       * always "now" — no historical snapshot exists until 009-01's fact tables), so it has no delta.
+       * established convention. `stock_value` has no prior-period figure at all (it's
+       * always "now" — no historical snapshot exists until the fact tables), so it has no delta.
        */
       deltas: {
         netRevenue: { direction: numericDelta(numberOrNull(netRevenue.value), numberOrNull(priorNetRevenue.value)) },
@@ -366,7 +395,7 @@ export const dashboardRouter = router({
       },
       /** The exception feed — see the assembly comment above for scope (deterministic only, no AI prose yet). */
       exceptions,
-      /** Top/bottom menu items by real dollar contribution (spec 12 §12.5). `null` only when the caller lacks financial:read; a real empty `[]` when no items sold — these are different facts, never conflated. */
+      /** Top/bottom menu items by real dollar contribution. `null` only when the caller lacks financial:read; a real empty `[]` when no items sold — these are different facts, never conflated. */
       itemsByContribution: itemsByContribution
         ? itemsByContribution.items.map((item) => ({
             menuItemId: item.menuItemId,
@@ -395,13 +424,13 @@ export const dashboardRouter = router({
   }),
 
   /**
-   * The manager dashboard's read surface (spec 12 §12.5): "items below reorder point · expiry
+   * The manager dashboard's read surface: "items below reorder point · expiry
    * queue by value at risk · pending receipts · documents awaiting review · today's sales vs.
    * forecast/average · open PO status." Same `executeMetric`/`tryMetric` discipline as `summary` —
    * every real number comes from the registered catalog, never computed ad hoc here.
    *
    * `forecast` is deliberately NOT built — confirmed with the user: no forecasting capability
-   * exists anywhere in this codebase, and spec 00 §00-overview states explicitly "No forecasts in
+   * exists anywhere in this codebase, and the design-overview states explicitly "No forecasts in
    * MVP. Ships with forecasting in V2." This surfaces "today vs. trailing average" only, the
    * honest, buildable half of the spec's own wording — not a silent substitution.
    *
@@ -502,7 +531,7 @@ export const dashboardRouter = router({
             : null,
       },
       /**
-       * "Today's sales vs. trailing average" — the honest, buildable half of spec 12 §12.5's
+       * "Today's sales vs. trailing average" — the honest, buildable half of the design's
        * "vs. forecast/average" (no forecasting capability exists, see this procedure's own header).
        * `direction: null` when either side is unknown — never a fabricated verdict.
        */
@@ -518,7 +547,7 @@ export const dashboardRouter = router({
   }),
 
   /**
-   * 009-16 — the real source rows behind a dashboard figure (spec 12 §12.5: "every number is
+   * the real source rows behind a dashboard figure (the design: "every number is
    * drillable to source rows"). Deliberately a SEPARATE query, not carried on `summary`'s own
    * response — most figures are never expanded, and fetching every drill-through row set on every
    * dashboard load would multiply the query cost of a page most sessions only summarize, not audit.

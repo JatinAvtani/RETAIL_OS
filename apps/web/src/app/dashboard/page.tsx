@@ -39,12 +39,20 @@ const fmt = (m: { amount: string; currency: string } | null): string | null =>
 
 const humanize = (value: string) => value.toLowerCase().replace(/_/g, ' ');
 
+/** Where each exception gets fixed — a "Needs attention" row without a destination is a dead end. */
+const EXCEPTION_HREFS: Record<string, string> = {
+  unmapped_pos_items_count: '/pos-items',
+  documents_pending_review: '/documents',
+  negative_stock_incidents: '/inventory',
+  expiry_risk_value: '/inventory',
+};
+
 /** Only a fully-real series makes a real sparkline — one unknown point in the series and we show none, rather than a line with a fabricated gap. Returns an empty props object (not `{ trendPoints: undefined }`) so the JSX spread never explicitly assigns `undefined` to an optional prop under `exactOptionalPropertyTypes`. */
 const trendProp = (points: (number | null)[]): { trendPoints: number[] } | Record<string, never> =>
   points.every((v) => v !== null) ? { trendPoints: points as number[] } : {};
 
 /**
- * 009-16 — an inline expand/collapse drill-through, not a new modal component: clicking "Show
+ * an inline expand/collapse drill-through, not a new modal component: clicking "Show
  * source rows" toggles a real row table fetched via `dashboard.drillThrough`, right under the
  * figure it belongs to. Deliberately lazy — the query only fires the first time a figure is
  * expanded, so figures nobody ever inspects cost nothing.
@@ -220,7 +228,7 @@ export default function DashboardPage() {
               }
               unit="%"
               hint="Excludes rent, labour and tax"
-              unknownReason="Actual COGS could not be determined"
+              unknownReason={summary.unknownReasons.contributionMarginPercentage ?? 'Actual COGS could not be determined'}
               delta={{
                 direction: summary.deltas.contributionMarginPercentage.direction,
                 label: `vs prior ${summary.period.days} days`,
@@ -237,7 +245,7 @@ export default function DashboardPage() {
               value={summary.foodCostPercentage !== null ? String(summary.foodCostPercentage) : null}
               unit="%"
               hint="COGS as a share of revenue"
-              unknownReason="Needs both COGS and revenue"
+              unknownReason={summary.unknownReasons.foodCostPercentage ?? 'Needs both COGS and revenue'}
               {...trendProp(summary.trends.foodCostPercentage)}
               delta={{ direction: summary.deltas.foodCostPercentage.direction, label: `vs prior ${summary.period.days} days`, higherIsBetter: false }}
               footer={
@@ -259,19 +267,35 @@ export default function DashboardPage() {
             />
           </StatTileGrid>
 
-          {/* The exception feed (spec 12 §12.5) — deterministic, no AI narration yet (EPIC-010). */}
+          {/* The exception feed — deterministic, computed from the same registered metrics as
+              everything else. Each row links to the screen where the problem gets fixed: a card
+              that names a problem but goes nowhere makes the reader do the routing themselves. */}
           {summary.exceptions.length > 0 && (
             <Card className="mb-6">
               <CardHeader title="Needs attention" />
               <ul className="divide-y divide-border">
-                {summary.exceptions.map((exception) => (
-                  <li key={exception.id} className="flex items-center gap-3 px-5 py-3">
-                    <Badge tone={exception.severity === 'danger' ? 'danger' : 'warning'}>
-                      {exception.severity === 'danger' ? 'Urgent' : 'Review'}
-                    </Badge>
-                    <span className="text-sm text-content">{exception.label}</span>
-                  </li>
-                ))}
+                {summary.exceptions.map((exception) => {
+                  const href = EXCEPTION_HREFS[exception.id];
+                  const row = (
+                    <>
+                      <Badge tone={exception.severity === 'danger' ? 'danger' : 'warning'}>
+                        {exception.severity === 'danger' ? 'Urgent' : 'Review'}
+                      </Badge>
+                      <span className="text-sm text-content">{exception.label}</span>
+                    </>
+                  );
+                  return (
+                    <li key={exception.id}>
+                      {href ? (
+                        <Link href={href} className="flex items-center gap-3 px-5 py-3 transition-colors hover:bg-surface-sunken">
+                          {row}
+                        </Link>
+                      ) : (
+                        <div className="flex items-center gap-3 px-5 py-3">{row}</div>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </Card>
           )}
@@ -385,7 +409,8 @@ export default function DashboardPage() {
                 )}
                 {variance?.direction === 'exact' && 'Actual usage matched your recipes exactly.'}
                 {variance?.direction === 'unknown' &&
-                  'Not enough data yet — we need real costs and priced recipes for everything sold.'}
+                  (summary.unknownReasons.costVariance ??
+                    'Not enough data yet — we need real costs and priced recipes for everything sold.')}
               </p>
             </div>
           </Card>

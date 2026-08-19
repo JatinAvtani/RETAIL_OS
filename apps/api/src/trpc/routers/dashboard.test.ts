@@ -122,8 +122,8 @@ describe('dashboard.summary', () => {
   const issueSession = async (organizationId: string): Promise<string> => {
     const userId = generateId();
     createdUserIds.push(userId);
-    // dashboard.summary now resolves every figure through the metric catalog (009-02), which
-    // enforces each metric's requiredPermission before executing. 009-14 added metrics needing
+    // dashboard.summary now resolves every figure through the metric catalog, which
+    // enforces each metric's requiredPermission before executing. Later work added metrics needing
     // inventory:read (stock_value, the exception feed's inventory-domain cards) and documents:read
     // (documents_pending_review) alongside the original financial:read set — a real OWNER session
     // carries ALL_PERMISSIONS via ROLE_PERMISSIONS, so this fixture grants the same real set rather
@@ -221,6 +221,32 @@ describe('dashboard.summary', () => {
       sourceType: 'test',
     });
 
+    // Both sold lines come from a MAPPED POS item: the margin metrics now refuse to compare COGS
+    // against revenue while any sold line is unmapped (the two sides would cover different
+    // populations), so a confident margin/food-cost assertion requires a fully-mapped fixture.
+    // An earlier version of this fixture sold lines with no POS item at all and still asserted an
+    // 80% margin — exactly the mismatch the gate exists to catch.
+    const menuItemId = generateId();
+    const posItemId = generateId();
+    await db.insert(menuItems).values({
+      id: menuItemId,
+      organizationId,
+      name: 'Dash Plate',
+      recipeGroupId: generateId(),
+      price: '50.0000',
+      priceValidFrom: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+    });
+    await db.insert(posItems).values({
+      id: posItemId,
+      organizationId,
+      storeId,
+      source: 'square',
+      externalId: `DASH-POS-${organizationId}`,
+      name: 'Dash Plate',
+      menuItemId,
+      mappingStatus: 'MAPPED',
+    });
+
     // Revenue: 2 transactions of $60 and $40 = $100.
     const salesRepo = new SalesTransactionRepository(db, organizationId);
     for (const [i, total] of [['a', '60.0000'], ['b', '40.0000']] as const) {
@@ -234,7 +260,7 @@ describe('dashboard.summary', () => {
         tax: '0.0000',
         total,
         currency: 'USD',
-        lines: [{ quantity: '1.000000', unitPrice: total, discount: '0.0000', lineTotal: total }],
+        lines: [{ posItemId, quantity: '1.000000', unitPrice: total, discount: '0.0000', lineTotal: total }],
       });
     }
 
@@ -717,7 +743,7 @@ describe('dashboard.summary', () => {
 });
 
 /**
- * Real HTTP verification for the manager dashboard (009-15, spec 12 §12.5). Every figure asserted
+ * Real HTTP verification for the manager dashboard (the design). Every figure asserted
  * here is hand-derived from the seeded rows, same discipline as `dashboard.summary`'s own suite.
  */
 describe('dashboard.managerSummary', () => {
@@ -949,7 +975,7 @@ describe('dashboard.managerSummary', () => {
 });
 
 /**
- * 009-16 — real HTTP proof that drill-through returns the ACTUAL rows behind a dashboard figure,
+ * real HTTP proof that drill-through returns the ACTUAL rows behind a dashboard figure,
  * not a re-aggregated summary. Each test seeds a real fixture, reads the figure's own total via
  * the same arithmetic `dashboard.summary`'s tests already trust, then confirms drillThrough's rows
  * sum back to that exact total — the property this endpoint exists to guarantee.
