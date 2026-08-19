@@ -92,7 +92,8 @@ figure on the dashboard traces to the invoice it came from.
 
 **Purchasing** — reorder suggestions computed from trimmed-mean daily consumption, safety stock, and
 supplier lead time, each carrying a plain-language explanation and rounded to a real pack size and
-minimum order value. Purchase orders move through a state machine (draft → submitted → approved →
+minimum order value. A filterable order list (keyset-paginated — a page can never skip or double-show
+an order) fronts a state machine (draft → submitted → approved →
 sent → received), immutable once sent, with approval thresholds enforced per manager. Sending
 generates a real PDF and a mocked supplier email. Receiving supports partial deliveries, discrepancy
 codes, damage photos, and walk-in purchases with no PO at all — all of it posting real lots and stock
@@ -115,11 +116,16 @@ project exists to avoid.
 **AI assistant, grounded** — a chat surface where a question is classified, planned against the
 registered metric catalog, and answered only from values the catalog actually computed; the model
 routes and narrates, it never does arithmetic. Every narrated answer then passes a deterministic
-validator: each numeric token in the response must match a computed value exactly (within
-formatting tolerance), one stricter regeneration is allowed on a violation, and a second violation
-discards the prose entirely in favour of the structured results — a fabricated figure cannot
-reach the screen through the narration path. Each cited figure carries its own provenance panel:
-the period, the data-freshness timestamp, and the source tables with row counts. Citations are
+validator: each numeric token in the response must match a computed value (within formatting
+tolerance) or appear verbatim in a retrieved document excerpt, one stricter regeneration is
+allowed on a violation, and a second violation discards the prose entirely in favour of the
+structured results — a figure from nowhere cannot reach the screen through the narration path.
+Document questions run hybrid retrieval (lexical + vector, fused by reciprocal rank) over
+structure-aware invoice chunks; every excerpt enters the prompt wrapped in an untrusted-data
+delimiter, so a document that says "ignore your rules" is read as data, not obeyed. A daily
+briefing narrates the dashboard's exception feed through the same validator gate. Each cited
+figure carries its own provenance panel: the period, the data-freshness timestamp, and the source
+tables with row counts. Citations are
 source-level (which tables, how many rows, as of when), not per-line-item. When something can't be
 answered — a missing permission, an unknowable metric — the answer says which part and why,
 rather than narrating around the gap.
@@ -141,11 +147,13 @@ apps/worker      Background consumers
 packages/domain  Pure business logic, no I/O — costing, FEFO, recipe explosion
 packages/db      Schema, migrations, repositories, tenant guards
 packages/metrics The metric catalog — the only place a business number is computed, ~60 functions
-packages/ai      All model calls — document extraction, classification
+packages/ai      All model calls — extraction, classification, embeddings, prompt safety
+packages/assistant The grounded answering pipeline — classify, plan, retrieve, narrate, validate
 packages/pos     POS vendor adapters and the canonical sales model
 packages/authz   Permission model
 packages/session Redis-backed sessions
 packages/storage S3-compatible object storage
+packages/email   Outbound mail (mocked transport) and inbound invoice intake
 packages/queue   Background job queue (BullMQ)
 ```
 
@@ -180,6 +188,11 @@ document extraction and fuzzy match *suggestions*, which a human confirms.
 **Times are stored UTC, resolved in store-local time.** A restaurant's "yesterday" is a local-time
 concept; a sale at 23:45 on the 31st lands in the wrong month otherwise.
 
+**Accessibility is fixed at the design token, never the call site.** Every colour pairing in both
+themes is contrast-measured against WCAG AA, and the passing values live in the tokens themselves —
+so a new screen inherits compliant contrast, a keyboard focus ring, semantic table headers, and
+reduced-motion behaviour by using the shared primitives, rather than remembering thirty rules.
+
 ---
 
 ## Testing
@@ -193,6 +206,11 @@ edge cases that matter.
 Integration tests run against real Postgres and real Redis, never mocks: row-level security proves
 nothing against a fake database. Database constraints are verified directly — both the rejection
 and the adjacent accepted case — before any code depends on them.
+
+The assistant carries its own golden evaluation set — metric-routing, honest-refusal, and
+prompt-injection cases that run through the real pipeline against the live model
+(`pnpm --filter @retailos/api eval`), because injection resistance is a claim about a model, not
+about code, and only a real run turns it into a measurement.
 
 ---
 
@@ -229,9 +247,7 @@ number is **contribution margin**, and it's labelled as such.
 
 ## Roadmap
 
-Not yet built: document-grounded answers in the assistant — hybrid retrieval over invoice chunks
-exists at the search layer, but retrieved passages do not yet feed narration, so the assistant
-answers metric questions only. Proactive notifications and a daily briefing built on the same
+Not yet built: proactive notifications built on the same
 metric catalog. A guided onboarding flow. A background relay for the transactional outbox — state
 changes and their events already commit atomically (the part that cannot be retrofitted); shipping
 those recorded events to downstream consumers is deferred until a consumer needs replay, with

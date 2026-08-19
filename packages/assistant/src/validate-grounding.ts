@@ -25,16 +25,22 @@ export type ValidationResult =
 
 /**
  * Pure, deterministic, no model involvement (I1/I3) — the whole point of this function existing
- * separately from `narrate`. `bundle.metrics` is the ONLY source of truth for what's allowed; a
- * `denied`/`failed`/`rejected` reason string is prose the model is ALLOWED to reference by name
- * (e.g. "financial:read"), but any numbers embedded in those reason strings are NOT added to the
- * allowlist — they describe why something couldn't be computed, they are not themselves grounded
- * business figures a model should be citing as if they were.
+ * separately from `narrate`. The bundle's CONTENT is the only source of truth for what's allowed:
+ * computed metric values (with formatting tolerance), plus numeric tokens appearing VERBATIM in a
+ * retrieved passage's text. A passage number is grounded-by-source — the reader can open the cited
+ * document and see it — which is a different kind of grounding from a computed metric, but still
+ * traceable to real bundle content; the gate exists to stop numbers from NOWHERE. Passage tokens
+ * get no formatting variants: quoting a source figure any way other than exactly as written is a
+ * distortion of the source, and flagging it is correct. A `denied`/`failed`/`rejected` reason
+ * string is prose the model is ALLOWED to reference by name (e.g. "financial:read"), but any
+ * numbers embedded in those reason strings are NOT added to the allowlist — they describe why
+ * something couldn't be computed, they are not themselves grounded figures.
  */
 export const validateGrounding = (response: string, bundle: GroundingBundle): ValidationResult => {
-  const allowed = new Set(
-    bundle.metrics.flatMap((m) => (m.value === 'unknown' ? [] : formatVariants(m.value, m.unit).map(normalize)))
-  );
+  const allowed = new Set([
+    ...bundle.metrics.flatMap((m) => (m.value === 'unknown' ? [] : formatVariants(m.value, m.unit).map(normalize))),
+    ...bundle.passages.flatMap((p) => extractNumericTokens(p.text).map(normalize)),
+  ]);
 
   const found = extractNumericTokens(response);
   const violations = found.filter((token) => !allowed.has(normalize(token)));

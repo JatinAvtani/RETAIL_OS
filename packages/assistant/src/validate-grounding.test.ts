@@ -215,6 +215,36 @@ describe('validateGrounding — adversarial responses', () => {
     expect(validateGrounding('Between 10-15 units.', rangeBundle)).toEqual({ ok: true });
   });
 
+  it('a number appearing VERBATIM in a retrieved passage is grounded — the reader can open the cited document and see it', () => {
+    const withPassage: GroundingBundle = {
+      metrics: [],
+      passages: [{ sourceType: 'document_chunk', sourceId: 'doc-1', text: 'Flour 25kg @ 1,120.00 per bag', score: 0.9 }],
+      entities: [],
+    };
+    expect(validateGrounding('The invoice lists flour at 1,120.00 per bag.', withPassage)).toEqual({ ok: true });
+  });
+
+  it('a passage number quoted in a DIFFERENT format is a violation — source figures get no formatting tolerance', () => {
+    const withPassage: GroundingBundle = {
+      metrics: [],
+      passages: [{ sourceType: 'document_chunk', sourceId: 'doc-1', text: 'Flour 25kg @ 1,120.00 per bag', score: 0.9 }],
+      entities: [],
+    };
+    // "about 1120" drops the decimals the source carries — normalize strips the comma on both
+    // sides, so "1,120.00" matches "1120.00" but never a rounded "1120".
+    expect(validateGrounding('Flour costs about 1120 per bag.', withPassage).ok).toBe(false);
+  });
+
+  it('a fabricated figure is still a violation even when passages are present — passages widen the allowlist only by their own tokens', () => {
+    const withPassage: GroundingBundle = {
+      metrics: [{ ...realMetric, value: '1000.00' }],
+      passages: [{ sourceType: 'document_chunk', sourceId: 'doc-1', text: 'Flour 25kg @ 1,120.00 per bag', score: 0.9 }],
+      entities: [],
+    };
+    const result = validateGrounding('Your margin was 4200 on flour bought at 1,120.00.', withPassage);
+    expect(result).toEqual({ ok: false, violations: ['4200'] });
+  });
+
   it('KNOWN residual gap: a figure written out as words is NOT caught — the boundary is digits', () => {
     // Deliberate: word-number extraction has a false-positive rate that would burn the single
     // regeneration on innocent prose. The guarantee this validator makes is that no DIGIT-shaped

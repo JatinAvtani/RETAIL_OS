@@ -1,4 +1,5 @@
 import type { ChatProvider } from '@retailos/ai';
+import { delimitUntrustedText, UNTRUSTED_DATA_INSTRUCTION } from '@retailos/ai';
 import type { GroundingBundle } from './grounding-bundle';
 import type { DeniedSelection, FailedSelection } from './execute-selections';
 import type { RejectedSelection } from './planning';
@@ -84,11 +85,32 @@ const formatGaps = (denied: DeniedSelection[], failed: FailedSelection[], reject
  */
 const STRICT_ADDENDUM = `
 
-IMPORTANT — your previous answer included a number that did not exactly match one of the values listed above. This is a serious error. Re-read the "Computed metrics available" list above very carefully. Every single digit you write must be copied EXACTLY from that list — do not round, do not estimate, do not combine two values into a new one. If you cannot express the answer using only those exact values, say so explicitly instead of writing any number.`;
+IMPORTANT — your previous answer included a number that did not exactly match a value from the metrics list or the document excerpts above. This is a serious error. Re-read them very carefully. Every single digit you write must be copied EXACTLY from that material — do not round, do not estimate, do not combine two values into a new one. If you cannot express the answer using only those exact values, say so explicitly instead of writing any number.`;
+
+/**
+ * Each retrieved excerpt is wrapped in the shared untrusted-data delimiter — this text came out
+ * of a customer-uploaded document, which is exactly the injection channel the prompt-safety
+ * module was built for. The label carries the source id so the model can attribute a quote to
+ * its document; the wrapper is what keeps an excerpt saying "ignore your rules" inert.
+ */
+const formatPassage = (p: GroundingBundle['passages'][number], index: number): string =>
+  delimitUntrustedText(`document excerpt ${index + 1}, source ${p.sourceId}`, p.text);
 
 const buildPrompt = (bundle: GroundingBundle, denied: DeniedSelection[], failed: FailedSelection[], rejected: RejectedSelection[], strict: boolean): string => {
   const metricsBlock = bundle.metrics.length > 0 ? bundle.metrics.map(formatMetric).join('\n') : 'None.';
   const gapsBlock = formatGaps(denied, failed, rejected);
+  const hasPassages = bundle.passages.length > 0;
+  const passagesSection = hasPassages
+    ? `
+
+Retrieved document excerpts that may help answer this question:
+${bundle.passages.map(formatPassage).join('\n\n')}`
+    : '';
+  const passageRules = hasPassages
+    ? `
+- ${UNTRUSTED_DATA_INSTRUCTION}
+- A figure from a document excerpt may be quoted only EXACTLY as it appears there — never rounded, converted, or combined — and must be attributed to its document.`
+    : '';
 
   return `You are a business assistant answering a question for a restaurant/café owner or manager. You do NOT compute any number yourself — every figure below is already computed and verified. You must ONLY use the exact values given here.
 
@@ -96,12 +118,12 @@ Computed metrics available to answer this question:
 ${metricsBlock}
 
 Things that could NOT be answered:
-${gapsBlock}
+${gapsBlock}${passagesSection}
 
 Rules:
 - Use ONLY the exact values listed above. Never calculate, estimate, round differently, or derive a new number from them.
 - Cite each figure by naming the metric it came from.
-- If "Computed metrics available" is "None." or doesn't actually answer the question, say so honestly and explain what's missing using the "Things that could NOT be answered" list if relevant — never guess or make up a plausible-sounding answer.
+- If "Computed metrics available" is "None." or doesn't actually answer the question, say so honestly and explain what's missing using the "Things that could NOT be answered" list if relevant — never guess or make up a plausible-sounding answer.${passageRules}
 - Write in plain, concise language a busy restaurant owner would understand. No jargon.
 - Plain prose only — no markdown (no asterisks, backticks, bullets, or headings); your text renders exactly as written. Name each metric in ordinary words ("expiry risk value"), never its internal snake_case id.${strict ? STRICT_ADDENDUM : ''}`;
 };

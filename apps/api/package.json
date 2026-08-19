@@ -9,7 +9,8 @@
     "build": "tsc --build",
     "typecheck": "tsc --noEmit",
     "dev": "tsx watch src/start.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "eval": "tsx src/scripts/run-eval.mts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",

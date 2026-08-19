@@ -8,7 +8,8 @@ import type { MetricResult } from '@retailos/metrics';
  * API, and the assistant all read the exact same computed value (I2); defining a second,
  * assistant-specific result shape here would be the beginning of that guarantee quietly eroding.
  *
- * `passages`/`entities` are placeholder shapes for a future hybrid retrieval stage (not built yet)
+ * `passages` is filled by real hybrid retrieval and consumed by narration and the citation panel;
+ * `entities` remains a placeholder shape for future entity-description search
  * — present now so `messages.groundingBundle`'s JSONB column has a real, stable type to validate
  * against from day one, rather than widening this type later in a way every earlier caller would
  * need to be revisited for.
