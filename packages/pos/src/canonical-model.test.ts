@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { ExternalTransaction, ExternalCatalogItem } from './canonical-model';
 
 /**
- * 006-02's actual validation exercise (plan.md Phase 1: "validate the interface against Toast's
+ * earlier work's actual validation exercise (the plan Phase 1: "validate the interface against Toast's
  * API shape before implementing Square, even though Toast ships in V2"). No real adapter exists
- * yet (006-03+) — these are hand-built fixtures shaped like each vendor's REAL documented API
+ * yet — these are hand-built fixtures shaped like each vendor's REAL documented API
  * response (Square's flat Order/LineItem, Toast's nested Order/Check/Selection with recursive
  * modifiers), proving `ExternalTransaction` can represent both without lossy flattening. This is
  * the test that would fail first if a future change accidentally narrowed the canonical model back
@@ -129,7 +129,7 @@ describe('canonical model — validated against both vendors real shapes', () =>
     // Square: CatalogObject(type=ITEM) has NO price; every priced thing is a nested
     // ITEM_VARIATION. Toast: MenuItem's optional `portions` play the same role, less universally.
     // A product with exactly one real SKU still gets exactly one variation row — never a
-    // variation-less item — so pos_items (006-01) always upserts the same shape either way.
+    // variation-less item — so pos_items always upserts the same shape either way.
     const singleSkuItem: ExternalCatalogItem = {
       externalId: 'sq-item-latte',
       name: 'Latte',

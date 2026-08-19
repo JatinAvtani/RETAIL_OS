@@ -1,7 +1,7 @@
 -- Hand-written, not `drizzle-kit generate` output — the snapshot chain has been stale since
 -- migration 0005 (see 0008_units_and_conversions.sql's header and project memory for why).
 --
--- 006-10 (plan.md Phase 5): CSV/Excel import's own state-machine table and per-tenant saved
+-- CSV/Excel import's own state-machine table and per-tenant saved
 -- column mappings. sales_csv_imports.status walks UPLOADED -> MAPPED -> IMPORTED | FAILED. The
 -- uploaded file itself lives in object storage (packages/storage, same presigned-URL pattern as
 -- products.requestImageUpload) — this table is the lifecycle/audit trail on top of it.

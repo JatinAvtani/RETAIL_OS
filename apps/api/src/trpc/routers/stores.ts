@@ -9,7 +9,7 @@ const getInput = z.object({
 });
 
 /**
- * The first endpoint proving object-level store scoping (spec 14 §14.3 rule 2, task 003-07):
+ * The first endpoint proving object-level store scoping:
  * `memberships.store_ids` restricts a caller to specific stores within their own org, a check
  * that's separate from — and layered on top of — the org-level RLS/repository-guard scoping every
  * other endpoint already has. Deliberately gated on nothing but a valid session, not a Permission:
@@ -28,7 +28,7 @@ export const storesRouter = router({
 
   /**
    * 404, not 403, for both a wrong-org store (RLS/repository guard already returns null — the org
-   * boundary) and a right-org-wrong-store one (the new object-level check below) — spec 14 §14.3:
+   * boundary) and a right-org-wrong-store one (the new object-level check below) — the design:
    * a 403 confirms the resource exists, which is itself an enumeration leak. The caller cannot
    * distinguish "this store doesn't exist" from "this store exists but isn't yours" from the
    * response, by design.

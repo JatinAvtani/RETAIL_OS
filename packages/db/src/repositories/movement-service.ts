@@ -10,7 +10,7 @@ import type { MovementType } from './stock-movement-repository';
 type Db = ReturnType<typeof drizzle<typeof schema>>;
 
 /**
- * 005-10 (spec 05 SS5.1.5): a fixed, groupable set — free text here would make waste analytics
+ * earlier work: a fixed, groupable set — free text here would make waste analytics
  * worthless, per the spec's own words. Enforced at the database layer too, not just this type
  * (`stock_movements_waste_reason_code`, migration 0020, scoped to WASTE rows only via a CHECK
  * constraint) — proven directly via raw psql before any of this code existed: an invalid or NULL
@@ -57,18 +57,18 @@ export class UnknownCostSurplusError extends Error {
 }
 
 /**
- * The movement service (005-06): the ONE place a stock movement is actually posted end to end,
- * combining what 005-01/02/03/05 each built in isolation — `stock_movements` (the ledger),
+ * The movement service: the ONE place a stock movement is actually posted end to end,
+ * combining what the earlier ledger, lot, and projection work each built in isolation — `stock_movements` (the ledger),
  * `stock_levels` (the projection), `lots` (FEFO draw), `allocateFefo` (the pure allocation
- * algorithm) — plus the two pieces plan.md's Phase 3 snippet always showed alongside them but no
+ * algorithm) — plus the two pieces the plan's Phase 3 snippet always showed alongside them but no
  * prior task built: the transactional outbox (I8) and the audit log.
  *
  * Deliberately NOT built by composing `StockLevelRepository`/`LotRepository` instances: each of
  * those opens its OWN `db.transaction` internally (via `runScoped`), so calling one after another
  * from an outer function would run as two separate transactions, not one atomic unit — exactly the
  * failure mode I8 exists to prevent. Every method here opens exactly one transaction and performs
- * every write (ledger, projection, lot, outbox, audit) inside it directly, mirroring plan.md's own
- * snippet, which is one flat `BEGIN ... COMMIT` block, not a composition of smaller transactions.
+ * every write (ledger, projection, lot, outbox, audit) inside it directly, mirroring the plan's own
+ * snippet, which is one flat `BEGIN... COMMIT` block, not a composition of smaller transactions.
  */
 export class MovementService {
   private readonly db: Db;
@@ -113,7 +113,7 @@ export class MovementService {
 
   /**
    * The shared movement-posting primitive `postMovement`/`consumeFefo`/`logWaste` all use
-   * internally, made PUBLIC (005-13) for the same reason `reconcileCountLineInTx` is public: a
+   * internally, made PUBLIC for the same reason `reconcileCountLineInTx` is public: a
    * caller that already owns its own transaction (`TransferService`'s initiate/receive/cancel
    * steps) needs to post a movement as part of that SAME atomic unit, not open a second
    * transaction. Every other public entry point on this class (`postMovement`, `consumeFefo`,
@@ -248,13 +248,13 @@ export class MovementService {
   }
 
   /**
-   * The FEFO consumption flow (005-05 + 005-06 wired together): allocates `requiredQuantity`
+   * The FEFO consumption flow: allocates `requiredQuantity`
    * against a store/product's ACTIVE lots via the pure `allocateFefo` algorithm, then — for every
    * lot the allocation drew from — draws down that lot's `remainingQuantity` and posts a
    * `SALE_CONSUMPTION` movement at THAT lot's own cost, all inside one transaction. A `shortfall`
    * (the allocation couldn't fully cover the request) throws `InsufficientStockError` rather than
    * silently posting a partial consumption — the caller decides how to handle it (e.g. negative
-   * stock is a signal per plan.md, but that decision belongs to 005-07's sales-ingestion flow, not
+   * stock is a signal per the plan, but that decision belongs to earlier work's sales-ingestion flow, not
    * silently absorbed here).
    */
   async consumeFefo(input: {
@@ -276,7 +276,7 @@ export class MovementService {
   }
 
   /**
-   * Waste logging (005-10, spec 05 SS5.1.5): "FEFO default, overridable." This is the FEFO-default
+   * Waste logging: "FEFO default, overridable." This is the FEFO-default
    * path — identical allocation mechanics to `consumeFefo` (same `allocateFefo` call, same
    * one-transaction discipline), differing only in `movementType` (`WASTE` instead of
    * `SALE_CONSUMPTION`) and the mandatory `reasonCode`. Reuses `allocateAndPostInTx` rather than
@@ -317,7 +317,7 @@ export class MovementService {
   }
 
   /**
-   * Waste logging's override path (spec 05 SS5.1.5): staff specifies the EXACT lot wasted, rather
+   * Waste logging's override path: staff specifies the EXACT lot wasted, rather
    * than letting FEFO pick — e.g. a specific batch is visibly spoiled while an earlier-expiring
    * lot of the same product is fine. Draws `quantity` from `lotId` directly (no `allocateFefo`
    * call at all), posts one `WASTE` movement at that lot's own cost, in one transaction. Throws if
@@ -483,7 +483,7 @@ export class MovementService {
   }
 
   /**
-   * 006-08 (plan.md's own named "subtle part"): reverses the `SALE_CONSUMPTION` movements a
+   * reverses the `SALE_CONSUMPTION` movements a
    * refunded sale posted — "the ingredients came back, or at minimum shouldn't count as sold."
    * Finds every `SALE_CONSUMPTION` row whose `sourceId` matches the ORIGINAL sale (never the
    * refund's own id — this method looks BACKWARD at what was actually consumed, it doesn't
@@ -493,8 +493,8 @@ export class MovementService {
    * goes back above zero, never creating a new lot (unlike a stocktake surplus, this stock has a
    * real, known origin lot to return to).
    *
-   * `fraction` is `refundedAmount / originalTotal` (1 for a full refund, plan.md's own "partial
-   * refunds reverse proportionally" acceptance criterion) — the caller (006-08's refund handler)
+   * `fraction` is `refundedAmount / originalTotal` (1 for a full refund, the plan's own "partial
+   * refunds reverse proportionally" acceptance criterion) — the caller
    * computes it from the two `sales_transactions` totals; this method only applies it.
    *
    * Posted as `SALE_REVERSAL`, a positive quantity, NOT `RETURN_TO_SUPPLIER` (a different real-world
@@ -571,7 +571,7 @@ export class MovementService {
   }
 
   /**
-   * 005-11's stocktake-approval lot reconciliation, called from `StockCountService.approveCount`
+   * earlier work's stocktake-approval lot reconciliation, called from `StockCountService.approveCount`
    * with an EXTERNAL transaction (its own, already holding the count/line status writes) — unlike
    * every other public method on this class, which each open their own transaction. This is the
    * one deliberate exception: a stocktake approval needs the count status transition AND the

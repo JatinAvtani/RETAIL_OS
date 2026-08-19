@@ -33,7 +33,7 @@ const extractSupplierContactEmails = (contacts: unknown): string[] => {
 };
 
 /**
- * 007-03 (plan.md Phase 1, F2): "invoices@<slug>.retailos.app... sender allowlist per tenant with
+ * "invoices@<slug>.retailos.app... sender allowlist per tenant with
  * quarantine for unknown senders — an open email endpoint is an attack surface and a spam vector."
  * No real Postmark account/domain exists for this project (confirmed with the user) — this route is
  * real, fully working code against Postmark's REAL documented inbound-parse payload shape
@@ -49,7 +49,7 @@ const extractSupplierContactEmails = (contacts: unknown): string[] => {
  * differently on retry, so there's nothing to gain by making Postmark retry it) → match sender
  * against the org's known supplier contacts → accepted senders get every attachment verified
  * (magic bytes, not the declared filename/content-type) and turned into a real `documents` row via
- * the SAME repository 007-02's upload flow uses, then classified via 007-04's real Gemini call;
+ * the SAME repository earlier work's upload flow uses, then classified via earlier work's real Gemini call;
  * unknown senders get quarantined (attachment bytes stored, but genuinely NOT posted as a real
  * document — a human has to explicitly release it, a future extension not built this task).
  */
@@ -163,7 +163,7 @@ export const registerDocumentEmailWebhookRoute: FastifyPluginCallback = (app: Fa
       rawPayload: JSON.parse(request.body),
     });
 
-    // 007-03 confirmed with the user: an org's first store (oldest by createdAt) is the default,
+    // earlier work confirmed with the user: an org's first store (oldest by createdAt) is the default,
     // since an inbound email carries no store information at all — a real gap for true multi-store
     // tenants, flagged for a later task rather than silently guessed at differently per email.
     const storeRepository = new StoreRepository(db, organization.id);
@@ -202,7 +202,7 @@ export const registerDocumentEmailWebhookRoute: FastifyPluginCallback = (app: Fa
           await documentRepository.updateClassification(created.id, classification.type, classification.confidence.toFixed(4));
         }
 
-        // 007-05: same enqueue as the manual-upload path (documents.confirmUpload) — an email-in
+        // same enqueue as the manual-upload path (documents.confirmUpload) — an email-in
         // document goes through the identical async extraction pipeline as an uploaded one.
         await enqueueExtractionJob(extractionQueue, {
           documentId: created.id,

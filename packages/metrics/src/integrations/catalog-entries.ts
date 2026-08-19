@@ -4,9 +4,9 @@ import { defineMetric, type MetricContext, type MetricResult } from '../catalog/
 import { computeDataFreshnessLag } from './health.js';
 
 /**
- * Operational health metrics for POS integrations (spec 12 §H, `009-10`). Both were already pure,
- * tested functions (006-13) assembled into `computeIntegrationHealthSummary` but never individually
- * registered in the catalog — pure wrapper work, matching 009-09's precedent for pre-existing
+ * Operational health metrics for POS integrations. Both were already pure,
+ * tested functions assembled into `computeIntegrationHealthSummary` but never individually
+ * registered in the catalog — pure wrapper work, matching earlier work's precedent for pre-existing
  * compute logic. `unmapped_pos_items_count` reuses `PosItemRepository.findUnmapped` directly rather
  * than the volume-ranked variant, since a plain count needs no ranking.
  */

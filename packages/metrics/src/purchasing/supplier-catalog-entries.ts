@@ -11,14 +11,14 @@ import {
 import { computeLeadTimeActual, computeLeadTimeVariance, computePriceStabilityIndex } from './supplier-metrics.js';
 
 /**
- * Supplier metrics registered into the catalog (spec 12 §G, 7 of the 8 — `effective_unit_cost`
+ * Supplier metrics registered into the catalog (the design, 7 of the 8 — `effective_unit_cost`
  * remains deliberately unbuilt, matching `supplier-performance.ts`'s own confirmed reasoning: no
  * delivery-fee/credit data exists anywhere in this codebase, and nothing has changed since that
  * was decided).
  *
  * `fill_rate`/`on_time_delivery_rate`/`invoice_accuracy_rate`/`quality_reject_rate` are thin
  * `defineMetric` wrappers around `supplier-performance.ts`'s existing, already-tested pure compute
- * functions (008-13) — no new domain logic, just the catalog registration those functions never
+ * functions — no new domain logic, just the catalog registration those functions never
  * got. `lead_time_actual`/`lead_time_variance`/`price_stability_index` are genuinely new metrics
  * with their own compute logic in `supplier-metrics.ts`, since no existing function/data source
  * covered them at the right grain.

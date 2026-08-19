@@ -4,9 +4,9 @@ import { defineMetric, type MetricContext, type MetricResult } from '../catalog/
 import { computeExtractionAutoApprovalRate, type ExtractionAccuracyInput } from './extraction-accuracy.js';
 
 /**
- * Operational health metrics for the document pipeline (spec 12 §H, `009-10`).
- * `extraction_auto_approval_rate` was already a pure, tested function (007-14) with zero catalog
- * registration — pure wrapper work, matching 009-09's precedent for pre-existing compute logic.
+ * Operational health metrics for the document pipeline.
+ * `extraction_auto_approval_rate` was already a pure, tested function with zero catalog
+ * registration — pure wrapper work, matching earlier work's precedent for pre-existing compute logic.
  * `documents_pending_review` is genuinely new: `DocumentRepository.listByStatus('REVIEW_REQUIRED')`
  * already exists, but nothing previously computed each document's pending AGE. `updatedAt` is used
  * as "time entered REVIEW_REQUIRED" — an honest proxy, not a purpose-built column (no dedicated

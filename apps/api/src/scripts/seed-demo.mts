@@ -84,8 +84,8 @@ await db.insert(stores).values({
   timezone: storeTimezone,
 });
 
-// 009-01 — this is currently the ONLY real store-creation code path in the codebase (the stores
-// tRPC router is read-only; a real create endpoint doesn't exist until EPIC-012's onboarding
+// this is currently the ONLY real store-creation code path in the codebase (the stores
+// tRPC router is read-only; a real create endpoint doesn't exist until the later milestone's onboarding
 // flow), so this is where the daily fact-aggregation job genuinely gets registered today. The same
 // `registerFactAggregationJob` call belongs in that future onboarding endpoint too — this is not a
 // demo-only concern, just demo's only current trigger point.

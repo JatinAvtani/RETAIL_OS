@@ -16,14 +16,14 @@ export type SalesTransactionLineInput = {
 };
 
 /**
- * 006-01's schema-task repository for `sales_transactions`/`sales_transaction_lines`. Proves the
+ * earlier work's schema-task repository for `sales_transactions`/`sales_transaction_lines`. Proves the
  * idempotency unique index `(organization_id, source, external_id)` is real and load-bearing via
  * `recordIfNew`'s `onConflictDoNothing` — re-ingesting the same vendor order must not double-count
- * revenue (plan.md's exact acceptance criterion), regardless of whether the caller retried a failed
+ * revenue, regardless of whether the caller retried a failed
  * sync, a webhook fired twice, or the nightly reconciliation sweep re-fetched an already-seen order.
  *
- * Deliberately does NOT trigger consumption here — 006-12 wires `SalesIngestionPipeline`
- * (built in EPIC-005 specifically to wait for this table) to call this AFTER a transaction is
+ * Deliberately does NOT trigger consumption here — earlier work wires `SalesIngestionPipeline`
+ * (built in a later milestone specifically to wait for this table) to call this AFTER a transaction is
  * durably recorded, not as a side effect of recording it. This class's only job is the ledger of
  * sales facts itself.
  *
@@ -38,9 +38,9 @@ export class SalesTransactionRepository extends TenantScopedRepository<typeof sa
   }
 
   /**
-   * Records one transaction and its lines idempotently. Returns `{ status: 'recorded', ... }` on a
+   * Records one transaction and its lines idempotently. Returns `{ status: 'recorded',... }` on a
    * genuine first insert, or `{ status: 'duplicate' }` when `(organization, source, external_id)`
-   * already exists — the caller (eventually 006-05's orders sync) uses this to distinguish "new
+   * already exists — the caller (eventually earlier work's orders sync) uses this to distinguish "new
    * revenue" from "already counted", never inferring it from a thrown error.
    */
   async recordIfNew(input: {

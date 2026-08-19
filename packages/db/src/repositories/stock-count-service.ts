@@ -15,7 +15,7 @@ export class EmptyCountScopeError extends Error {
 
 type Db = ReturnType<typeof drizzle<typeof schema>>;
 
-/** A variance whose magnitude is at least this fraction of the T0 theoretical quantity requires a reason code before approval (spec 05 §5.1.4's "large variances require a reason code" — the 10% figure confirmed with the user; the spec itself names no number). */
+/** A variance whose magnitude is at least this fraction of the T0 theoretical quantity requires a reason code before approval. */
 const LARGE_VARIANCE_THRESHOLD = 0.1;
 
 export class InvalidStockCountTransitionError extends Error {
@@ -33,13 +33,13 @@ export class MissingVarianceReasonError extends Error {
 }
 
 /**
- * 005-11 (spec 05 §5.1.4): the stocktake workflow, `DRAFT → IN_PROGRESS → SUBMITTED → APPROVED |
+ * the stocktake workflow, `DRAFT → IN_PROGRESS → SUBMITTED → APPROVED |
  * REJECTED`. Built as ONE transactional service (mirroring `MovementService`'s own reasoning,
- * 005-06) rather than a plain repository, since `startCount`/`submitCount`/`approveCount` each need
+ * earlier work) rather than a plain repository, since `startCount`/`submitCount`/`approveCount` each need
  * multi-table atomic writes (the count row, its lines, and — for approval — real `stock_movements`/
  * `stock_levels`/`lots` writes via `MovementService`).
  *
- * **The T0 snapshot is the entire reason this feature exists** (plan.md's own words: "sales
+ * **The T0 snapshot is the entire reason this feature exists** (the plan's own words: "sales
  * continue during a count... comparing a count taken at 9am against a theoretical balance read at
  * 11am produces phantom variance"). `startCount` (the `DRAFT → IN_PROGRESS` transition) is the
  * ONLY place `theoreticalQuantityT0`/`t0UnitCost` are ever written — frozen once, from
@@ -106,11 +106,11 @@ export class StockCountService {
   }
 
   /**
-   * 005-12 (spec 05 §5.1.4's own count-creation step names "full | by category | by storage
+   * earlier work (the design's own count-creation step names "full | by category | by storage
    * location" as the SAME workflow, not a separate mechanism — confirmed with the user rather than
    * assumed): resolves every non-deleted product in this category, at this store, into
    * `productVariantPairs`, then delegates to `createCount` unchanged. "Full counts are impractical
-   * weekly" (spec 06's own reasoning for this feature) is exactly why a manager needs a scoped
+   * weekly" (the design's own reasoning for this feature) is exactly why a manager needs a scoped
    * subset rather than re-running the entire state machine from scratch — the state machine,
    * T0 snapshot, variance, and approval logic are identical either way.
    *
@@ -142,7 +142,7 @@ export class StockCountService {
     });
   }
 
-  /** Same reasoning as `createCountByCategory`, scoped by `storageLocationId` instead — spec 05 §5.1.4's other named scope. */
+  /** Same reasoning as `createCountByCategory`, scoped by `storageLocationId` instead — the design's other named scope. */
   async createCountByStorageLocation(input: { storeId: string; storageLocationId: string; createdByUserId?: string }) {
     const pairs = await this.db.transaction((tx) =>
       withTenantContext(tx, this.organizationId, async () => {
@@ -262,7 +262,7 @@ export class StockCountService {
     );
   }
 
-  /** Sets a line's free-text `reasonCode` (spec 05 §5.1.4: "large variances require a reason code," never a fixed vocabulary — unlike waste's enum) — the only way `approveCount`'s large-variance check can ever be satisfied for a real count. */
+  /** Sets a line's free-text `reasonCode` — the only way `approveCount`'s large-variance check can ever be satisfied for a real count. */
   async setLineReason(stockCountLineId: string, reasonCode: string) {
     return this.db.transaction((tx) =>
       withTenantContext(tx, this.organizationId, async () => {
@@ -277,7 +277,7 @@ export class StockCountService {
     );
   }
 
-  /** IN_PROGRESS → SUBMITTED: computes variance = counted − theoretical_t0 (spec 05 §5.1.4's exact formula), valued at t0UnitCost, for every line. A line never counted yet blocks submission — never silently treated as a zero variance (I7). */
+  /** IN_PROGRESS → SUBMITTED: computes variance = counted − theoretical_t0, valued at t0UnitCost, for every line. A line never counted yet blocks submission — never silently treated as a zero variance (I7). */
   async submitCount(stockCountId: string, submittedByUserId?: string) {
     return this.db.transaction((tx) =>
       withTenantContext(tx, this.organizationId, async () => {
@@ -474,7 +474,7 @@ export class StockCountService {
   }
 
   /**
-   * plan.md Phase 7: "stocktake sheets ordered by physical storage location, not alphabetically —
+   * the plan Phase 7: "stocktake sheets ordered by physical storage location, not alphabetically —
    * the person counting walks the room." A product with no `storageLocationId` set sorts last
    * (nulls last), same convention as `LotRepository.findFefoCandidates`' expiry ordering — an
    * unlocated product isn't a sort error, it just can't be placed in a walking order yet.
@@ -499,7 +499,7 @@ export class StockCountService {
   }
 
   /**
-   * `shrinkage_value`/`shrinkage_percentage`'s real input (spec 12 §E) — every line's already-
+   * `shrinkage_value`/`shrinkage_percentage`'s real input — every line's already-
    * frozen `varianceValue`/`varianceQuantity` from APPROVED counts whose T0 snapshot (`t0At`, the
    * moment the physical count actually happened — NOT `approvedAt`, which can trail by days if
    * review is delayed) falls within `[from, to)`. Deliberately reads the count's own `t0At` for the

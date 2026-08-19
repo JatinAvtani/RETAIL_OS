@@ -9,7 +9,7 @@ const sandboxConfig: SquareOAuthConfig = {
 };
 
 /**
- * 006-04: `fetchSquareCatalog` fixtures mirror Square's REAL wire shape, researched directly
+ * `fetchSquareCatalog` fixtures mirror Square's REAL wire shape, researched directly
  * against Square's `SearchCatalogObjects`/`CatalogObject`/`CatalogItemVariation` reference docs
  * (not guessed) — `objects` (not `items`), `item_data.categories[]` (not the deprecated
  * `category_id`), `is_deleted` on the object wrapper (not nested), and `price_money` genuinely

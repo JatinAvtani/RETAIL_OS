@@ -8,7 +8,7 @@ import { TenantScopedRepository } from '../tenant-repository';
 type Db = ReturnType<typeof drizzle<typeof schema>>;
 
 /**
- * 005-08's quarantine queue repository. `unmappedSales` carries a direct `organization_id`
+ * earlier work's quarantine queue repository. `unmappedSales` carries a direct `organization_id`
  * column, so this extends `TenantScopedRepository` normally, unlike `InvitationRepository`'s
  * token-scoped half — there is no pre-tenant-context lookup here, a caller always already knows
  * which organization a sale line belongs to.
@@ -21,7 +21,7 @@ export class UnmappedSaleRepository extends TenantScopedRepository<typeof unmapp
   /**
    * Quarantines one unmapped sale line. Revenue is recorded here directly (not looked up via a
    * join later) so revenue recognition never depends on this row ever being resolved — the
-   * decoupling plan.md's acceptance criterion calls for.
+   * decoupling the plan's acceptance criterion calls for.
    */
   async quarantine(input: {
     storeId: string;

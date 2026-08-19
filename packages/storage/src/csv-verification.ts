@@ -1,5 +1,5 @@
 /**
- * 006-10: same "verify actual bytes, never trust client content-type" discipline as
+ * same "verify actual bytes, never trust client content-type" discipline as
  * `image-verification.ts`, applied to a plain-text upload. A CSV has no magic-byte signature (it's
  * just text) — the real verification is: not a binary format masquerading as CSV (rejects an XLSX
  * upload, whose real signature is a ZIP local-file header, `PK\x03\x04`, at the exact byte offset a
@@ -21,7 +21,7 @@ export const validateCsvUpload = (bytes: Buffer): CsvValidationResult => {
     return { valid: false, reason: 'TOO_LARGE' };
   }
   if (looksLikeZipContainer(bytes)) {
-    // Almost certainly an .xlsx (or another ZIP-based Office format) — XLSX support is explicitly
+    // Almost certainly an.xlsx (or another ZIP-based Office format) — XLSX support is explicitly
     // out of scope for this task (confirmed with the user); reject with a clear reason rather than
     // attempting to decode ZIP bytes as text, which would produce garbage rows, not an error.
     return { valid: false, reason: 'LOOKS_LIKE_BINARY_FORMAT' };

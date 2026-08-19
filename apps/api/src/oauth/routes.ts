@@ -48,7 +48,7 @@ export const registerGoogleOAuthRoutes = (app: FastifyInstance): void => {
         return;
       }
 
-      // Per-IP only (spec 14 §14.2): no account identity is known until the code exchange below
+      // Per-IP only: no account identity is known until the code exchange below
       // succeeds, so there's nothing to key a per-account scope on yet at this point in the flow.
       // Reuses the signup scope's IP limiter rather than the login one, since this endpoint has the
       // same "no known account yet" shape signup does, not login's "known account, bad credential" one.

@@ -362,7 +362,7 @@ describe('MovementService', () => {
     });
 
     it('the projection reflects both a posted RECEIPT and consumeFefo\'s consumption exactly (the ledger-projection consistency invariant, end to end)', async () => {
-      // A real receiving flow posts the RECEIPT movement AND creates the lot together (005-07's
+      // A real receiving flow posts the RECEIPT movement AND creates the lot together (earlier work's
       // job); this test does both explicitly to prove the projection tracks the full ledger, not
       // just consumeFefo's own writes in isolation.
       const service = new MovementService(createScopedDb(client), organizationId);
@@ -546,7 +546,7 @@ describe('MovementService', () => {
 
     it('reversing twice at fraction 1 against the same consumption is rejected by the real lots_remaining_within_initial CHECK constraint — a genuine database backstop, not just application discipline', async () => {
       // reverseSaleConsumption is a pure "apply this fraction against what was consumed" primitive
-      // with no memory of prior reversals — the caller (006-08's processRefundIfNew) is what
+      // with no memory of prior reversals — the caller is what
       // computes the INCREMENTAL fraction so a second sync of the same refund doesn't double-
       // reverse. This test proves what happens if a caller ever got that wrong anyway: the database
       // itself refuses to let a lot's remainingQuantity exceed its initialQuantity, so a genuine

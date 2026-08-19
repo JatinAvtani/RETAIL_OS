@@ -41,7 +41,7 @@ const asError = (body: TrpcSuccess | TrpcError): TrpcError['error'] => {
 };
 
 /**
- * 005-16, the real authenticated behavior this session's Redis outage blocked writing/running
+ * the real authenticated behavior this session's Redis outage blocked writing/running
  * until now. Every prior new procedure (inventory.*, stocktake.*) had only "rejects when logged
  * out" proven (see inventory.test.ts) — this file proves the actual business logic against a real
  * running server, real Postgres, and a real Redis-backed session: store scoping genuinely denies a
@@ -222,7 +222,7 @@ describe('inventory + stocktake routers — authenticated business logic', () =>
     return { organizationId, storeId, productId, variantId, sessionCookie };
   };
 
-  /** A Manager whose membership.storeIds is a real, non-empty array EXCLUDING the org's existing store — the exact case org-level RLS alone can't catch (spec 14 §14.3 rule 2). The excluded store's own id isn't needed here (only a DIFFERENT real store must exist for storeIds to be non-empty); the caller already knows which store to attack with. */
+  /** A Manager whose membership.storeIds is a real, non-empty array EXCLUDING the org's existing store — the exact case org-level RLS alone can't catch. The excluded store's own id isn't needed here (only a DIFFERENT real store must exist for storeIds to be non-empty); the caller already knows which store to attack with. */
   const setUpManagerScopedAwayFromStore = async (organizationId: string): Promise<string> => {
     const otherStoreId = generateId();
     await db.insert(stores).values({ id: otherStoreId, organizationId, name: 'Other Store', timezone: 'America/New_York' });

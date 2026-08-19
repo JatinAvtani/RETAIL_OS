@@ -47,7 +47,7 @@ export class InvitationRepository extends TenantScopedRepository<typeof invitati
   }
 
   /**
-   * Snapshots role + storeIds at issue time, per plan.md ("scoped to the exact org+role at issue
+   * Snapshots role + storeIds at issue time, per the plan ("scoped to the exact org+role at issue
    * time, so changing the invite later doesn't grant more"). Returns the raw token — never
    * persisted — so the caller can email it.
    */
@@ -181,7 +181,7 @@ export const findPendingInvitationsByEmail = async (
  * procedure calling this must independently confirm (via `findInvitationByTokenHash`) that the
  * caller's own email matches the invitation before ever calling this function — that check is what
  * prevents "accepting while logged in as a different user silently creates a membership for the
- * wrong account" (plan.md's explicitly named bug class), not anything inside this function itself.
+ * wrong account", not anything inside this function itself.
  */
 export const acceptInvitationByTokenHash = async (
   db: Db,

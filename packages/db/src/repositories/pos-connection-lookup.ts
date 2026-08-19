@@ -12,7 +12,7 @@ export type ConnectionByExternalAccount = {
 };
 
 /**
- * 006-06's version of the same chicken-and-egg problem `MembershipRepository`
+ * earlier work's version of the same chicken-and-egg problem `MembershipRepository`
  * (`find_accepted_memberships_for_login`, migration 0005) solves for login: a webhook arrives
  * carrying only Square's `merchant_id` — no `organizationId` is known yet, and `pos_connections` has
  * FORCE ROW LEVEL SECURITY requiring `app.current_org_id` to already be set. Queries a narrow,

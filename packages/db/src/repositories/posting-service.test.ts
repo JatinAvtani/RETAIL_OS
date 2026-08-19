@@ -115,7 +115,7 @@ describe('PostingService', () => {
     await adminClient.end();
   });
 
-  /** A real confirmed supplier-product mapping, product, and REVIEW_REQUIRED document — the state 007-10 leaves behind for 007-11 to post against. */
+  /** A real confirmed supplier-product mapping, product, and REVIEW_REQUIRED document — the state earlier work leaves behind for earlier work to post against. */
   const setUpMappedLine = async (options: { conversionToBase?: string } = {}): Promise<{ productId: string; mappingId: string; documentId: string }> => {
     const supplierRepo = new SupplierRepository(createScopedDb(client), organizationId);
     const supplier = await supplierRepo.create({ id: generateId(), name: `Posting Test Supplier ${generateId()}` });
@@ -197,7 +197,7 @@ describe('PostingService', () => {
     // Outbox: document.posted, cost.updated (this service's own events), PLUS stock.moved —
     // MovementService.postMovementInTx emits its own outbox event internally as part of the SAME
     // transaction, since postDocument composes it rather than duplicating its logic.
-    // 008-14: supplier.price_changed does NOT fire here — this is the FIRST price ever recorded for
+    // supplier.price_changed does NOT fire here — this is the FIRST price ever recorded for
     // this supplier product (a baseline being established, not a "change" from anything), and
     // detectPriceChange is only invoked when a real prior price exists to compare against.
     const events = await adminDb.select().from(outboxEvents).where(eq(outboxEvents.organizationId, organizationId));
@@ -259,7 +259,7 @@ describe('PostingService', () => {
     return doc.id;
   };
 
-  describe('price-change detection (008-14)', () => {
+  describe('price-change detection', () => {
     it('a real threshold-crossing price change emits a real PRICE_CHANGE event and a gated supplier.price_changed outbox event, with the correct annualized_impact', async () => {
       const { mappingId } = await setUpMappedLine();
 

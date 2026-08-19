@@ -14,10 +14,10 @@ export type DriftRow = {
 };
 
 /**
- * ADR-03 / spec 08 §8.6: the ledger is truth, `stock_levels` is a cache maintained transactionally
- * alongside it (`StockLevelRepository.recordAndProject`, 005-03). That transactional discipline is
+ * ADR-03 / the design: the ledger is truth, `stock_levels` is a cache maintained transactionally
+ * alongside it (`StockLevelRepository.recordAndProject`, earlier work). That transactional discipline is
  * what SHOULD keep them equal at all times — this function is the mechanism that verifies it
- * actually holds, exactly per plan.md's Phase 3 query: any row it returns is a bug (a missed
+ * actually holds, exactly per the plan's Phase 3 query: any row it returns is a bug (a missed
  * projection update, a hand-edited row, a code path that bypassed `recordAndProject`), not a
  * data-quality nuance to explain away.
  *

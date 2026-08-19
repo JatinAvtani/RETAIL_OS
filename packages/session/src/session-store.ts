@@ -11,14 +11,14 @@ const userSessionsKey = (userId: string) => `user-sessions:${userId}`;
 const generateToken = (): string => randomBytes(32).toString('base64url');
 
 export type SessionStoreOptions = {
-  /** Overridable for tests — real callers should use the 30d/12h defaults from spec 14 §14.2. */
+  /** Overridable for tests — real callers should use the 30d/12h defaults from the design. */
   absoluteLifetimeMs?: number;
   idleTimeoutSeconds?: number;
 };
 
 /**
- * Server-side sessions in Redis, not JWTs — instant revocation is a hard requirement (spec 14
- * §14.2, ADR-10): firing a manager must cut access now, not at token expiry. Every read/write here
+ * Server-side sessions in Redis, not JWTs — instant revocation is a hard requirement (the design's
+ * ADR-10): firing a manager must cut access now, not at token expiry. Every read/write here
  * is a real round trip to Redis; there is no in-memory cache layer, so a revoked session is
  * unreadable on the very next request anywhere in the fleet, not eventually.
  *

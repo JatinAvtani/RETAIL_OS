@@ -19,12 +19,12 @@ import {
 import { computeCogsActual, type ConsumptionLine } from '../margin/margin.js';
 
 /**
- * Inventory metrics registered into the catalog (spec 12 §D, all 9). Every `execute` follows the
+ * Inventory metrics registered into the catalog. Every `execute` follows the
  * same fetch-then-compute split as every other catalog file: a repository method fetches
  * already-scoped rows, the pure `compute*` functions in `inventory.ts` do the arithmetic.
  *
  * `stock_value`'s category breakdown is NOT part of the returned `MetricResult` — that type is a
- * fixed contract shared by every metric in the catalog (spec 10 §10.3), and adding an ad-hoc field
+ * fixed contract shared by every metric in the catalog, and adding an ad-hoc field
  * here would break that guarantee for every consumer that pattern-matches on it. The category
  * breakdown is real, computed data, but until the catalog gains a documented way to carry
  * structured detail alongside a scalar `value`, only the store-wide total is exposed through this
@@ -170,7 +170,7 @@ export const inventoryTurnoverMetric = defineMetric<TurnoverParams>({
     const cogsPeriod = computeCogsActual(consumptionLines, currency);
     const byCategory = computeStockValueByCategory(stockValueLines, currency);
     // "avg stock value" over the period would need multiple snapshots (a fact-table concern, spec
-    // 12 §12.6, not built yet — 009-01); the CURRENT stock value is used as the best available
+    // 12, not built yet — earlier work); the CURRENT stock value is used as the best available
     // proxy, matching this project's own precedent of live-query approximations ahead of the
     // fact-table phase.
     const currentStockValue = computeTotalStockValue(byCategory, currency);
@@ -400,7 +400,7 @@ export const stockoutRevenueImpactMetric = defineMetric<MenuItemStockoutParams>(
         : ('unknown' as const);
 
     // avg daily consumption is estimated from the SAME menu item's own real sold-quantity rate
-    // over the requested period — the trailing average velocity spec 12 §D calls for.
+    // over the requested period — the trailing average velocity the design calls for.
     const periodDays = Math.max(1, Math.round((params.to.getTime() - params.from.getTime()) / (24 * 60 * 60 * 1000)));
     const avgDailyConsumption = soldLine ? new Decimal(soldLine.quantitySold).dividedBy(periodDays).toFixed(6) : null;
 

@@ -7,9 +7,9 @@ import { idColumn, timestamps } from './columns';
 export const recipeComponentTypeEnum = pgEnum('recipe_component_type', ['PRODUCT', 'RECIPE']);
 
 /**
- * Spec 07 §7.3: "Recipes are versioned — recipes change, and historical margin must be computed
+ * the design: "Recipes are versioned — recipes change, and historical margin must be computed
  * against the recipe in effect at the time." Same effective-dating shape as `supplier_prices`
- * (spec 08 §8.4 names the identical GiST exclusion-constraint mechanism for both): `recipeGroupId`
+ *: `recipeGroupId`
  * is the STABLE identity that survives across versions (what `menu_items.recipe_id` and
  * `recipe_components.sub_recipe_id` point at); `id` identifies one specific version row.
  * `EXCLUDE USING gist (recipe_group_id WITH =, tstzrange(valid_from, valid_to) WITH &&)` (added in
@@ -49,11 +49,11 @@ export const recipes = pgTable('recipes', {
  * `RecipeRepository`, which resolves it against a real query before ever writing a row.
  *
  * `wasteFactor` — a multiplier applied on top of the raw quantity (e.g. 1.05 for 5% trim loss).
- * Per plan.md's property-test list: waste factor increases quantity, never decreases, so this is
+ * Per the plan's property-test list: waste factor increases quantity, never decreases, so this is
  * constrained to be >= 1 at the domain layer (packages/domain), not the database — the constraint
  * is about business meaning, not a value range integrity check.
  *
- * Cycle detection (component graph must be acyclic, spec 07 §7.3) happens at save time in
+ * Cycle detection (component graph must be acyclic, the design) happens at save time in
  * RecipeRepository via a real DFS over `sub_recipe_id` edges, not here — a database CHECK
  * constraint cannot express "no cycle in a self-referencing graph across rows."
  */
@@ -74,7 +74,7 @@ export const recipeComponents = pgTable('recipe_components', {
 });
 
 /**
- * Spec 07 §7.3: the sellable unit, distinct from Product — "a menu item is a presentation and
+ * the design: the sellable unit, distinct from Product — "a menu item is a presentation and
  * pricing concept ('Large Latte, $4.50, happy-hour $3.50') while a product is a physical concept."
  * `recipeId` references `recipes.recipe_group_id` (the stable identity, same reasoning as
  * `recipe_components.subRecipeGroupId`) — a menu item always resolves to whichever recipe version

@@ -6,23 +6,23 @@ import { menuItems } from './recipes';
 export const unmappedSaleStatusEnum = pgEnum('unmapped_sale_status', ['UNRESOLVED', 'RESOLVED', 'IGNORED']);
 
 /**
- * 005-08 (spec 05 §5.1.3, plan.md Phase 4): the quarantine queue for a sale line whose POS item
+ * the quarantine queue for a sale line whose POS item
  * cannot be resolved to a `MenuItem`. The point of this table — "revenue counts, consumption
  * doesn't, nothing is silently dropped" — is that an unmapped item is a data-completeness problem
  * to surface, not a reason to drop the sale or guess at its recipe (I7). Silently dropping it would
- * understate consumption and overstate margin; the same failure shape 005-07 already guards
+ * understate consumption and overstate margin; the same failure shape earlier work already guards
  * against for a menu item with no recipe.
  *
- * Sales-source-agnostic, same reasoning as `SaleConsumptionService` (005-07):
+ * Sales-source-agnostic, same reasoning as `SaleConsumptionService`:
  * `pos_items`/`sales_transactions` don't exist anywhere in this codebase yet — they belong
- * entirely to EPIC-006 (Sales Ingestion), which is blocked ON EPIC-005 and hasn't started.
+ * entirely to a later milestone (Sales Ingestion), which is blocked ON a later milestone and hasn't started.
  * Confirmed with the user rather than assumed: this table stores the raw external identifying
  * fields a POS sale line carries (`posItemExternalId`/`posItemName`), not a foreign key to a table
- * that doesn't exist. Whatever EPIC-006 builds to ingest a sale is the eventual writer here.
+ * that doesn't exist. Whatever a later milestone builds to ingest a sale is the eventual writer here.
  *
  * `revenue` is carried on the row (not looked up elsewhere) precisely so revenue recognition
  * doesn't depend on consumption ever being resolved — the two are deliberately decoupled per
- * plan.md's acceptance criterion.
+ * the plan's acceptance criterion.
  *
  * Resolution is a status transition, not a delete: `resolvedMenuItemId` (nullable, set only once a
  * real mapping is confirmed) plus `resolvedAt`/`resolvedByUserId` record who fixed it and when,

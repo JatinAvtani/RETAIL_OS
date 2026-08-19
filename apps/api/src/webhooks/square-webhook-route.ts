@@ -26,7 +26,7 @@ const readSquareConfig = (): SquareOAuthConfig | null => {
 };
 
 /**
- * 006-06 (plan.md Phase 2): "verify signature → return 200 immediately (vendors retry aggressively
+ * "verify signature → return 200 immediately (vendors retry aggressively
  * on slow responses) → enqueue for processing → dedupe on vendor event id." Registered as its own
  * encapsulated plugin (not inline on `app` directly) SPECIFICALLY so `addContentTypeParser` below is
  * scoped to only this route's prefix — Fastify's plugin encapsulation means the global JSON parser
@@ -44,7 +44,7 @@ const readSquareConfig = (): SquareOAuthConfig | null => {
  * succeeded — a future worker can pick up `processedAt IS NULL` rows the same way once one exists,
  * without this route needing to change. A sync that fails does NOT fail the webhook response
  * itself (Square already delivered a genuinely valid, verified event — the response reflects that
- * receipt, not the downstream sync's own success/failure, matching plan.md's "webhooks are
+ * receipt, not the downstream sync's own success/failure, matching the plan's "webhooks are
  * best-effort; the nightly reconciliation sweep is not optional" framing).
  */
 export const registerSquareWebhookRoute: FastifyPluginCallback = (app: FastifyInstance, _opts, done) => {

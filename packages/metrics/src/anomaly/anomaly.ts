@@ -9,17 +9,17 @@ import {
 } from './statistics.js';
 
 /**
- * The 4 real anomaly signals from spec 12 §12.4 with a genuine underlying data source in this
+ * The 4 real anomaly signals from the design with a genuine underlying data source in this
  * codebase: sales anomaly, cost spike, waste spike, consumption anomaly. `review_sentiment_shift`
  * (the spec's 5th signal) is deliberately NOT built — confirmed with the user: no review/sentiment
- * data source exists anywhere in this codebase's schema, and spec 06's own feature list marks it V2
+ * data source exists anywhere in this codebase's schema, and the design's own feature list marks it V2
  * with no epic assigned. Building it would mean fabricating a signal from nothing (I1/I7).
  */
 
 /* ------------------------------------------------------------------ sales_anomaly */
 
 /**
- * `sales_anomaly` — spec 12 §12.4's own `|z| > 2.5` threshold against the residual of a classical
+ * `sales_anomaly` — the design's own `|z| > 2.5` threshold against the residual of a classical
  * weekly-seasonal decomposition (see `statistics.ts`'s header for the deliberate STL deviation,
  * ADR-16). `'unknown'` with fewer than 14 real days of daily revenue in the series (I7 — day-of-week
  * seasonal averages need at least one full pair of weeks to be meaningful, never approximated).
@@ -35,10 +35,10 @@ export const computeSalesAnomalies = (dailyRevenue: DailyPoint[]): FlaggedPoint[
 export type CostSpikePricePoint = { date: string; unitPrice: string };
 
 /**
- * `cost_spike` — spec 12 §12.4: unit price vs. 90-day median, flagged at `>15%` OR `>3σ`. Takes the
+ * `cost_spike` — the design: unit price vs. 90-day median, flagged at `>15%` OR `>3σ`. Takes the
  * full trailing price history (already ordered) and the single LATEST price to check; `'unknown'`
  * with fewer than 2 historical points, matching `price_stability_index`'s own established
- * insufficient-data threshold for a price-series statistic (009-09).
+ * insufficient-data threshold for a price-series statistic.
  */
 export const computeCostSpike = (
   history: CostSpikePricePoint[]
@@ -68,7 +68,7 @@ export const computeCostSpike = (
 /* ------------------------------------------------------------------ waste_spike */
 
 /**
- * `waste_spike` — spec 12 §12.4: daily waste value vs. trailing mean, flagged at `>2σ`. Takes a
+ * `waste_spike` — the design: daily waste value vs. trailing mean, flagged at `>2σ`. Takes a
  * real daily-bucketed waste-value series; `'unknown'` with fewer than 2 days of data (I7 — a
  * standard deviation over 0/1 points is not a real measure of spread).
  */
@@ -90,13 +90,13 @@ export const computeWasteSpikes = (dailyWasteValue: DailyPoint[]): FlaggedPoint[
 export type ConsumptionDivergenceDay = { date: string; actual: Decimal; theoretical: Decimal };
 
 /**
- * `consumption_anomaly` — spec 12 §12.4: actual vs. theoretical consumption divergence, flagged when
+ * `consumption_anomaly` — the design: actual vs. theoretical consumption divergence, flagged when
  * `>10%` sustained for 3 CONSECUTIVE days (not merely 3 days total in the window — the spec's own
  * word "sustained" is the load-bearing part; three isolated one-off spikes weeks apart is a
  * different, less urgent signal than 3 days in a row).
  *
  * Confirmed with the user: `actual`/`theoretical` here are DOLLAR COGS per day (real
- * `computeCogsActual`/`computeCogsTheoretical` machinery, 009-02, applied once per day), not a raw
+ * `computeCogsActual`/`computeCogsTheoretical` machinery, earlier work, applied once per day), not a raw
  * ingredient quantity. A genuine quantity-based theoretical series would need per-day recipe
  * explosion across every sold item over the whole window — real N+1 query risk this task
  * deliberately avoids; the dollar-COGS framing still catches the same real signal (production/

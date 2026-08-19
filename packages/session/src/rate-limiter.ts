@@ -16,7 +16,7 @@ export type RateLimitCheck =
   | { allowed: false; retryAfterSeconds: number };
 
 /**
- * Spec 14 §14.2: "Rate limiting on auth endpoints: per IP, per account, with progressive delay and
+ * the design: "Rate limiting on auth endpoints: per IP, per account, with progressive delay and
  * lockout." Two independent `RateLimiter` instances cover the two scopes (see
  * apps/api/src/auth/rate-limit.ts) — this class itself is generic over one scope+key pair, matching
  * `SessionStore`/`OAuthStateStore`'s existing pattern of a thin class wrapping one Redis key shape.

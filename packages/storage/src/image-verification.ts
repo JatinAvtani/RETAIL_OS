@@ -1,5 +1,5 @@
 /**
- * Spec 14 §14.7: "type verified by magic bytes not extension." A client-supplied `Content-Type`
+ * the design: "type verified by magic bytes not extension." A client-supplied `Content-Type`
  * header (or a filename extension) is a claim, not a fact — this reads the first bytes of the
  * actual uploaded object and checks them against each format's real file signature. No image
  * library dependency needed; these signatures are stable, public constants.
@@ -56,7 +56,7 @@ export const validateProductImage = (bytes: Buffer): ImageValidationResult => {
   return { valid: true, format };
 };
 
-/** 008-08: a damage-claim photo attached to a goods-receipt line — same real magic-byte detection as `validateProductImage`, its own size cap (a phone photo of physical damage, not a curated product shot). */
+/** earlier work: a damage-claim photo attached to a goods-receipt line — same real magic-byte detection as `validateProductImage`, its own size cap (a phone photo of physical damage, not a curated product shot). */
 export const MAX_GOODS_RECEIPT_PHOTO_BYTES = 10 * 1024 * 1024;
 
 export const validateGoodsReceiptPhoto = (bytes: Buffer): ImageValidationResult => {

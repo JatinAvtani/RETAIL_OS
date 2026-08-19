@@ -21,7 +21,7 @@ export const optimisticVersion = {
 };
 
 /**
- * 009-18 — pgvector's `vector(N)` type has no first-class Drizzle 0.36 representation, so this is a
+ * pgvector's `vector(N)` type has no first-class Drizzle 0.36 representation, so this is a
  * thin `customType`: the app never reads/writes a `vector` column through the typed query builder
  * (every real embedding write/read goes through raw `sql`, since similarity operators like `<=>`
  * have no builder representation either) — this exists only so `document_embeddings.embedding` can

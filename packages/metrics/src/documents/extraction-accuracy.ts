@@ -1,15 +1,15 @@
 import { decideDocumentRouting } from '@retailos/domain';
 
 /**
- * 007-14 (spec 12 §12.2's `extraction_auto_approval_rate`: "auto-approved / total — measures
+ * earlier work (the design's `extraction_auto_approval_rate`: "auto-approved / total — measures
  * whether the pipeline saves labor"). Given already-fetched extraction rows (I2's own precedent —
  * `computeRecipeCost`/`computeDataFreshnessLag` never touch a database, `apps/api`'s router does
  * the fetching), pure.
  *
- * Deliberately re-derives the routing decision via `decideDocumentRouting` (007-08's own pure
+ * Deliberately re-derives the routing decision via `decideDocumentRouting` (earlier work's own pure
  * function) from each extraction's STORED `canAutoApprove`/confidence, rather than reading the
  * document's CURRENT `status` column. A human can approve/reject a document AFTER it was
- * auto-approved (plan.md: an auto-approval is "still reviewable"), which moves `documents.status`
+ * auto-approved, which moves `documents.status`
  * away from `AUTO_APPROVED` — reading current status would silently undercount the pipeline's own
  * real auto-approval rate by conflating it with a later, unrelated human decision. The extraction
  * row's own `validation.canAutoApprove` and confidence values are the honest, immutable record of
@@ -32,7 +32,7 @@ export const computeExtractionAutoApprovalRate = (extractions: ExtractionAccurac
 
 /**
  * Per-gate BLOCK/WARN frequency across a set of extractions' validation results — real data
- * 007-07's gates already produce, no new tracking needed. Answers "which validation gate fires
+ * earlier work's gates already produce, no new tracking needed. Answers "which validation gate fires
  * most often," the honest, available slice of "accuracy telemetry" (a true per-SUPPLIER correction
  * rate would need grouping `extraction_corrections` by the extracted supplier name — real but
  * separate data this function doesn't touch).

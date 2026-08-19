@@ -35,19 +35,19 @@ CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "unit_conversions_global_unique" 
 CREATE INDEX CONCURRENTLY IF NOT EXISTS "categories_org_idx" ON "categories" ("organization_id") WHERE "deleted_at" IS NULL;
 CREATE INDEX CONCURRENTLY IF NOT EXISTS "categories_parent_idx" ON "categories" ("parent_id") WHERE "deleted_at" IS NULL;
 CREATE INDEX CONCURRENTLY IF NOT EXISTS "products_org_idx" ON "products" ("organization_id") WHERE "deleted_at" IS NULL;
--- Per plan.md Phase 2: deleted SKUs must be reusable, so the uniqueness constraint excludes
+-- Per the plan Phase 2: deleted SKUs must be reusable, so the uniqueness constraint excludes
 -- soft-deleted rows rather than being a plain (organization_id, sku) unique index.
 CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "products_org_sku_unique" ON "products" ("organization_id", "sku") WHERE "deleted_at" IS NULL;
 CREATE INDEX CONCURRENTLY IF NOT EXISTS "product_variants_product_idx" ON "product_variants" ("product_id") WHERE "deleted_at" IS NULL;
 -- At most one default variant per product — "every product gets a default variant on creation"
--- (plan.md) only holds if this is enforced, not just followed by convention in the repository.
+-- only holds if this is enforced, not just followed by convention in the repository.
 CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "product_variants_one_default_per_product" ON "product_variants" ("product_id") WHERE "is_default" = true AND "deleted_at" IS NULL;
 
 -- Added for 0010_suppliers_pricing.sql (suppliers/supplier_products/supplier_prices).
 CREATE INDEX CONCURRENTLY IF NOT EXISTS "suppliers_org_idx" ON "suppliers" ("organization_id") WHERE "deleted_at" IS NULL;
 CREATE INDEX CONCURRENTLY IF NOT EXISTS "supplier_products_org_idx" ON "supplier_products" ("organization_id");
--- A given supplier's SKU maps to at most one confirmed product mapping per org — matches spec
--- 05 SS5.3.2's "confirmed mapping stored permanently," enforced as a real constraint, not convention.
+-- A given supplier's SKU maps to at most one confirmed product mapping per org — matches the
+-- design's "confirmed mapping stored permanently," enforced as a real constraint, not convention.
 CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "supplier_products_supplier_sku_unique" ON "supplier_products" ("organization_id", "supplier_id", "supplier_sku");
 CREATE INDEX CONCURRENTLY IF NOT EXISTS "supplier_prices_supplier_product_idx" ON "supplier_prices" ("supplier_product_id");
 
@@ -74,9 +74,9 @@ CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "storage_locations_store_name_uni
 -- Postgres propagates as a real (non-concurrent) index build on each existing partition — safe
 -- here since every partition is empty at migration time.
 
--- Added for 0015_lots.sql. The workhorse index (plan.md, spec 08 SS8.6): serves BOTH FEFO
+-- Added for 0015_lots.sql. The workhorse index: serves BOTH FEFO
 -- allocation (earliest expiry_date first, among ACTIVE lots with stock left) and the expiry
--- queue (005-15). Partial on the exact predicate every real query against this table filters by —
+-- queue. Partial on the exact predicate every real query against this table filters by —
 -- a lot that's DEPLETED or EXPIRED, or has zero remaining_quantity, is never a FEFO candidate.
 CREATE INDEX CONCURRENTLY IF NOT EXISTS "lots_fefo_idx" ON "lots" ("organization_id", "store_id", "product_id", "expiry_date") WHERE "status" = 'ACTIVE' AND "remaining_quantity" > 0;
 -- Tenant-first lookup for anything not going through the FEFO path directly (e.g. a lot detail

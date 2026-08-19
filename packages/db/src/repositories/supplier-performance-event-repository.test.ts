@@ -96,7 +96,7 @@ describe('SupplierPerformanceEventRepository', () => {
     expect(allEvents).toHaveLength(1);
   });
 
-  it('findForSupplierBetween (008-15) returns only events strictly within [since, until) — the real prior-window read the trend endpoint depends on', async () => {
+  it('findForSupplierBetween returns only events strictly within [since, until) — the real prior-window read the trend endpoint depends on', async () => {
     const db = createScopedDb(client);
     const now = Date.now();
     const insertAt = (occurredAt: Date) =>

@@ -3,7 +3,7 @@ import { organizations } from './organizations';
 import { idColumn, softDelete, timestamps, optimisticVersion } from './columns';
 
 /**
- * Hierarchical, per-organization (spec 07 §7.3) — drives analytics grouping and reporting
+ * Hierarchical, per-organization — drives analytics grouping and reporting
  * rollups. Self-referencing via `parentId` (NULL = top-level category).
  *
  * `path` is a materialized, slash-delimited ancestor-id path (e.g. "/<rootId>/<childId>"),

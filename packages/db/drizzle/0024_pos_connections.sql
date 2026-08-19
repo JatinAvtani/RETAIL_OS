@@ -1,7 +1,7 @@
 -- Hand-written, not `drizzle-kit generate` output — the snapshot chain has been stale since
 -- migration 0005 (see 0008_units_and_conversions.sql's header and project memory for why).
 --
--- 006-03 (spec 13 §13.3): one store's link to a vendor POS account. Reuses sales_source (0023) for
+-- one store's link to a vendor POS account. Reuses sales_source (0023) for
 -- vendor rather than a narrower enum — asked the user, confirmed 'csv' simply never appears as a
 -- real row (CSV import is a one-off upload, no persistent connection).
 

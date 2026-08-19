@@ -9,9 +9,9 @@ import { users } from './users';
 import { idColumn, timestamps, optimisticVersion } from './columns';
 
 /**
- * Spec 05 §5.2.2's exact state diagram. `SENT` is the immutability boundary — plan.md: "amendments
- * create a new version so what was actually sent to the supplier is preserved," matching spec 08
- * §8.2's `purchase_orders` entity-revisions mechanism (a full JSONB snapshot on send, not a new
+ * the design's exact state diagram. `SENT` is the immutability boundary — the plan: "amendments
+ * create a new version so what was actually sent to the supplier is preserved," matching the design
+ * the design's `purchase_orders` entity-revisions mechanism (a full JSONB snapshot on send, not a new
  * row here — that snapshot lives in `audit_logs`/a future `*_revisions` table, out of this task's
  * schema scope). `CANCELLED` is reachable from every pre-SENT-and-PARTIALLY_RECEIVED state per the
  * spec; the domain-layer state machine (packages/domain/src/purchasing/po-lifecycle.ts) is the
@@ -30,14 +30,14 @@ export const purchaseOrderStatusEnum = pgEnum('purchase_order_status', [
 ]);
 
 /**
- * Spec 05 §5.2.2 / 07 §7.5. `version` (optimisticVersion) prevents lost updates when two managers
- * edit the same PO concurrently (spec 08 §8.2's literal example uses this exact table). Separate
+ * the design / 07. `version` (optimisticVersion) prevents lost updates when two managers
+ * edit the same PO concurrently. Separate
  * actor+timestamp column pairs per transition (`submittedAt`/`submittedByUserId`,
  * `approvedAt`/`approvedByUserId`, etc.) mirror `stock_counts`' established convention — each
  * terminal-or-milestone state is independently queryable ("show me every CANCELLED PO this
  * quarter") rather than folded into one shared `resolvedAt`/`resolvedByUserId` pair.
  *
- * `sentAt` is the literal immutability boundary spec 05 §5.2.2 names ("SENT... becomes immutable")
+ * `sentAt` is the literal immutability boundary the design names ("SENT... becomes immutable")
  * — application code must refuse further line/header edits once this is non-null, enforced in the
  * repository layer (a DB CHECK constraint can't express "no UPDATE to certain columns after a
  * certain state" without a trigger, which this project has avoided elsewhere in favor of
@@ -85,7 +85,7 @@ export const purchaseOrders = pgTable('purchase_orders', {
 
   closedAt: timestamp('closed_at', { withTimezone: true }),
 
-  // 008-06: spec 05 §5.2.2, "SENT triggers PDF generation + email to the supplier contact."
+  // the design, "SENT triggers PDF generation + email to the supplier contact."
   // `pdfObjectKey` is null until a SEND actually generates one (I7 — no PDF exists before that).
   // `emailSentAt`/`emailSentTo` record the (mocked, per this project's no-cost constraint) send
   // outcome directly on the row, so "was this actually sent, to whom" needs no audit_logs join.
@@ -99,7 +99,7 @@ export const purchaseOrders = pgTable('purchase_orders', {
 });
 
 /**
- * Spec 05 §5.2.2: "Quantities are stored in both supplier order units (cases) and base units (kg).
+ * the design: "Quantities are stored in both supplier order units (cases) and base units (kg).
  * Every unit conversion failure in a purchasing system becomes a stock error; the conversion is
  * done once, at PO creation, and stored." `conversionToBase` is recorded on the LINE (not looked up
  * live from `unit_conversions`/`supplier_products` at receiving time) for the same reason
@@ -110,7 +110,7 @@ export const purchaseOrders = pgTable('purchase_orders', {
  * `unitPrice` is per ORDER unit (matches `supplier_prices.unitPrice`'s own convention — a supplier
  * quotes per case/pack, not per base unit), so `lineTotal = quantityOrderUnits * unitPrice` needs
  * no conversion at all; `quantityBaseUnits` exists purely for the receiving/stock-posting side
- * (008-07+), which needs the base-unit figure to create a lot and post a movement.
+ * which needs the base-unit figure to create a lot and post a movement.
  *
  * `receivedQuantityBaseUnits` starts NULL, not `0` — "not yet received" must never read as "zero
  * received" (I7), the same discipline `stock_count_lines.countedQuantity` already established.

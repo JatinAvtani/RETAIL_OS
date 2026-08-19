@@ -25,7 +25,7 @@ export const GOODS_RECEIPT_PHOTOS_BUCKET = 'retailos-goods-receipt-photos';
  * `retailos_app` role, never a superuser. In local dev/production `DATABASE_URL` naturally IS
  * that connection, so the fallback is transparent. In CI, `DATABASE_URL` is the migration/seed
  * admin connection (superuser, needed for DDL and cross-tenant test seeding) — a real,
- * previously-undetected gap found during 004-15: `ci.yml` set `DATABASE_URL` to the superuser for
+ * previously-undetected gap found during earlier work: `ci.yml` set `DATABASE_URL` to the superuser for
  * the whole job, which meant every `apps/api` test, including the entire cross-tenant suite, ran
  * against a connection that bypasses RLS (`BYPASSRLS`) — RLS was never actually exercised in CI
  * for this app, only application-layer checks were. `ci.yml`'s test step now sets
@@ -49,7 +49,7 @@ export const storageClient: S3Client = createStorageClient({
 });
 
 /**
- * 007-05: a dedicated Redis connection for BullMQ, separate from `redis` above (`packages/session`'s
+ * a dedicated Redis connection for BullMQ, separate from `redis` above (`packages/session`'s
  * client, used for sessions/rate-limiting) — BullMQ's own documented connection requirements
  * (`maxRetriesPerRequest: null`) are specific to its own use and shouldn't be forced onto the
  * session store's unrelated fast-fail expectations.
@@ -58,7 +58,7 @@ export const extractionQueue: Queue<ExtractionJobData> = createExtractionQueue(
   createQueueRedisConnection(process.env.REDIS_URL ?? 'redis://localhost:6379')
 );
 
-/** 009-18 — a real, separate connection matching `extractionQueue`'s own reasoning above; the embedding job's failure/backoff profile is genuinely distinct from extraction's. */
+/** earlier work — a real, separate connection matching `extractionQueue`'s own reasoning above; the embedding job's failure/backoff profile is genuinely distinct from extraction's. */
 export const embeddingQueue: Queue<EmbeddingJobData> = createEmbeddingQueue(
   createQueueRedisConnection(process.env.REDIS_URL ?? 'redis://localhost:6379')
 );

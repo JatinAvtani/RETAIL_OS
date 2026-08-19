@@ -93,7 +93,7 @@ EXCEPTION
 END $$;
 --> statement-breakpoint
 
--- Effective-dating enforced by the database, not application code (plan.md Phase 3): two price
+-- Effective-dating enforced by the database, not application code: two price
 -- rows for the same supplier_product can never have overlapping validity ranges. `valid_to IS
 -- NULL` means "still in effect" — tstzrange's default upper bound of NULL is unbounded, so this
 -- correctly excludes a new open-ended row from overlapping an existing open-ended one too.

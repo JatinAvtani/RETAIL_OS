@@ -12,7 +12,7 @@ describe('mean', () => {
 
 describe('populationStdev', () => {
   it('matches the textbook dataset already hand-verified elsewhere in this codebase (supplier-metrics.ts)', () => {
-    // 2,4,4,4,5,5,7,9 -> population stdev exactly 2, the same anchor 009-09 used for computeLeadTimeVariance.
+    // 2,4,4,4,5,5,7,9 -> population stdev exactly 2, the same anchor earlier work used for computeLeadTimeVariance.
     expect(populationStdev([d(2), d(4), d(4), d(4), d(5), d(5), d(7), d(9)]).toNumber()).toBe(2);
   });
 });

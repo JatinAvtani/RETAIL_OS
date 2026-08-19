@@ -10,18 +10,18 @@ import { products } from './products';
 import { idColumn, timestamps } from './columns';
 
 /**
- * Spec 05 §5.2.4 / 07 §7.5's `InvoiceMatch`: "the three-way match result linking PO ↔ Receipt ↔
+ * the design / 07 the design's `InvoiceMatch`: "the three-way match result linking PO ↔ Receipt ↔
  * Document, with per-line variance classification and resolution state." One row per matched
  * invoice document — `purchaseOrderId` is nullable (an invoice can match receipt lines from a
- * walk-in/no-PO receipt, 008-09's own scope, or match nothing at all, the "invoiced but never
- * received" case plan.md names as high-priority/possible-fraud). `documentId` has no unique
+ * walk-in/no-PO receipt, earlier work's own scope, or match nothing at all, the "invoiced but never
+ * received" case the plan names as high-priority/possible-fraud). `documentId` has no unique
  * constraint at the DB level for the same reason `document_extractions` allows re-extraction:
  * matching is a computed result, not an immutable fact, and could in principle be re-run — the
- * app layer (008-10's repository) is responsible for not creating duplicate matches for the same
+ * app layer is responsible for not creating duplicate matches for the same
  * document in normal operation.
  *
  * `status` is deliberately NOT `pgEnum` — `PENDING`/`REVIEWED`/`RESOLVED`, an app-layer union
- * matching `discrepancyCode`'s own precedent. 008-12 confirmed with the user: one resolution
+ * matching `discrepancyCode`'s own precedent. earlier work confirmed with the user: one resolution
  * action, `PENDING` -> `RESOLVED` directly with a required reason — `REVIEWED` is a real,
  * representable value (kept for forward compatibility, matching every enum-widening precedent in
  * this codebase) but has no real transition into it yet; nothing currently sets it.
@@ -57,7 +57,7 @@ export const invoiceMatches = pgTable('invoice_matches', {
 
 /**
  * One row per INVOICE line, always — even a line with no PO/receipt match at all (the "unordered
- * item" / "invoiced but never received" cases in plan.md's variance table), since the whole point
+ * item" / "invoiced but never received" cases in the plan's variance table), since the whole point
  * of this table is showing every invoice line's disposition, not just the ones that matched
  * cleanly. `purchaseOrderLineId`/`goodsReceiptLineId`/`productId` are all nullable for exactly
  * that reason — I7 applies here at the structural level: "no match found" is a real, recordable
@@ -103,7 +103,7 @@ export const invoiceMatchLines = pgTable('invoice_match_lines', {
   ...timestamps,
 });
 
-/** Matches plan.md's Phase 4 variance table exactly, plus `CLEAN` for a line with no variance at all — the common case, still recorded, never omitted (a match with zero lines would look like matching failed rather than succeeded). */
+/** Matches the plan's Phase 4 variance table exactly, plus `CLEAN` for a line with no variance at all — the common case, still recorded, never omitted (a match with zero lines would look like matching failed rather than succeeded). */
 export const varianceTypeEnum = [
   'CLEAN',
   'PRICE_VARIANCE',
@@ -113,7 +113,7 @@ export const varianceTypeEnum = [
 ] as const;
 export type VarianceType = (typeof varianceTypeEnum)[number];
 
-/** `HIGH` is reserved for `INVOICED_NOT_RECEIVED` per plan.md's explicit "possible fraud/error" framing — every other variance type is at most `MEDIUM`. `NONE` for `CLEAN` lines. */
+/** `HIGH` is reserved for `INVOICED_NOT_RECEIVED` per the plan's explicit "possible fraud/error" framing — every other variance type is at most `MEDIUM`. `NONE` for `CLEAN` lines. */
 export const varianceSeverityEnum = ['NONE', 'LOW', 'MEDIUM', 'HIGH'] as const;
 export type VarianceSeverity = (typeof varianceSeverityEnum)[number];
 

@@ -24,10 +24,10 @@ const readSquareConfig = (): SquareOAuthConfig | null => {
 };
 
 /**
- * 006-04: the manual sync trigger — asked the user first, confirmed a protected tRPC mutation is
+ * the manual sync trigger — asked the user first, confirmed a protected tRPC mutation is
  * the right shape for now since no job queue/scheduler exists anywhere in this codebase yet
  * (`apps/worker` is still a placeholder). An OWNER/MANAGER with real store access calls this
- * directly; a future scheduled sweep (006-09) can call `syncSquareCatalog` the same way once a
+ * directly; a future scheduled sweep can call `syncSquareCatalog` the same way once a
  * real worker exists, without this endpoint needing to change.
  */
 export const integrationsRouter = router({
@@ -58,18 +58,18 @@ export const integrationsRouter = router({
         throw new TRPCError({ code: 'BAD_REQUEST', message: err.message });
       }
       // A real Square API failure (network, 4xx/5xx, decryption failure on a corrupted token) —
-      // the connection's own status/lastError already records the plain-language reason (006-13's
+      // the connection's own status/lastError already records the plain-language reason (earlier work's
       // job to surface); the caller here just needs to know the sync didn't succeed.
       throw new TRPCError({ code: 'BAD_GATEWAY', message: 'Square catalog sync failed. Check the integration status and try again.' });
     }
   }),
 
   /**
-   * 006-05: same manual-trigger shape as `syncSquareCatalog` — a real scheduler is still
+   * same manual-trigger shape as `syncSquareCatalog` — a real scheduler is still
    * out of scope (`apps/worker` remains a placeholder), so this stays a protected mutation an
    * authenticated caller invokes directly. Distinct error for "no linked location" (a connection
    * can exist with a working token but no `externalLocationId` if the original OAuth callback's
-   * location fetch failed — 006-03's own documented fallback) since Square's orders search
+   * location fetch failed — earlier work's own documented fallback) since Square's orders search
    * requires a real location id, unlike the catalog endpoint.
    */
   syncSquareOrders: protectedProcedure.input(syncOrdersInput).mutation(async ({ ctx, input }) => {
@@ -101,7 +101,7 @@ export const integrationsRouter = router({
   }),
 
   /**
-   * 006-09: the nightly reconciliation sweep, manually triggerable here for the same reason every
+   * the nightly reconciliation sweep, manually triggerable here for the same reason every
    * other sync in this codebase is a protected mutation — no scheduler exists yet (`apps/worker` is
    * still a placeholder). A real trailing-3-day re-fetch, deliberately independent of the
    * connection's own incremental watermark (see `reconcileSquareOrders`'s own doc comment) — catches
@@ -137,7 +137,7 @@ export const integrationsRouter = router({
   }),
 
   /**
-   * 006-13 (spec 13 §13.4, 12 §12.2 section H): every connection's health, in the customer's
+   * every connection's health, in the customer's
    * language — "integration failures must be visible to the customer... a silently broken sync
    * produces confidently wrong analytics, which is the specific outcome this entire architecture
    * is designed to prevent." Org-wide (every store's every connection at once), not

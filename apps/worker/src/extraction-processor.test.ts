@@ -45,7 +45,7 @@ const fakeSuccessfulProvider: ExtractionProvider = {
         total: { value: '11.00', confidence: 0.9 },
       },
       // Internally consistent with the fields above (10.00 line total + 1.00 tax = 11.00 total) so
-      // this fixture reads as a genuinely clean extraction now that 007-07's real gates run against
+      // this fixture reads as a genuinely clean extraction now that earlier work's real gates run against
       // it — a self-contradicting fixture would otherwise silently produce a real TOTAL_MISMATCH.
       lines: [
         {
@@ -72,7 +72,7 @@ const fakeFailingProvider: ExtractionProvider = {
 const asJob = (data: ExtractionJobData): Job<ExtractionJobData> => ({ data }) as Job<ExtractionJobData>;
 
 /**
- * 007-05: real Postgres + real MinIO, a FAKE `ExtractionProvider` (not a real Gemini call — that
+ * real Postgres + real MinIO, a FAKE `ExtractionProvider` (not a real Gemini call — that
  * would be slow/rate-limited and this test is about the processor's own orchestration logic, not
  * Gemini's accuracy, which `packages/ai`'s own tests already cover). Proves the actual job the
  * BullMQ `Worker` runs, not just the pieces it calls.
@@ -93,7 +93,7 @@ describe('extraction processor', () => {
     await ensureBucketExists(storageClient, BUCKET);
     await putObjectBytes(storageClient, BUCKET, 'test-invoice.pdf', Buffer.from('%PDF-1.4\n%%EOF'), 'application/pdf');
     // A real, OCR-able invoice — the trivial fake PDF above has no readable text at all, which
-    // would make the 007-06 circuit-breaker-fallback test's "Tesseract found something real"
+    // would make the earlier work circuit-breaker-fallback test's "Tesseract found something real"
     // assertion meaningless regardless of whether the fallback wiring is correct. Lives in
     // src/__fixtures__/ (tracked in git), not spikes/extraction/corpus/ (gitignored) — a CI
     // runner's fresh clone never has the spike corpus, which broke this test in CI despite
@@ -131,7 +131,7 @@ describe('extraction processor', () => {
     return id;
   };
 
-  it('007-08: a fully-scored, internally-consistent, high-confidence extraction (every field >= 0.85, no gate issues) moves the document to AUTO_APPROVED', async () => {
+  it('a fully-scored, internally-consistent, high-confidence extraction (every field >= 0.85, no gate issues) moves the document to AUTO_APPROVED', async () => {
     documentId = await seedDocument();
 
     const fullyConfidentProvider: ExtractionProvider = {
@@ -186,7 +186,7 @@ describe('extraction processor', () => {
     expect(validation.canAutoApprove).toBe(true);
   });
 
-  it('007-08: the shared clean fixture (which has one deliberately-unextracted, null-confidence discount field) still moves the document to REVIEW_REQUIRED, not AUTO_APPROVED — proving the per-field confidence check is load-bearing, not just the overall-confidence check', async () => {
+  it('the shared clean fixture (which has one deliberately-unextracted, null-confidence discount field) still moves the document to REVIEW_REQUIRED, not AUTO_APPROVED — proving the per-field confidence check is load-bearing, not just the overall-confidence check', async () => {
     documentId = await seedDocument();
 
     const processor = createExtractionProcessor({
@@ -239,12 +239,12 @@ describe('extraction processor', () => {
     expect(validation.issues[0]?.message).toBe('simulated provider failure');
   });
 
-  it('007-06: with a real invalid Gemini key and no injected provider, the REAL circuit-breaker-wrapped provider falls back to a REAL Tesseract extraction', async () => {
+  it('with a real invalid Gemini key and no injected provider, the REAL circuit-breaker-wrapped provider falls back to a REAL Tesseract extraction', async () => {
     documentId = await seedDocument('real-invoice.pdf');
 
     // No `provider` override — this exercises the REAL construction path
     // (createCircuitBreakerExtractionProvider(createGeminiExtractionProvider(...),
-    // createTesseractExtractionProvider(), ...)), not a fake substituted in before the wiring is
+    // createTesseractExtractionProvider(),...)), not a fake substituted in before the wiring is
     // even reached. A genuinely invalid key makes Gemini's real API call genuinely fail (a real
     // 400/401, not a simulated one), proving the breaker's fallback path is real, wired code, not
     // just unit-tested in isolation.
@@ -264,7 +264,7 @@ describe('extraction processor', () => {
     expect(extraction?.fields).not.toEqual({}); // Tesseract's real regex parser found at least the header shape on this real invoice.
   }, 200000); // a real failed Gemini call + two real docker run invocations (poppler, tesseract), each bounded at 90s (DOCKER_RUN_TIMEOUT_MS) — confirmed via a real CI run that GitHub Actions' runner genuinely needs more than 20s per docker call (cold image pull + weaker CPU than this dev machine), not that either call hangs.
 
-  it('007-07: a content-hash duplicate produces a real DUPLICATE validation issue', async () => {
+  it('a content-hash duplicate produces a real DUPLICATE validation issue', async () => {
     const sharedHash = `shared-hash-${generateId()}`;
     const priorId = generateId();
     await adminDb.insert(documents).values({
@@ -310,7 +310,7 @@ describe('extraction processor', () => {
     await adminDb.delete(documents).where(eq(documents.id, priorId));
   });
 
-  it('007-07: a document whose lines/tax/discount do not reconcile to its stated total produces a real TOTAL_MISMATCH issue', async () => {
+  it('a document whose lines/tax/discount do not reconcile to its stated total produces a real TOTAL_MISMATCH issue', async () => {
     documentId = await seedDocument();
 
     const inconsistentProvider: ExtractionProvider = {
@@ -360,7 +360,7 @@ describe('extraction processor', () => {
     expect(validation.canAutoApprove).toBe(false);
   });
 
-  it('007-07: an extracted unit price more than 5x a confirmed trailing median produces a real PRICE_ANOMALY issue', async () => {
+  it('an extracted unit price more than 5x a confirmed trailing median produces a real PRICE_ANOMALY issue', async () => {
     const supplierId = generateId();
     await adminDb.insert(suppliers).values({ id: supplierId, organizationId, name: `Price Anomaly Supplier ${supplierId}` });
 
@@ -396,7 +396,7 @@ describe('extraction processor', () => {
           },
           lines: [
             {
-              // Decimal-place OCR slip: $4.50 read as $45.00 — exactly the failure class plan.md
+              // Decimal-place OCR slip: $4.50 read as $45.00 — exactly the failure class the plan
               // calls out this gate as existing to catch.
               sku: { value: 'ANOM-SKU-1', confidence: 0.9 },
               description: { value: 'Anomaly Widget', confidence: 0.9 },

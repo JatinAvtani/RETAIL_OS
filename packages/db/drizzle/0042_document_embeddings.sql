@@ -1,9 +1,9 @@
--- 009-18: spec 11 SS11.5 / spec 10 SS10.4. Semantic search over documents — the vector half of
--- search (009-17 built the lexical FTS+trigram half). One row per document, embedding a synthetic
+-- the design / the design Semantic search over documents — the vector half of
+-- search. One row per document, embedding a synthetic
 -- descriptive text assembled from the document's ALREADY-APPROVED extracted fields (supplier,
 -- document number, date, line-item descriptions, total) — confirmed with the user: no raw OCR text
 -- is persisted anywhere in this schema today (Gemini's extraction path never produces one; Tesseract's
--- is computed then discarded), so this is the real, honest corpus available, matching spec 11's own
+-- is computed then discarded), so this is the real, honest corpus available, matching the design's own
 -- "entity descriptions" corpus type, not literal OCR full-text (which would need a real, separate
 -- schema change this task doesn't make).
 --
@@ -45,5 +45,5 @@ CREATE POLICY "tenant_isolation" ON "document_embeddings"
   USING ("organization_id" = current_setting('app.current_org_id')::uuid);
 --> statement-breakpoint
 -- HNSW over cosine distance (Google's own embedding docs recommend cosine similarity for
--- text-embedding-004) — spec 10 SS10.4 names HNSW explicitly as the vector-index method.
+-- text-embedding-004) — the design names HNSW explicitly as the vector-index method.
 CREATE INDEX IF NOT EXISTS "document_embeddings_hnsw_idx" ON "document_embeddings" USING hnsw ("embedding" vector_cosine_ops);

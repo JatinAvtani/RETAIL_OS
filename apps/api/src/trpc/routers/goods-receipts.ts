@@ -94,11 +94,11 @@ const requirePermission = (permissions: string[], permission: string) => {
 };
 
 /**
- * 008-07 (plan.md Phase 3, spec 05 §5.2.3): the real HTTP surface for `GoodsReceiptRepository`.
+ * the real HTTP surface for `GoodsReceiptRepository`.
  * No dedicated `purchasing:receive` permission exists in `packages/authz` (only read/write/approve)
  * — reuses `purchasing:write`, the same permission `purchaseOrders.addLine`/`.create` already gate,
  * since adding a new permission enum value for one action is a bigger, harder-to-reverse change than
- * this task needs. `confirmReceipt`'s `purchaseOrderId` is optional (008-09's future walk-in-receipt
+ * this task needs. `confirmReceipt`'s `purchaseOrderId` is optional (earlier work's future walk-in-receipt
  * scope), but this router still requires `storeId`/`supplierId` to both belong to the caller's org,
  * matching every other endpoint's cross-tenant discipline regardless of whether a PO is involved.
  */
@@ -170,7 +170,7 @@ export const goodsReceiptsRouter = router({
   }),
 
   /**
-   * 008-08 ("photos for damage claims"): two-step flow, not one — mirrors
+   * earlier work ("photos for damage claims"): two-step flow, not one — mirrors
    * `products.requestImageUpload`/`.confirmImageUpload` exactly. `requestPhotoUpload` only ever
    * hands out a URL that accepts a PUT of the declared content-type; it never touches
    * `goods_receipt_lines`, since a presigned URL being issued proves nothing about what bytes

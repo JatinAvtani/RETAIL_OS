@@ -231,7 +231,7 @@ describe('InvoiceMatchRepository', () => {
     expect(lineRows[0]?.invoiceUnitPrice).toBe('100.0000');
   });
 
-  describe('supplier performance event emission (008-13)', () => {
+  describe('supplier performance event emission', () => {
     it('a real price variance emits a real PRICE_VARIANCE event AND an INVOICE_ERROR event for the whole invoice', async () => {
       const { purchaseOrderId, purchaseOrderLineId } = await createSentPurchaseOrder('10', '50.00');
       await receiveAgainstPo(purchaseOrderId, purchaseOrderLineId, '10');
@@ -304,7 +304,7 @@ describe('InvoiceMatchRepository', () => {
     });
   });
 
-  it('a widened org-level price tolerance turns a would-be variance into CLEAN — 008-11', async () => {
+  it('a widened org-level price tolerance turns a would-be variance into CLEAN — ', async () => {
     const { purchaseOrderId, purchaseOrderLineId } = await createSentPurchaseOrder('10', '50.00');
     await receiveAgainstPo(purchaseOrderId, purchaseOrderLineId, '10');
     const documentId = await createPostedInvoiceDocument();
@@ -330,7 +330,7 @@ describe('InvoiceMatchRepository', () => {
     }
   });
 
-  it('a partial org override (price only) still uses the real default for quantity tolerance — 008-11', async () => {
+  it('a partial org override (price only) still uses the real default for quantity tolerance — ', async () => {
     const { purchaseOrderId, purchaseOrderLineId } = await createSentPurchaseOrder('10', '4.50');
     await receiveAgainstPo(purchaseOrderId, purchaseOrderLineId, '8'); // partial: only 8 arrived
     const documentId = await createPostedInvoiceDocument();
@@ -421,7 +421,7 @@ describe('InvoiceMatchRepository', () => {
     expect(lineRows[0]?.goodsReceiptLineId).toBeNull();
   });
 
-  it('matches a walk-in receipt (no PO at all) purely by product/supplier — 008-09 integration', async () => {
+  it('matches a walk-in receipt (no PO at all) purely by product/supplier — integration', async () => {
     const grRepo = new GoodsReceiptRepository(createScopedDb(client), organizationId);
     await grRepo.confirmReceipt({
       storeId,
@@ -539,7 +539,7 @@ describe('InvoiceMatchRepository', () => {
     expect(pending[0]?.highestSeverity).toBe('HIGH');
   });
 
-  it('findPending never returns a CLEAN match — 008-12, a queue full of clean invoices defeats the point of 008-11\'s tolerances', async () => {
+  it('findPending never returns a CLEAN match — a queue full of clean invoices defeats the point of \'s tolerances', async () => {
     const { purchaseOrderId, purchaseOrderLineId } = await createSentPurchaseOrder('10', '4.50');
     await receiveAgainstPo(purchaseOrderId, purchaseOrderLineId, '10');
     const cleanDocumentId = await createPostedInvoiceDocument();

@@ -8,28 +8,28 @@ import type { S3Client } from '@aws-sdk/client-s3';
 import type { ExtractionJobData } from '@retailos/queue';
 
 /**
- * 007-06 (plan.md Phase 2: "Primary + secondary configured. Circuit breaker; fall back on
+ * earlier work (the plan Phase 2: "Primary + secondary configured. Circuit breaker; fall back on
  * outage."). 5 consecutive Gemini failures opens the circuit (routes straight to Tesseract without
  * even trying Gemini) for 5 minutes, then allows one real trial call. These numbers aren't from a
  * spec — they're a reasonable default for a free-tier provider with no documented SLA; revisit if
- * real production telemetry (007-14) ever shows them wrong.
+ * real production telemetry ever shows them wrong.
  */
 const FAILURE_THRESHOLD = 5;
 const RESET_TIMEOUT_MS = 5 * 60 * 1000;
 
 /**
- * 007-05 (plan.md Phase 2): the real worker-side extraction job — downloads the document's actual
+ * the real worker-side extraction job — downloads the document's actual
  * bytes, calls the real Gemini provider, and records the result via `DocumentRepository.
- * recordExtraction` (007-01's own method, built for exactly this, unused until now). A provider
+ * recordExtraction`. A provider
  * error (`result.error` set) still produces a real `document_extractions` row — a failed attempt is
  * a genuine, useful data point (matching the spike's own "a failed extraction is a data point, not
  * a crash" convention), not something to silently drop.
  *
- * 007-07 (plan.md Phase 3): `validation` is real gate output from `@retailos/domain`'s
+ * `validation` is real gate output from `@retailos/domain`'s
  * `validateExtraction` — arithmetic reconciliation, duplicate detection, date plausibility, and
  * price-anomaly checks, all deterministic (I1: the model is never asked to verify its own numbers).
  *
- * 007-08 (plan.md Phase 4): the document's final status is `decideDocumentRouting`'s call —
+ * the document's final status is `decideDocumentRouting`'s call —
  * `AUTO_APPROVED` only when every gate passes AND the overall confidence AND every present
  * per-field/line confidence clears the threshold; everything else (including a failed extraction,
  * which has no confidence at all) lands at `REVIEW_REQUIRED`.

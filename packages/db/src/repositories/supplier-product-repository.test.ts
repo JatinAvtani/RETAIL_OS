@@ -126,7 +126,7 @@ describe('SupplierProductRepository', () => {
     ).rejects.toThrow();
   });
 
-  it('findBySupplierAndSku finds an existing mapping (confirmed or not) for the exact pair, 007-10', async () => {
+  it('findBySupplierAndSku finds an existing mapping (confirmed or not) for the exact pair, ', async () => {
     const repo = new SupplierProductRepository(createScopedDb(client), organizationId);
     const created = await repo.create({ id: generateId(), supplierId, productId, supplierSku: 'FIND-ME' });
 

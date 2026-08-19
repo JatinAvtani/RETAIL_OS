@@ -7,7 +7,7 @@ import { resolveUnitCostLatest, resolveUnitCostWeightedAvg } from './cost.js';
 
 /**
  * Cost metrics registered into the catalog — see `cost.ts`'s own header for why these 4 (of
- * spec 12 §B's 8) are the remaining scope after 009-02 already registered the other 4.
+ * the design's 8) are the remaining scope after earlier work already registered the other 4.
  *
  * `unit_cost_weighted_avg` and `unit_cost_latest` are plain `MetricContext` consumers (just `db`/
  * `organizationId`) — unlike `recipe_cost`/`menu_item_cost` below, they need no injected resolver.
@@ -16,7 +16,7 @@ import { resolveUnitCostLatest, resolveUnitCostWeightedAvg } from './cost.js';
  * explosion, per-ingredient supplier price lookup, unit conversion) that lives in
  * `apps/api/src/metrics/recipe-cost-resolver.ts` — too many repository dependencies for
  * `packages/metrics` to own cleanly, and it throws `TRPCError`, a tRPC-specific shape. Matching
- * `cogs_theoretical`'s own precedent (009-02), the resolver is injected onto a dedicated context
+ * `cogs_theoretical`'s own precedent, the resolver is injected onto a dedicated context
  * extension rather than imported across the layer boundary.
  */
 
@@ -28,7 +28,7 @@ export type RecipeCostBreakdownResolver = (
 
 /** `MetricContext` extended with the two recipe-resolution collaborators these two metrics need.
  * `RecipeUnitCostResolver` is imported from `margin/catalog-entries.ts` rather than redefined —
- * both `menu_item_cost` here and `cogs_theoretical` (009-02) need the exact same shape. */
+ * both `menu_item_cost` here and `cogs_theoretical` need the exact same shape. */
 export type CostMetricContext = MetricContext & {
   resolveRecipeCostBreakdown: RecipeCostBreakdownResolver;
   resolveRecipeUnitCost: RecipeUnitCostResolver;

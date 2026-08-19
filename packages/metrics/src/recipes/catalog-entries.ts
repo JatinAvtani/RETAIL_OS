@@ -3,8 +3,8 @@ import { MenuItemRepository } from '@retailos/db';
 import { defineMetric, type MetricContext, type MetricResult } from '../catalog/index.js';
 
 /**
- * Operational health metric for recipes (spec 12 §H, `009-10`). Genuinely new: `menuItems.
- * recipeGroupId` is `NOT NULL` with deliberately no FK (spec 07 §7.3), so "no recipe" can never
+ * Operational health metric for recipes. Genuinely new: `menuItems.
+ * recipeGroupId` is `NOT NULL` with deliberately no FK, so "no recipe" can never
  * mean `recipeGroupId IS NULL` — it means no `recipes` row with that `recipeGroupId` is currently
  * valid. `MenuItemRepository.findWithoutValidRecipe` (built for this task) does the real
  * `NOT EXISTS` check against `recipes`' effective-dating columns.

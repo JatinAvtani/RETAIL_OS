@@ -163,14 +163,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS "purchase_orders_org_po_number_unique"
   ON "purchase_orders" ("organization_id", "po_number");
 --> statement-breakpoint
 
--- One line_number per PO — the display/print ordering plan.md's PDF generation (008-06) needs a
+-- One line_number per PO — the display/print ordering the plan's PDF generation needs a
 -- stable ordering for, independent of insertion order or id.
 CREATE UNIQUE INDEX IF NOT EXISTS "purchase_order_lines_po_line_number_unique"
   ON "purchase_order_lines" ("purchase_order_id", "line_number");
 --> statement-breakpoint
 
 -- Received quantity can never exceed what was ordered — a real database backstop against a
--- receiving-flow bug silently over-crediting stock beyond what was ever ordered (008-07/008-08's
+-- receiving-flow bug silently over-crediting stock beyond what was ever ordered (related work's
 -- job to build the receiving flow correctly; this constraint means a bug there fails loudly
 -- instead of silently corrupting the ledger).
 ALTER TABLE "purchase_order_lines" ADD CONSTRAINT "purchase_order_lines_received_within_ordered"

@@ -20,14 +20,14 @@ export class RecipeCycleError extends Error {
   constructor(public readonly recipeGroupId: string, public readonly cyclePath: string[]) {
     super(
       `Saving this recipe would create a cycle: ${[...cyclePath, recipeGroupId].join(' -> ')}. ` +
-        'The component graph must be acyclic (spec 07 SS7.3).'
+        'The component graph must be acyclic.'
     );
     this.name = 'RecipeCycleError';
   }
 }
 
 /**
- * `recipes` is effective-dated (a stable `recipeGroupId` across version rows, spec 08 SS8.4's
+ * `recipes` is effective-dated (a stable `recipeGroupId` across version rows, the design's
  * exclusion-constraint pattern, identical mechanism to `SupplierPriceRepository`) — this
  * repository does NOT extend `TenantScopedRepository` for the same reason
  * `SupplierPriceRepository` doesn't: `recipe_components` has no `organization_id` of its own, so
@@ -38,7 +38,7 @@ export class RecipeCycleError extends Error {
  * every query against it explicitly ANDs `organization_id = this.organizationId` too — the same
  * defense-in-depth `TenantScopedRepository` gives every other tenant table (RLS catches what the
  * app misses; this catches what RLS misconfiguration misses). A real gap here was found and
- * closed during 004-15's development: the original methods trusted `withTenantContext`/RLS alone
+ * closed during earlier work's development: the original methods trusted `withTenantContext`/RLS alone
  * with no explicit predicate, and a misconfigured DATABASE_URL (pointed at a superuser that
  * bypasses RLS) during local testing made the leak directly visible.
  */
@@ -105,8 +105,8 @@ export class RecipeRepository {
   }
 
   /**
-   * Cycle detection at save time (spec 07 SS7.3: "the component graph must be acyclic, validated
-   * on write" — plan.md: "discovering a cycle when a customer views a margin report is far too
+   * Cycle detection at save time (the design: "the component graph must be acyclic, validated
+   * on write" — the plan: "discovering a cycle when a customer views a margin report is far too
    * late"). Real DFS over `sub_recipe_group_id` edges, following each visited sub-recipe's
    * CURRENTLY-VALID (asOf now) component set — walking every historical version would reject
    * perfectly valid new recipes based on a past version's shape that no longer applies.

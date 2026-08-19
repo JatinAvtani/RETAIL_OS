@@ -46,7 +46,7 @@ const ADMIN_CONNECTION_STRING =
 /**
  * Real end-to-end proof that `aggregateFactTablesForDay` genuinely populates all 5 fact tables from
  * real source rows, and that re-running it for the SAME day is genuinely idempotent (the "fully
- * rebuildable from source" requirement, plan.md) — not just asserted by convention, proven by
+ * rebuildable from source" requirement, the plan) — not just asserted by convention, proven by
  * actually calling it twice and confirming the second run produces byte-identical row counts, not
  * duplicates.
  */
@@ -166,7 +166,7 @@ describe('aggregateFactTablesForDay — real end-to-end', () => {
     const { id: poId } = await poRepo.create({ storeId, supplierId, poNumber: `FACT-PO-${generateId()}`, currency: 'USD' });
     // Backdate createdAt to the target local day (create() always stamps real "now") — a real,
     // parameterized admin-connection UPDATE, matching this project's own established pattern for
-    // backdating a "now"-stamped column in a wiring test (see 009-09's own lead-time test fix).
+    // backdating a "now"-stamped column in a wiring test (see earlier work's own lead-time test fix).
     await adminDb.update(purchaseOrders).set({ createdAt: new Date('2026-06-15T18:00:00Z') }).where(eq(purchaseOrders.id, poId));
     await poRepo.addLine({
       purchaseOrderId: poId, supplierProductId, productId, variantId,

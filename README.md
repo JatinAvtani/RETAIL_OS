@@ -112,6 +112,18 @@ translating a percentage into a number an owner will actually act on. There is d
 composite score: an invented weighted average would be exactly the fabricated-scoring problem this
 project exists to avoid.
 
+**AI assistant, grounded** — a chat surface where a question is classified, planned against the
+registered metric catalog, and answered only from values the catalog actually computed; the model
+routes and narrates, it never does arithmetic. Every narrated answer then passes a deterministic
+validator: each numeric token in the response must match a computed value exactly (within
+formatting tolerance), one stricter regeneration is allowed on a violation, and a second violation
+discards the prose entirely in favour of the structured results — a fabricated figure cannot
+reach the screen through the narration path. Each cited figure carries its own provenance panel:
+the period, the data-freshness timestamp, and the source tables with row counts. Citations are
+source-level (which tables, how many rows, as of when), not per-line-item. When something can't be
+answered — a missing permission, an unknowable metric — the answer says which part and why,
+rather than narrating around the gap.
+
 ---
 
 ## Architecture
@@ -217,7 +229,10 @@ number is **contribution margin**, and it's labelled as such.
 
 ## Roadmap
 
-Not yet built: a grounded natural-language assistant that routes questions to registered metric
-functions rather than computing an answer itself — the same "no ad-hoc arithmetic" discipline that
-already governs every dashboard number, applied to a conversational interface. Proactive
-notifications and a daily briefing built on the same metric catalog. A guided onboarding flow.
+Not yet built: document-grounded answers in the assistant — hybrid retrieval over invoice chunks
+exists at the search layer, but retrieved passages do not yet feed narration, so the assistant
+answers metric questions only. Proactive notifications and a daily briefing built on the same
+metric catalog. A guided onboarding flow. A background relay for the transactional outbox — state
+changes and their events already commit atomically (the part that cannot be retrofitted); shipping
+those recorded events to downstream consumers is deferred until a consumer needs replay, with
+today's background work triggered directly at the point of state change.

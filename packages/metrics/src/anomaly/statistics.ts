@@ -1,7 +1,7 @@
 import { Decimal } from 'decimal.js';
 
 /**
- * Shared statistical primitives for anomaly detection (spec 12 §12.4, `009-11`). Every function
+ * Shared statistical primitives for anomaly detection. Every function
  * here is pure — no database access, matching every other domain in this package.
  *
  * ADR-16 (docs/spec/18-engineering-decisions.md) records a deliberate deviation from the spec's
@@ -9,14 +9,14 @@ import { Decimal } from 'decimal.js';
  * trend, day-of-week seasonal averages, residual z-score) achieves the spec's actual stated goal —
  * day-of-week-aware anomaly detection with a tunable threshold — with arithmetic simple enough to
  * hand-verify, matching this project's own "if you can't verify it by hand, it's too complex to
- * trust" standard (plan.md Phase 3). No loess-based STL library exists in this monorepo and none is
+ * trust" standard. No loess-based STL library exists in this monorepo and none is
  * added for this.
  */
 
 export const mean = (values: Decimal[]): Decimal =>
   values.reduce((sum, v) => sum.plus(v), new Decimal(0)).dividedBy(values.length);
 
-/** Population standard deviation — same formula already hand-verified in `supplier-metrics.ts` (009-09). */
+/** Population standard deviation — same formula already hand-verified in `supplier-metrics.ts`. */
 export const populationStdev = (values: Decimal[]): Decimal => {
   const m = mean(values);
   const variance = values.reduce((sum, v) => sum.plus(v.minus(m).pow(2)), new Decimal(0)).dividedBy(values.length);
@@ -101,7 +101,7 @@ export const decomposeWithWeeklySeasonality = (series: DailyPoint[]): SeasonalDe
 export type FlaggedPoint = { date: string; value: string; zScore: string };
 
 /**
- * Flags every day whose residual's z-score exceeds `threshold` in absolute value — spec 12 §12.4's
+ * Flags every day whose residual's z-score exceeds `threshold` in absolute value — the design's
  * own `|z| > 2.5` for sales anomalies. A z-score is `(x - mean) / stdev`, not `x / stdev` — computed
  * over the population mean/stdev of every real (non-null) residual in the series, not a per-day
  * rolling window, matching `computeLeadTimeVariance`/`computePriceStabilityIndex`'s existing

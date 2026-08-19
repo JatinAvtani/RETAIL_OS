@@ -32,8 +32,8 @@ const ADMIN_CONNECTION_STRING =
   process.env.TEST_DATABASE_URL_ADMIN ?? 'postgresql://postgres:postgres@localhost:5432/retailos';
 
 /**
- * Real-database proof that the 5 newly-registered waste/shrinkage metrics (spec 12 §E) compute
- * correctly through `executeMetric`. `waste_value` (also spec 12 §E) is already covered by
+ * Real-database proof that the 5 newly-registered waste/shrinkage metrics compute
+ * correctly through `executeMetric`. `waste_value` (also the design) is already covered by
  * `margin/catalog-entries.test.ts` — not re-tested here.
  */
 describe('registered waste/shrinkage metrics', () => {

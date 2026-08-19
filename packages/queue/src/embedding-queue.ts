@@ -9,7 +9,7 @@ export interface EmbeddingJobData {
 }
 
 /**
- * 009-18 — one job per document needing (re-)embedding, matching `extraction-queue.ts`'s exact
+ * one job per document needing (re-)embedding, matching `extraction-queue.ts`'s exact
  * one-shot-per-document shape. Enqueued when a document reaches `APPROVED` (confirmed with the
  * user) — approved extracted fields are trustworthy enough to build a real, searchable description
  * from; a `REVIEW_REQUIRED` document's fields haven't been human-confirmed yet, so embedding it

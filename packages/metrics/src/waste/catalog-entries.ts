@@ -15,7 +15,7 @@ import {
 } from './waste.js';
 
 /**
- * Waste & shrinkage metrics registered into the catalog (spec 12 §E, the 5 not already registered
+ * Waste & shrinkage metrics registered into the catalog (the design, the 5 not already registered
  * by `margin/catalog-entries.ts`'s `wasteValueMetric`). Every `execute` follows the same
  * fetch-then-compute split as every other catalog file.
  */

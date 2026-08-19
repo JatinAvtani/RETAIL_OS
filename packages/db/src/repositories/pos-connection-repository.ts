@@ -8,7 +8,7 @@ import type { SalesSource } from './pos-item-repository';
 export type PosConnectionStatus = (typeof posConnectionStatusEnum.enumValues)[number];
 
 /**
- * 006-03's repository: `pos_connections` (one store's link to a vendor POS account). Stores/reads
+ * earlier work's repository: `pos_connections` (one store's link to a vendor POS account). Stores/reads
  * `accessTokenCiphertext`/`refreshTokenCiphertext` opaquely — this class never encrypts or
  * decrypts anything itself, that's `packages/pos`'s `encryptToken`/`decryptToken` at the boundary
  * where the Fastify route/sync job actually needs the raw token, never left sitting decrypted in a
@@ -94,7 +94,7 @@ export class PosConnectionRepository extends TenantScopedRepository<typeof posCo
     return rows[0] ?? null;
   }
 
-  /** The integration health surface's read path (006-13) — every connection this org has, across all stores. */
+  /** The integration health surface's read path — every connection this org has, across all stores. */
   async findAllForOrganization() {
     return this.runScoped((db, scopedWhere) => db.select().from(posConnections).where(scopedWhere()));
   }

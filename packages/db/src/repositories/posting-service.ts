@@ -35,21 +35,21 @@ export interface PostingResult {
 }
 
 /**
- * 007-11 (plan.md Phase 6): "the transactional heart." Approving an invoice is not filing a
+ * "the transactional heart." Approving an invoice is not filing a
  * document — it is a set of transactions: price history, product cost recompute, and a stock
  * receipt, all inside ONE transaction (I3, I8). If any step fails, NOTHING posts — a half-posted
  * invoice is worse than an unposted one, because the resulting numbers look plausible.
  *
- * Scope, confirmed with the user before building: plan.md's full 8-step sketch also includes
+ * Scope, confirmed with the user before building: the plan's full 8-step sketch also includes
  * matching to an EXISTING receipt, three-way match (PO/Receipt/Invoice), purchase spend facts, and
  * supplier performance events — all of which depend on `purchaseOrders`/`goodsReceipts`/
- * `invoiceMatch`/`supplierPerformanceEvents` tables that don't exist yet (EPIC-008/Purchasing,
- * blocked behind this epic, not started). This class posts what EPIC-007 alone can support: price
+ * `invoiceMatch`/`supplierPerformanceEvents` tables that don't exist yet (a later milestone/Purchasing,
+ * blocked behind this epic, not started). This class posts what a later milestone alone can support: price
  * history, cost recompute (via a real stock receipt), and provenance — the origin of the costing
- * chain (invoice -> cost). Three-way match and the rest are real EPIC-008 scope, not silently
+ * chain (invoice -> cost). Three-way match and the rest are real a later milestone scope, not silently
  * dropped.
  *
- * A line with no CONFIRMED `supplier_products` mapping (007-10's job to create) is skipped, not
+ * A line with no CONFIRMED `supplier_products` mapping is skipped, not
  * blocking — confirmed with the user: approval must still succeed for a real, messy invoice where
  * not every line (a delivery fee, a decorative item) will ever have a product mapping. A skipped
  * line is a real, recorded "unknown," never a fabricated post (I7).
@@ -77,7 +77,7 @@ export class PostingService {
 
   /**
    * Posts an already-APPROVED document. The caller (the `documents.approve` procedure) is
-   * responsible for the approve status transition itself — this method only does what plan.md's
+   * responsible for the approve status transition itself — this method only does what the plan's
    * posting sketch describes, then moves the document to `POSTED`.
    */
   async postDocument(input: {
@@ -115,7 +115,7 @@ export class PostingService {
     const currency = (orgRow?.baseCurrency ?? 'USD') as CurrencyCode;
 
     if (!supplierName) {
-      // No supplier resolved at all — every line is unmappable by definition (007-10's mapping
+      // No supplier resolved at all — every line is unmappable by definition (earlier work's mapping
       // flow always resolves via an exact supplier name match). Still posts as an empty result,
       // never throws — an unposted line is a real "unknown," not a reason to fail the whole
       // approval a human already made.
@@ -212,9 +212,9 @@ export class PostingService {
       sourceDocumentId: documentId,
     });
 
-    // 008-14 (spec 05 §5.3.4): a real price change is only worth surfacing when it crosses the
+    // a real price change is only worth surfacing when it crosses the
     // threshold `detectPriceChange` applies — never on every single post, which is what this code
-    // did before 008-14 (an unconditional `supplier.price_changed` outbox event on every line,
+    // did before earlier work (an unconditional `supplier.price_changed` outbox event on every line,
     // regardless of whether the price actually moved). Only runs when a real prior price existed —
     // the FIRST price for a supplier product is a baseline being established, not a "change."
     if (currentPrice) {
@@ -315,7 +315,7 @@ export class PostingService {
     });
 
     // 3. Provenance — every entity this line's posting touched, so a margin figure can drill back
-    // to the invoice image that set the cost (spec 07 §7.6).
+    // to the invoice image that set the cost.
     await tx
       .insert(documentLinks)
       .values([
@@ -325,7 +325,7 @@ export class PostingService {
       ])
       .onConflictDoNothing({ target: [documentLinks.documentId, documentLinks.entityType, documentLinks.entityId, documentLinks.relationship] });
 
-    // 008-14: `supplier.price_changed` moved above — now emitted ONLY when detectPriceChange
+    // `supplier.price_changed` moved above — now emitted ONLY when detectPriceChange
     // confirms a real, threshold-crossing change, not unconditionally on every posted line.
     await tx.insert(outboxEvents).values({
       id: generateId(),

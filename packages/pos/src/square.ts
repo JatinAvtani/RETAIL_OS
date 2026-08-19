@@ -3,7 +3,7 @@ import { Decimal } from 'decimal.js';
 import type { ExternalCheck, ExternalEvent, ExternalEventType, ExternalMoney, ExternalTransaction, ExternalTransactionLine, ExternalTransactionStatus, Page } from './canonical-model';
 
 /**
- * 006-03: Square's real OAuth 2.0 endpoints and shapes (researched, not guessed — see the
+ * Square's real OAuth 2.0 endpoints and shapes (researched, not guessed — see the
  * function-level comments for the specific, non-obvious details that would otherwise be easy to
  * get wrong). Mirrors `apps/api/src/oauth/google.ts`'s shape (config type, `buildAuthorizationUrl`,
  * `exchangeCodeForToken`) — same problem shape, different vendor, deliberately not shared code
@@ -28,8 +28,8 @@ const squareHost = (environment: SquareEnvironment): string =>
   environment === 'production' ? 'https://connect.squareup.com' : 'https://connect.squareupsandbox.com';
 
 /**
- * Scopes kept to exactly what this codebase's sync tasks need (006-04 catalog, 006-05 orders,
- * 006-06 webhooks don't need extra scope) — spec 13 §13.3's "scopes requested minimally (read-only
+ * Scopes kept to exactly what this codebase's sync tasks need (catalog and orders sync;
+ * webhooks need no extra scope) — the design's "scopes requested minimally (read-only
  * wherever the vendor permits)".
  */
 const REQUIRED_SCOPES = ['MERCHANT_PROFILE_READ', 'ITEMS_READ', 'ORDERS_READ'];
@@ -78,7 +78,7 @@ const parseSquareTokenResponse = (body: {
 
 /**
  * Exchanges the one-time authorization code for tokens. Throws on any failure — the caller (the
- * Fastify connect-callback route, 006-03's own task) maps this to a generic user-facing error; no
+ * Fastify connect-callback route, earlier work's own task) maps this to a generic user-facing error; no
  * partial-success case exists worth distinguishing to the caller, same convention
  * `exchangeCodeForGoogleIdentity` already established.
  */
@@ -104,9 +104,9 @@ export const exchangeSquareCodeForToken = async (config: SquareOAuthConfig, code
 };
 
 /**
- * Square access tokens last ~30 days (24h if `short_lived` at exchange time) — spec 13 §13.3's
+ * Square access tokens last ~30 days (24h if `short_lived` at exchange time) — the design's
  * "automatic refresh with failure alerting" needs this same token endpoint with a different grant
- * type. Not wired to a scheduled job in 006-03 (that belongs to whichever later task owns the
+ * type. Not wired to a scheduled job in earlier work (that belongs to whichever later task owns the
  * sync scheduler) — this function only proves the refresh CALL itself is correct.
  */
 export const refreshSquareToken = async (config: SquareOAuthConfig, refreshToken: string): Promise<SquareTokenResponse> => {
@@ -138,7 +138,7 @@ export type SquareLocation = {
 /**
  * The first real authenticated Square API call this codebase makes — used right after a connect
  * completes so `PosConnectionRepository` can store `externalLocationId` immediately, rather than
- * leaving it null until 006-04's catalog sync happens to run.
+ * leaving it null until earlier work's catalog sync happens to run.
  */
 export const fetchSquareLocations = async (config: SquareOAuthConfig, accessToken: string): Promise<SquareLocation[]> => {
   const response = await fetch(new URL('/v2/locations', squareHost(config.environment)), {
@@ -230,7 +230,7 @@ const parseItem = (wire: SquareCatalogObjectWire): SquareCatalogItem | null => {
  * `POST /v2/catalog/search-catalog-objects`, not `GET /v2/catalog/list` — researched first (a
  * subagent web search against Square's real API reference): `list` never returns deleted objects at
  * all, with no way to opt in, which makes it useless for detecting "this item existed before, now
- * gone from Square" (needed so 006-04's sync can mark a `pos_items` row delisted rather than
+ * gone from Square" (needed so earlier work's sync can mark a `pos_items` row delisted rather than
  * silently leaving a stale one). `include_deleted_objects: true` is what surfaces `is_deleted` on
  * each returned object; `object_types: ['ITEM']` also returns every ITEM's nested ITEM_VARIATION
  * children inline (`item_data.variations`), so no separate variation fetch is needed.
@@ -265,7 +265,7 @@ export const fetchSquareCatalog = async (
 };
 
 /**
- * 006-05: Square's raw `Order` wire shape, researched directly against Square's `SearchOrders`/
+ * Square's raw `Order` wire shape, researched directly against Square's `SearchOrders`/
  * `Order` reference (not guessed) — kept narrow to exactly the fields this codebase's canonical
  * mapping reads. `state` has FOUR real values (`OPEN`, `DRAFT`, `COMPLETED`, `CANCELED`), not the
  * three that would be a natural first guess; only `COMPLETED`/`CANCELED` map into
@@ -293,7 +293,7 @@ type SquareOrderWire = {
   total_tax_money?: { amount?: number; currency?: string };
   total_discount_money?: { amount?: number; currency?: string };
   /**
-   * Researched directly against Square's Orders API reference (006-05's session): a refund lives
+   * Researched directly against Square's Orders API reference: a refund lives
    * as an entry in this array on the SAME order object, not a separate object needing its own
    * fetch — a refund issued after the sale bumps the order's own `updated_at`, which is exactly why
    * `fetchSquareOrders`'s incremental filter is `updated_at`, not `created_at`. Each entry's
@@ -316,7 +316,7 @@ const ZERO_MONEY = (currency: ExternalMoney['currency']): ExternalMoney => ({ am
 /**
  * Maps ONE Square line item into `ExternalTransactionLine` — `catalog_object_id` is the same
  * `ITEM_VARIATION` id `fetchSquareCatalog` already stores as `pos_items.external_id`, so this is
- * the join key the ingestion pipeline (006-07+) uses to resolve `posItemId`, not a foreign key this
+ * the join key the ingestion pipeline uses to resolve `posItemId`, not a foreign key this
  * function itself resolves (this is a pure vendor-shape mapper, no database access). Square's own
  * Orders API has no per-line `voided` concept (unlike a hypothetical partial-void line) — `false`
  * always, matching Square's real model where cancellation is order-level (`state: 'CANCELED'`), not
@@ -332,7 +332,7 @@ const mapOrderLine = (wire: NonNullable<SquareOrderWire['line_items']>[number], 
     unitPrice: toExternalMoney(wire.base_price_money) ?? ZERO_MONEY(currency),
     discount: toExternalMoney(wire.total_discount_money) ?? ZERO_MONEY(currency),
     lineTotal: toExternalMoney(wire.total_money) ?? ZERO_MONEY(currency),
-    modifiers: [], // Square's OrderLineItemModifier[] — not read by this codebase yet (no consumer needs it before 006-08/refunds)
+    modifiers: [], // Square's OrderLineItemModifier[] — not read by this codebase yet (no consumer needs it before refund handling)
     voided: false,
   };
 };
@@ -362,13 +362,13 @@ const sumApprovedRefunds = (wire: SquareOrderWire, currency: ExternalMoney['curr
  * Maps one Square Order into `ExternalTransaction` — Square has no sub-order payment splitting
  * (canonical-model.ts's own documented reasoning), so this always produces a single-element
  * `checks` array, never a flat shape. Returns `null` for an `OPEN`/`DRAFT` order (not yet final —
- * asked the user, confirmed 006-05 doesn't sync these) or any order missing a field this mapping
+ * asked the user, confirmed earlier work doesn't sync these) or any order missing a field this mapping
  * requires, so the caller can skip it rather than writing a malformed row.
  *
- * 006-08: `status` becomes `'refunded'` only when the summed approved refund amount equals (or
+ * `status` becomes `'refunded'` only when the summed approved refund amount equals (or
  * exceeds, a defensive `>=` for any float/rounding edge Square's own totals might produce) the
  * order's own total — a FULL refund. A partial refund keeps `status: 'completed'` with
- * `refundedAmount` set below the total; the caller (006-08's ingestion handler) computes the
+ * `refundedAmount` set below the total; the caller computes the
  * reversal fraction from `refundedAmount / total` and decides how to record it, this mapper only
  * carries the raw facts.
  */
@@ -448,7 +448,7 @@ export const fetchSquareOrders = async (
 };
 
 /**
- * 006-06: Square's real webhook signature scheme, researched directly against Square's own
+ * Square's real webhook signature scheme, researched directly against Square's own
  * `square-nodejs-sdk` source (`WebhooksHelper.ts`/`createHmacOverride.ts`), not guessed — the
  * string-to-sign is `notificationUrl + rawRequestBody` concatenated with NO separator (the full
  * webhook subscription URL as registered in Square's dashboard, not just the path), HMAC-SHA256,

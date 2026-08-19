@@ -23,9 +23,9 @@ const ADMIN_CONNECTION_STRING =
   process.env.TEST_DATABASE_URL_ADMIN ?? 'postgresql://postgres:postgres@localhost:5432/retailos';
 
 /**
- * Real-database proof that `unmapped_pos_items_count` and `data_freshness_lag` (spec 12 §H) compute
- * correctly through `executeMetric` — both were pre-existing pure functions (006-13) wired into
- * `computeIntegrationHealthSummary` but never individually registered in the catalog until 009-10.
+ * Real-database proof that `unmapped_pos_items_count` and `data_freshness_lag` compute
+ * correctly through `executeMetric` — both were pre-existing pure functions wired into
+ * `computeIntegrationHealthSummary` but never individually registered in the catalog until earlier work.
  */
 describe('registered integration health metrics', () => {
   const db = createDb(APP_CONNECTION_STRING).db;

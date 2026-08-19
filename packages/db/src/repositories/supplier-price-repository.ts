@@ -53,10 +53,10 @@ export class SupplierPriceRepository {
   }
 
   /**
-   * 007-07's price-anomaly gate input: confirmed trailing unit prices for one exact
+   * earlier work's price-anomaly gate input: confirmed trailing unit prices for one exact
    * (supplierId, supplierSku) pair, most recent `limit` rows. Deliberately joins only through
    * `supplierProducts` rows with `isConfirmed = true` — an unconfirmed/fuzzy-matched mapping
-   * (007-10) must never silently feed a validation gate that blocks or waves through real
+   * must never silently feed a validation gate that blocks or waves through real
    * invoices. Returns an empty array (never a fabricated single price) when no confirmed mapping
    * exists for this exact SKU string.
    */

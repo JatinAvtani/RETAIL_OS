@@ -20,7 +20,7 @@ export const units = pgTable('units', {
 });
 
 /**
- * The conversion graph referenced by spec 07 §7.3 ("UnitOfMeasure & UnitConversion"). Two
+ * The conversion graph referenced by the design ("UnitOfMeasure & UnitConversion"). Two
  * fundamentally different kinds of row, distinguished by whether `productId` is set — conflating
  * them is exactly the bug this table exists to prevent (I6):
  *

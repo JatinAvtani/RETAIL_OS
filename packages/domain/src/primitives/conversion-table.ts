@@ -5,7 +5,7 @@ import type { Quantity } from './quantity.js';
 import { quantity } from './quantity.js';
 
 /**
- * The stored side of the conversion graph (packages/db's unit_conversions table, spec 07 §7.3),
+ * The stored side of the conversion graph (packages/db's unit_conversions table, the design),
  * projected into the shape this pure function needs. Deliberately just unit ids + a factor + an
  * optional product id — no I/O, no knowledge of Drizzle or Postgres, so this stays testable
  * without a database (per CLAUDE.md: domain logic is pure functions).
@@ -36,7 +36,7 @@ export class ConversionNotFoundError extends Error {
 }
 
 /**
- * Resolution order per spec 07 §7.3 / EPIC-004 plan.md: product-specific row first, then the
+ * Resolution order per the design / a later milestone the plan: product-specific row first, then the
  * global (productId === null) row, then fail loudly. This is the ONE place in the codebase that
  * decides which factor wins when both exist — callers never inline that priority themselves,
  * which is exactly how a silent "which row did we actually use" bug would happen (I6).

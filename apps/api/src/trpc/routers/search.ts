@@ -7,7 +7,7 @@ import { protectedProcedure, router } from '../trpc';
 
 const globalInput = z.object({
   query: z.string().min(1).max(200),
-  /** Cap PER entity type (spec 11 §11.4: "top 5 each"), not a total result-count cap. */
+  /** Cap PER entity type, not a total result-count cap. */
   limitPerType: z.number().int().min(1).max(20).default(5),
 });
 
@@ -17,18 +17,18 @@ const documentsInput = z.object({
 });
 
 /**
- * 009-17 (spec 11 §11.4) — the global command-palette search. One query fans out to every entity
+ * the global command-palette search. One query fans out to every entity
  * type IN PARALLEL (the spec's own "~50ms budget each"), each already-scored and already-sorted by
  * `SearchRepository`; this procedure's only job is to run them concurrently, gate each type by the
  * permission its own detail endpoint already requires (never a hard 403 for the whole search —
  * `products.list`/`suppliers.list` are ungated, matching `SearchRepository`'s equivalent scope;
  * `purchaseOrders.get` requires `purchasing:read`; `documents`' review-adjacent endpoints require
  * `documents:read`), and merge results grouped by entity type — never a single flattened, re-ranked
- * list, since cross-entity score normalization (spec 11 §11.4's own "normalize scores per type")
+ * list, since cross-entity score normalization
  * is a genuinely harder relevance problem this task does not attempt to solve; grouping by type with
  * each group internally ranked is the honest, buildable version.
  *
- * Facets are deliberately NOT built in this pass — confirmed with the user: spec 11 §11.7 rule 2's
+ * Facets are deliberately NOT built in this pass — confirmed with the user: the design rule 2's
  * facet-count role-filtering (a Staff user must not learn a $50k invoice exists via a facet count)
  * has no existing query-time suppression mechanism in this codebase (only response-level field
  * stripping via `filterSensitiveFields`), and building real per-facet permission logic is separate,
@@ -53,9 +53,9 @@ export const searchRouter = router({
   }),
 
   /**
-   * 009-18 (spec 11 §11.5) — document search specifically, choosing lexical-only vs. hybrid
+   * document search specifically, choosing lexical-only vs. hybrid
    * (lexical + vector, fused by RRF) via `shouldUseHybridSearch`'s routing heuristic: short/
-   * identifier-like queries never pay for an embedding call at all (spec 11's own "not the default
+   * identifier-like queries never pay for an embedding call at all (the design's own "not the default
    * path" framing) — only long, natural-language, question-like queries route to hybrid. Requires
    * `documents:read`, matching `search.global`'s own document-result gating (a hard 403 here,
    * unlike `global`'s graceful per-type omission, since this endpoint's entire purpose is

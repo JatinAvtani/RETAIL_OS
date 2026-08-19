@@ -23,8 +23,8 @@ const ADMIN_CONNECTION_STRING =
 
 /**
  * Real-database proof that `documents_pending_review`, `documents_pending_review_oldest_age_days`,
- * and `extraction_auto_approval_rate` (spec 12 §H) compute correctly through `executeMetric`.
- * `extraction_auto_approval_rate` was already a pure, tested function (007-14) — this test proves
+ * and `extraction_auto_approval_rate` compute correctly through `executeMetric`.
+ * `extraction_auto_approval_rate` was already a pure, tested function — this test proves
  * the real fetch-then-compute wiring, not the pure math (already covered by
  * `extraction-accuracy.test.ts`).
  */

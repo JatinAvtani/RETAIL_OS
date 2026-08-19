@@ -53,15 +53,15 @@ const countIdInput = z.object({ stockCountId: z.string().uuid() });
 const enterCountInput = z.object({ stockCountLineId: z.string().uuid(), countedQuantity: z.string() });
 
 /**
- * 005-16: the state machine 005-11/005-12 built (`DRAFT → IN_PROGRESS → SUBMITTED → APPROVED |
+ * the state machine related work built (`DRAFT → IN_PROGRESS → SUBMITTED → APPROVED |
  * REJECTED`) gets its first real HTTP surface. `get`'s sheet is ordered by physical storage
- * location per plan.md Phase 7 ("the person counting walks the room") — the whole reason
+ * location per the plan Phase 7 ("the person counting walks the room") — the whole reason
  * `findLinesOrderedByStorageLocation` exists as a distinct method from the already-present
  * `findLines`, which returns lines in no particular guaranteed order.
  *
  * `storeId` is required on every count-creation/lookup path the same way `inventory.ts` requires
  * it — a count belongs to one store, and object-level store scoping applies here exactly as it
- * does to every other EPIC-005 endpoint. Lookups by `stockCountId` alone (start/enter/submit/
+ * does to every other a later milestone endpoint. Lookups by `stockCountId` alone (start/enter/submit/
  * approve/reject) don't re-verify `storeId` from the request, since `StockCountService` itself is
  * already org-scoped via RLS/the repository guard and a count's `storeId` is fixed at creation —
  * there is no cross-store id to spoof once the count exists, only cross-org, which RLS/the

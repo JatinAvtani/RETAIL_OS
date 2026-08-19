@@ -29,7 +29,7 @@ describe('classifyLineMatch', () => {
 
   it('auto-accepts a price variance within the $5 absolute tolerance even if the percentage is large', () => {
     // A cheap item, e.g. $0.50 -> $4.50: 800% off but within $5 absolute — still CLEAN per
-    // plan.md's own "avoid alert fatigue on cents" framing.
+    // the plan's own "avoid alert fatigue on cents" framing.
     const result = classifyLineMatch(
       { quantity: d('1'), unitPrice: d('4.50') },
       { poUnitPrice: d('0.50'), receivedQuantity: d('1'), receiptFound: true }

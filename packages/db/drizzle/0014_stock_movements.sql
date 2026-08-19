@@ -1,7 +1,7 @@
 -- Hand-written, not `drizzle-kit generate` output — the snapshot chain has been stale since
 -- migration 0005 (see 0008_units_and_conversions.sql's header and project memory for why).
 --
--- The ledger (spec 07 SS7.4, spec 08 SS8.6): the single factual record of everything that
+-- The ledger: the single factual record of everything that
 -- happened to stock. Append-only, partitioned by occurred_at (business time), bi-temporal
 -- against recorded_at (system time).
 CREATE TYPE "public"."movement_type" AS ENUM(
@@ -13,7 +13,7 @@ CREATE TYPE "public"."movement_type" AS ENUM(
 -- A partitioned table's primary key (and every unique index on it) must include the partition
 -- key column — Postgres cannot otherwise guarantee uniqueness across partitions. `id` alone
 -- cannot be the PK here, unlike every other table in this codebase; (id, occurred_at) is.
--- `lot_id` has no FK yet — `lots` (005-02) doesn't exist. Same deferred-FK pattern as
+-- `lot_id` has no FK yet — `lots` doesn't exist. Same deferred-FK pattern as
 -- unit_conversions.product_id before products existed: the column exists now so the ledger
 -- schema doesn't need a later ALTER TABLE, the constraint is added once lots exists.
 CREATE TABLE IF NOT EXISTS "stock_movements" (
@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS "stock_movements" (
 
 -- One real partition for the current month, plus a DEFAULT catch-all so an insert with an
 -- occurred_at outside the pre-created range fails loudly at the database only if DEFAULT is
--- also absent — with DEFAULT present it is accepted, not silently rejected, matching plan.md's
+-- also absent — with DEFAULT present it is accepted, not silently rejected, matching the plan's
 -- "partitions created ahead of time" as an operational job this migration seeds the first
 -- instance of, not a promise every future month is pre-created by this file alone.
 CREATE TABLE IF NOT EXISTS "stock_movements_2026_08"
@@ -97,9 +97,9 @@ END
 $$;
 --> statement-breakpoint
 
--- Spec 08 SS8.7: write-heavy tables get a deliberately minimal index set — every index is a
--- write cost on the hottest path in the system. BRIN (not B-tree) for occurred_at, per SS8.7
--- point 4: orders of magnitude smaller than B-tree for naturally time-ordered append-only data.
+-- the design: write-heavy tables get a deliberately minimal index set — every index is a
+-- write cost on the hottest path in the system. BRIN (not B-tree) for occurred_at, per the design's
+-- reasoning: orders of magnitude smaller than B-tree for naturally time-ordered append-only data.
 -- The idempotency unique index must include occurred_at (the partition key) — Postgres requires
 -- every unique index on a partitioned table to include it. Not CONCURRENTLY: Postgres refuses
 -- CONCURRENTLY directly on a partitioned parent (no way to build one global concurrent index

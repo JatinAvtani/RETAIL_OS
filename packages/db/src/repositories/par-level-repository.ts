@@ -7,9 +7,9 @@ import { TenantScopedRepository } from '../tenant-repository';
 type Db = ReturnType<typeof drizzle<typeof schema>>;
 
 /**
- * 005-09's storage repository — pure data, confirmed with the user: no reorder-calculation logic
- * lives here (that's 008-02), no event emission (`stock.below_par` isn't wired to anything in this
- * task, same detection-only precedent as `findStockLevelDrift`, 005-04).
+ * earlier work's storage repository — pure data, confirmed with the user: no reorder-calculation logic
+ * lives here (that's earlier work), no event emission (`stock.below_par` isn't wired to anything in this
+ * task, same detection-only precedent as `findStockLevelDrift`, earlier work).
  */
 export class ParLevelRepository extends TenantScopedRepository<typeof stockParLevels> {
   constructor(db: Db, organizationId: string) {
@@ -84,8 +84,8 @@ export class ParLevelRepository extends TenantScopedRepository<typeof stockParLe
   }
 
   /**
-   * `items_below_reorder_point`'s real input (009-15) — a tenant-scoped equivalent of
-   * `findBelowParLevels` (`packages/db/src/below-par.ts`, 005-09), same reasoning as
+   * `items_below_reorder_point`'s real input — a tenant-scoped equivalent of
+   * `findBelowParLevels` (`packages/db/src/below-par.ts`, earlier work), same reasoning as
    * `StockLevelRepository.findExpiringLots`/`findDriftForOrg`: the original is a deliberate
    * cross-tenant admin sweep, this is the one-store, app-role-scoped version this catalog entry can
    * actually call. `INNER JOIN` (not `LEFT`), matching the original exactly — a product with no

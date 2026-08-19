@@ -47,7 +47,7 @@ const ADMIN_CONNECTION_STRING = process.env.TEST_DATABASE_URL_ADMIN ?? 'postgres
 const asJob = (data: FactAggregationJobData): Job<FactAggregationJobData> => ({ data }) as Job<FactAggregationJobData>;
 
 /**
- * 009-01 — proves the real BullMQ job handler, not just `aggregateFactTablesForDay` in isolation
+ * proves the real BullMQ job handler, not just `aggregateFactTablesForDay` in isolation
  * (already proven end-to-end in `packages/db/src/fact-aggregation/aggregate-day.integration.test.ts`).
  * What's unique to THIS layer: (a) the processor resolves "yesterday" itself from job data rather
  * than taking a date as input — a store-creation-time job never specifies a date, only a timezone —

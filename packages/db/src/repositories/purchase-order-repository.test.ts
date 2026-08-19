@@ -173,7 +173,7 @@ describe('PurchaseOrderRepository', () => {
     expect(total).toBeNull();
   });
 
-  describe('buildPdfInput / recordSent (008-06)', () => {
+  describe('buildPdfInput / recordSent', () => {
     it('assembles PO header, store, supplier, and line data joined with product/unit/supplier-SKU names', async () => {
       const adminDb = drizzle(adminClient, { schema });
       const contactSupplierId = generateId();

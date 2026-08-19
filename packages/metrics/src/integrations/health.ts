@@ -1,14 +1,14 @@
 import type { PosConnectionStatus } from '@retailos/db';
 
 /**
- * 006-13 (spec 12 §12.2 section H, §13.4): the metric catalog's registered functions for
+ * the metric catalog's registered functions for
  * integration health — status, `data_freshness_lag`, and the two data-completeness counts spec
- * 13 §13.4 names explicitly ("23 POS items unmapped; consumption data is incomplete for these").
+ * 13  names explicitly ("23 POS items unmapped; consumption data is incomplete for these").
  * Pure, given already-fetched data (I2's own shape, matching `computeRecipeCost`'s precedent) — no
  * DB access here; `apps/api`'s router fetches via the existing repositories
  * (`PosConnectionRepository`/`PosItemRepository`/`UnmappedSaleRepository`) and passes the raw
  * counts/timestamps in. This task's numbers don't need the spec's full fact-table/caching
- * architecture (§12.6) — a `COUNT(*)` and a timestamp subtraction have no aggregation pipeline to
+ * architecture () — a `COUNT(*)` and a timestamp subtraction have no aggregation pipeline to
  * build — but still go through ONE registered place, not an ad-hoc computation in the route
  * handler, so a future dashboard/AI-assistant caller has the same single source I2 requires.
  */
@@ -16,7 +16,7 @@ import type { PosConnectionStatus } from '@retailos/db';
 export type DataFreshnessLag = { status: 'never_synced' } | { status: 'known'; lagMinutes: number };
 
 /**
- * `minutes since last successful POS sync` (spec 12 §12.2 section H's own definition, verbatim).
+ * `minutes since last successful POS sync`.
  * `'never_synced'` is a real, distinct state from "0 minutes" — a connection that has never
  * completed a sync has no lag to report, and reporting `0` would falsely read as "just synced"
  * (I7: absence of a signal is not evidence of freshness).
@@ -32,7 +32,7 @@ export const computeDataFreshnessLag = (lastSuccessfulSyncAt: Date | null, now: 
 export type IntegrationHealthErrorAction = { message: string; fixAction: string };
 
 /**
- * Spec 13 §13.4's own literal example: "Reconnect Square — your authorization expired," never the
+ * the design's own literal example: "Reconnect Square — your authorization expired," never the
  * raw internal code. A narrow, explicit map — a status/error combination this function doesn't
  * recognize falls through to a generic-but-still-plain-language message, never the raw
  * `lastError` string verbatim (which may contain a vendor's own internal error code or stack
@@ -67,7 +67,7 @@ export type IntegrationHealthSummary = {
 
 /**
  * The metric catalog's sole function for one connection's health summary (I2) — assembles the
- * already-fetched pieces (spec 13 §13.4's exact fields: status, freshness, the data-completeness
+ * already-fetched pieces (the design's exact fields: status, freshness, the data-completeness
  * indicator, a plain-language error+fix-action) into the one shape `apps/api`'s router returns.
  * Never computes a business number from raw rows itself — every input here is already a resolved
  * count or timestamp, matching I1's boundary even though no LLM is involved in this path.

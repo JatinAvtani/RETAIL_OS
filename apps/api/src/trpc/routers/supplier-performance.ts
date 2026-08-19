@@ -25,7 +25,7 @@ const requirePermission = (permissions: string[], permission: string) => {
 };
 
 /**
- * 008-13 (spec 05 §5.3.3, plan.md Phase 5): the real read surface over `supplier_performance_events`
+ * the real read surface over `supplier_performance_events`
  * — component metrics computed by `packages/metrics` (I2), never recomputed here. `purchasing:read`
  * gates both endpoints, matching `invoiceMatches.pending`'s own precedent that viewing purchasing
  * data is a read-only capability separate from `purchasing:write`/`purchasing:approve`.
@@ -75,9 +75,9 @@ export const supplierPerformanceRouter = router({
   }),
 
   /**
-   * 008-15 (plan.md: "components side by side WITH TRENDS") — each component's current-window value
+   * the plan — each component's current-window value
    * next to the SAME metric over the immediately-preceding equal-length window, plus a real
-   * up/down/flat direction. Confirmed with the user via `AskUserQuestion`: period-over-period, not a
+   * up/down/flat direction. settled deliberately: period-over-period, not a
    * bucketed time series — two real event reads, no new domain logic beyond `computeSupplierPerformanceTrend`.
    */
   trend: protectedProcedure.input(trendInput).query(async ({ ctx, input }) => {

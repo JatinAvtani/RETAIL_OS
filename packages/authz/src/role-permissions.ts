@@ -2,10 +2,10 @@ import { ALL_PERMISSIONS, type Permission } from './permission';
 import type { Role } from './role';
 
 /**
- * Derived from each persona's `**Permissions:**` prose in spec 04 §4.2–4.5 (the precise source),
- * cross-checked against the §4.8 feature matrix for consistency. The matrix has some capability
+ * Derived from each persona's `**Permissions:**` prose in the design–4.5 (the precise source),
+ * cross-checked against the  feature matrix for consistency. The matrix has some capability
  * rows (e.g. "View dashboard & briefing") that don't correspond to any single Permission value in
- * spec 14 §14.3's coarser union — those are UI/routing concerns, not permission-gated resources,
+ * the design's coarser union — those are UI/routing concerns, not permission-gated resources,
  * and are deliberately not represented here.
  *
  * PO approval **above** a Manager's configured threshold is NOT modeled as a missing permission —

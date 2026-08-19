@@ -19,7 +19,7 @@ export type RecipeCostResult = {
    * `'unknown'` if ANY line is unknown — never a partial sum of only the known lines. A recipe
    * missing one ingredient's price is not "90% costed," it is a recipe whose true cost cannot be
    * stated; a partial total that looks like a real number is exactly the plausible-looking wrong
-   * number I7 exists to prevent (spec 05 §5.1.3: "a zero cost silently inflates margin, which is
+   * number I7 exists to prevent (the design: "a zero cost silently inflates margin, which is
    * the worst possible failure" — the same reasoning applies to any confident-looking guess).
    */
   total: Money | 'unknown';

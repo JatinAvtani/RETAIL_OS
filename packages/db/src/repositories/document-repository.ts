@@ -10,11 +10,11 @@ export type DocumentSource = (typeof documentSourceEnum.enumValues)[number];
 export type DocumentStatus = (typeof documentStatusEnum.enumValues)[number];
 
 /**
- * 007-01's schema-task repository for `documents`/`document_extractions`/`extraction_corrections`/
+ * earlier work's schema-task repository for `documents`/`document_extractions`/`extraction_corrections`/
  * `document_links`. This is link 1 of the costing chain (invoice -> price -> cost -> recipe ->
  * margin) — every write here matters more than most, but this task's own scope is schema plus the
  * minimal operations needed to prove the schema is real and correctly tenant-scoped. Extraction
- * (007-05/06), validation gates (007-07), and posting (007-11) are separate, later tasks; this
+ * validation gates, and posting are separate, later tasks; this
  * class does not run OCR, validate arithmetic, or post anything.
  */
 export class DocumentRepository extends TenantScopedRepository<typeof documents> {
@@ -24,13 +24,13 @@ export class DocumentRepository extends TenantScopedRepository<typeof documents>
 
   /**
    * Records a newly uploaded document. `contentHash` is stored but never checked for uniqueness
-   * here — duplicate detection (spec 05 §5.6.3) is a validation-gate decision (007-07), not a
+   * here — duplicate detection is a validation-gate decision, not a
    * database constraint, so the exact same file can legitimately be uploaded twice (e.g. retrying
    * after a failed extraction) and this method must not reject it.
    *
-   * `type` defaults to `'OTHER'` — 007-02 (upload) runs before 007-04 (classification) exists, so a
+   * `type` defaults to `'OTHER'` — earlier work (upload) runs before earlier work (classification) exists, so a
    * freshly uploaded document genuinely has no type yet; guessing INVOICE would be exactly the kind
-   * of unearned certainty I7 exists to prevent. 007-04 updates this once real classification lands.
+   * of unearned certainty I7 exists to prevent. earlier work updates this once real classification lands.
    */
   async create(input: {
     storeId: string;
@@ -74,8 +74,8 @@ export class DocumentRepository extends TenantScopedRepository<typeof documents>
 
   /**
    * Every prior upload sharing this exact content hash, most recent first — the read side of the
-   * content-hash duplicate check spec 05 §5.6.3 names. Returns rows, never a boolean or a
-   * pre-computed "is duplicate" verdict: that decision belongs to the validation gate (007-07),
+   * content-hash duplicate check the design names. Returns rows, never a boolean or a
+   * pre-computed "is duplicate" verdict: that decision belongs to the validation gate,
    * which also needs to compare supplier + document number, not just the hash, so it must see the
    * candidate rows themselves.
    */
@@ -90,7 +90,7 @@ export class DocumentRepository extends TenantScopedRepository<typeof documents>
   }
 
   /**
-   * 007-07's duplicate gate, second half: a different document (excluded by id) whose LATEST
+   * earlier work's duplicate gate, second half: a different document (excluded by id) whose LATEST
    * extraction's `fields.supplier.value`/`fields.documentNumber.value` (case-insensitive, exact
    * text match — no fuzzy matching, matching this task's confirmed scope) equals this one's.
    * `documentNumber`/`supplier` are extracted free text, not columns, so this reads
@@ -139,9 +139,9 @@ export class DocumentRepository extends TenantScopedRepository<typeof documents>
   }
 
   /**
-   * 007-13: the real list/search/filter view — status and type are real column filters; `query`
+   * the real list/search/filter view — status and type are real column filters; `query`
    * matches against the LATEST extraction's `fields.supplier.value`/`fields.documentNumber.value`
-   * (case-insensitive substring), the same JSONB-read pattern 007-07's duplicate gate already
+   * (case-insensitive substring), the same JSONB-read pattern earlier work's duplicate gate already
    * established, since supplier/document-number are extracted free text, not real columns on
    * `documents`. A document with no extraction yet (still `UPLOADED`/`PROCESSING`) simply can't
    * match a text query — it's excluded, not a false match, which is the honest behavior (I7: no
@@ -165,7 +165,7 @@ export class DocumentRepository extends TenantScopedRepository<typeof documents>
       }
 
       // A subquery (EXISTS), not a JOIN — a document can have MULTIPLE extraction rows
-      // (re-extraction preserves history, per 007-01's own design), and a join would either
+      // (re-extraction preserves history, per earlier work's own design), and a join would either
       // duplicate the document row per matching extraction or require a DISTINCT ON that forces
       // ordering by documents.id first, breaking "most recent first". EXISTS asks the right
       // question directly: "does at least one of this document's extractions match?"
@@ -198,8 +198,8 @@ export class DocumentRepository extends TenantScopedRepository<typeof documents>
   }
 
   /**
-   * 007-09 (review UI): a reviewer's decision on a document already at `REVIEW_REQUIRED` (or
-   * `AUTO_APPROVED`, which plan.md §5.6.1 explicitly calls "still reviewable" — a human can override
+   * earlier work (review UI): a reviewer's decision on a document already at `REVIEW_REQUIRED` (or
+   * `AUTO_APPROVED`, which the plan  explicitly calls "still reviewable" — a human can override
    * an auto-approval). Status update, outbox event, and audit log entry all write inside ONE
    * transaction (I8) — matching `MovementService.postMovementInTx`'s established pattern, since
    * composing `updateStatus` with separate outbox/audit inserts from outside would run as multiple
@@ -212,7 +212,7 @@ export class DocumentRepository extends TenantScopedRepository<typeof documents>
     return this.reviewDecision(id, reviewedByUserId, 'APPROVED', 'document.approved');
   }
 
-  /** Same shape as `approve` — a rejected document never posts (007-11's posting engine only ever reads `APPROVED` documents). */
+  /** Same shape as `approve` — a rejected document never posts. */
   async reject(id: string, reviewedByUserId: string, reason?: string) {
     return this.reviewDecision(id, reviewedByUserId, 'REJECTED', 'document.rejected', reason);
   }
@@ -264,7 +264,7 @@ export class DocumentRepository extends TenantScopedRepository<typeof documents>
   }
 
   /**
-   * 007-04: records the result of classification — real confidence when the model call succeeded,
+   * records the result of classification — real confidence when the model call succeeded,
    * `null` confidence when it could not be attempted at all (no API key, provider error, malformed
    * response). Both cases leave `type` as whatever `classifyDocument` returned (`'OTHER'` on
    * failure, matching `create`'s own pre-classification default) — this method never guesses a
@@ -328,8 +328,8 @@ export class DocumentRepository extends TenantScopedRepository<typeof documents>
   }
 
   /**
-   * 007-14: every extraction across the whole organization since `since` — org-wide, not
-   * store-scoped, matching `integrations.health`'s own precedent (006-13) that accuracy telemetry
+   * every extraction across the whole organization since `since` — org-wide, not
+   * store-scoped, matching `integrations.health`'s own precedent that accuracy telemetry
    * is a tenant-level view, not a per-store one. Feeds `computeExtractionAutoApprovalRate`/
    * `computeValidationIssueFrequency` (packages/metrics) — this method only fetches raw rows, never
    * computes the rate itself (I2).
@@ -367,8 +367,8 @@ export class DocumentRepository extends TenantScopedRepository<typeof documents>
   }
 
   /**
-   * Provenance (spec 07 §7.6): links a document to an entity it produced or affected. Idempotent on
-   * `(documentId, entityType, entityId, relationship)` — the posting engine (007-11) that will call
+   * Provenance: links a document to an entity it produced or affected. Idempotent on
+   * `(documentId, entityType, entityId, relationship)` — the posting engine that will call
    * this runs inside one transaction with all-or-nothing semantics, but re-running a retried posting
    * attempt must not create duplicate provenance rows for the same fact.
    */
@@ -397,7 +397,7 @@ export class DocumentRepository extends TenantScopedRepository<typeof documents>
     });
   }
 
-  /** Every entity a document produced or affected — the drill-through read (spec 07 §7.6: "enables drill-through from any number to its source"). */
+  /** Every entity a document produced or affected — the drill-through read. */
   async findLinksForDocument(documentId: string) {
     return this.runScoped((db) =>
       db

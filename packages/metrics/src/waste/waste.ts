@@ -2,7 +2,7 @@ import { addMoney, money, zeroMoney, type Money } from '@retailos/domain';
 import type { UnknownOr } from '../margin/margin.js';
 
 /**
- * Waste & shrinkage metrics — spec 12 §E, the 4 not already registered by `margin/margin.ts`
+ * Waste & shrinkage metrics — the design, the 4 not already registered by `margin/margin.ts`
  * (`waste_value`/`waste_by_reason`'s underlying breakdown already exist there, built as part of
  * the 2026-08-06 dashboard detour). Every function here is pure: given already-fetched rows, it
  * computes one number — no database access, matching every other file in this package.
@@ -26,14 +26,14 @@ export const computeWastePercentage = (
 /* ------------------------------------------------------------------ shrinkage_value / shrinkage_percentage */
 
 export type VarianceLine = {
-  /** Already frozen at count-submission time (spec 05 §5.1.4) — `(counted − theoretical) × t0UnitCost`. */
+  /** Already frozen at count-submission time — `(counted − theoretical) × t0UnitCost`. */
   varianceValue: string;
 };
 
 /**
- * `shrinkage_value` = `Σ(counted − theoretical) × cost` from approved counts — spec 12 §E's exact
- * formula, already computed and frozen per-line by `StockCountService.approveCount` (spec 05
- * §5.1.4), so this function's only job is summing. A shortfall (`counted < theoretical`) yields a
+ * `shrinkage_value` = `Σ(counted − theoretical) × cost` from approved counts — the design's exact
+ * formula, already computed and frozen per-line by `StockCountService.approveCount`
+ * — so this function's only job is summing. A shortfall (`counted < theoretical`) yields a
  * NEGATIVE `varianceValue`; summing signed values (not absolute) is deliberate — a store with more
  * surplus than shortfall in a period has genuinely net-positive inventory drift, not shrinkage, and
  * collapsing that to an absolute value would misreport which direction the problem runs.
@@ -84,7 +84,7 @@ export const computeWasteValueForReason = (
 };
 
 /**
- * `expired_value` = `waste_by_reason` called with `reasonCode: 'EXPIRED'` — spec 12 §E registers it
+ * `expired_value` = `waste_by_reason` called with `reasonCode: 'EXPIRED'` — the design registers it
  * as its own distinct metric id with its own grain (`store/product/period`, not `store/period`),
  * but the computation is identical, so this is a thin named wrapper rather than a duplicated body.
  */

@@ -44,7 +44,7 @@ const ADMIN_CONNECTION_STRING =
   process.env.TEST_DATABASE_URL_ADMIN ?? 'postgresql://postgres:postgres@localhost:5432/retailos';
 
 /**
- * Real-database proof that all 8 purchasing metrics (spec 12 §F) compute correctly through
+ * Real-database proof that all 8 purchasing metrics compute correctly through
  * `executeMetric`, using the same real PO -> receive -> invoice-match fixture pipeline
  * `invoice-match-repository.test.ts` already established and proved correct.
  */

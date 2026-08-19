@@ -229,7 +229,7 @@ describe('StockLevelRepository', () => {
     const movements: { movementType: 'RECEIPT' | 'SALE_CONSUMPTION' | 'WASTE' | 'COUNT_ADJUSTMENT'; quantity: string; reasonCode?: string }[] = [
       { movementType: 'RECEIPT', quantity: '50.000000' },
       { movementType: 'SALE_CONSUMPTION', quantity: '-12.500000' },
-      // A real WASTE movement requires one of the fixed reason codes (005-10's CHECK constraint,
+      // A real WASTE movement requires one of the fixed reason codes (earlier work's CHECK constraint,
       // stock_movements_waste_reason_code) — this test predates that constraint and needs one now.
       { movementType: 'WASTE', quantity: '-2.000000', reasonCode: 'SPILLAGE' },
       { movementType: 'RECEIPT', quantity: '30.000000' },

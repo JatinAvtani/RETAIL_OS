@@ -3,7 +3,7 @@ import { buildServer } from '../../server';
 import type { FastifyInstance } from 'fastify';
 
 /**
- * 005-16: real HTTP verification for the inventory/stocktake routers, WITHOUT a live Redis
+ * real HTTP verification for the inventory/stocktake routers, WITHOUT a live Redis
  * connection — this session's environment has Redis genuinely unreachable (a Windows/Docker
  * port-binding fault, unrelated to this code), so `protectedProcedure`'s session lookup can't be
  * exercised end to end here. What this file DOES prove, against a real running server and real

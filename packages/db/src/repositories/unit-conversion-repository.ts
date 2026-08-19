@@ -5,7 +5,7 @@ import { unitConversions } from '../schema/index';
 import { TenantScopedRepository } from '../tenant-repository';
 
 /**
- * The stored side of the conversion graph (spec 07 §7.3). Resolution order — product-specific
+ * The stored side of the conversion graph. Resolution order — product-specific
  * row first, then the global (productId IS NULL) row, then "not found" — is enforced here, not
  * left to callers, so there is exactly one place that can get I6's resolution order wrong.
  * packages/domain's ConversionTable type is the pure-function consumer of what this returns; this

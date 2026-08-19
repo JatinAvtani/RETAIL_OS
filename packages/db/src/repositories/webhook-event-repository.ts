@@ -8,7 +8,7 @@ export type WebhookEventSource = (typeof salesSourceEnum.enumValues)[number];
 export type WebhookEventType = (typeof webhookEventTypeEnum.enumValues)[number];
 
 /**
- * 006-06's repository: `webhook_events`, the durable record of every verified, deduped webhook a
+ * earlier work's repository: `webhook_events`, the durable record of every verified, deduped webhook a
  * receiver has accepted. Proves the idempotency unique index `(organization_id, source,
  * external_event_id)` is real and load-bearing via `recordIfNew`'s `onConflictDoNothing` — a
  * retried delivery (guaranteed at-least-once by every vendor) must never be recorded twice.
@@ -66,7 +66,7 @@ export class WebhookEventRepository extends TenantScopedRepository<typeof webhoo
     return rows[0] ?? null;
   }
 
-  /** Records the outcome of the post-response sync this event triggered — a real audit trail (006-13's eventual health surface) independent of whether the sync succeeded. */
+  /** Records the outcome of the post-response sync this event triggered — a real audit trail independent of whether the sync succeeded. */
   async markProcessed(id: string, error?: string) {
     const rows = await this.runScoped((db, scopedWhere) =>
       db

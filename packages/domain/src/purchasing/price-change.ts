@@ -1,7 +1,7 @@
 import { Decimal } from 'decimal.js';
 
 /**
- * 008-14 (spec 05 §5.3.4, plan.md Phase 5): "nightly diff of invoice unit prices against trailing
+ * "nightly diff of invoice unit prices against trailing
  * baseline: IF |new_price − baseline| / baseline > threshold: emit supplier.price_changed."
  * `PostingService.postLineInTx` already closes the old `supplier_prices` row and opens a new one on
  * EVERY posted line — that pre-existing code unconditionally emitted `supplier.price_changed` on
@@ -23,7 +23,7 @@ export interface PriceChangeInput {
   trailing12moQuantity: Decimal | null;
 }
 
-/** Spec names no specific number — 2% mirrors `DEFAULT_MATCH_TOLERANCES.priceTolerancePercent` (008-10/11's own real default for "is this variance worth a human's attention"), the same bar this codebase already applies to a price gap on an invoice. */
+/** Spec names no specific number — 2% mirrors `DEFAULT_MATCH_TOLERANCES.priceTolerancePercent`, the same bar this codebase already applies to a price gap on an invoice. */
 export const DEFAULT_PRICE_CHANGE_THRESHOLD_PERCENT = new Decimal('0.02');
 
 export interface PriceChangeResult {

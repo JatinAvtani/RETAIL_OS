@@ -8,7 +8,7 @@ import { buildServer } from '../../server';
 import type { FastifyInstance } from 'fastify';
 
 /**
- * 006-04: real HTTP verification for `integrations.syncSquareCatalog`. `global.fetch` is patched
+ * real HTTP verification for `integrations.syncSquareCatalog`. `global.fetch` is patched
  * (Square's own host only, real MinIO/Postgres/Redis calls untouched) — no live Square sandbox app
  * exists in this codebase yet, same standing limitation `square-routes.test.ts` already documented
  * for OAuth, but this router's happy path genuinely needs a real Square response shape to prove the

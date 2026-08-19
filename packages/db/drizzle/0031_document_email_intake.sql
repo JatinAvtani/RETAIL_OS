@@ -1,7 +1,7 @@
 -- Hand-written, matching every migration since 0005 (stale drizzle-kit snapshot chain).
 --
--- 007-03 (plan.md Phase 1): inbound email intake for supplier invoices. `document_email_intake`
--- records every verified webhook delivery this server accepted (spec 13's "sender allowlist per
+-- inbound email intake for supplier invoices. `document_email_intake`
+-- records every verified webhook delivery this server accepted (the design's "sender allowlist per
 -- tenant with quarantine for unknown senders"), whether accepted, quarantined, or unresolved to any
 -- organization at all. `organization_id` is deliberately nullable — a genuinely unresolvable
 -- recipient slug means there is no tenant to scope the row to (see documents.ts schema comment for

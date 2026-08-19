@@ -6,7 +6,7 @@ import { buildServer } from '../server';
 import { extractionQueue } from '../trpc/context';
 import type { FastifyInstance } from 'fastify';
 
-// Same reasoning as documents.test.ts (007-04): a real GEMINI_API_KEY in .env.local would make the
+// Same reasoning as documents.test.ts: a real GEMINI_API_KEY in.env.local would make the
 // ACCEPTED-sender path's classification call real, slow, and rate-limited against meaningless fake
 // PDF bytes — forced off for deterministic test behavior.
 delete process.env.GEMINI_API_KEY;
@@ -25,7 +25,7 @@ const buildPayload = (overrides: Partial<{ recipientEmail: string; senderEmail: 
 });
 
 /**
- * 007-03: real HTTP verification for the inbound-email webhook. No real Postmark account exists
+ * real HTTP verification for the inbound-email webhook. No real Postmark account exists
  * (confirmed with the user) — payloads are shaped exactly like Postmark's real documented format
  * (`packages/email`'s own tests prove the parser against that shape independently); this suite
  * proves the ROUTE's own auth/org-resolution/allowlist/quarantine logic, the actual risk surface.
@@ -54,7 +54,7 @@ describe('POST /webhooks/inbound-email', () => {
         await db.delete(documentEmailIntakeAttachments).where(eq(documentEmailIntakeAttachments.intakeId, row.id));
       }
       await db.delete(documentEmailIntake).where(eq(documentEmailIntake.organizationId, orgId));
-      // 007-05: an accepted-sender email enqueues a real extraction job per attachment document —
+      // an accepted-sender email enqueues a real extraction job per attachment document —
       // cleaned up before the row itself is deleted, same reasoning as documents.test.ts.
       const orgDocuments = await db.select({ id: documents.id }).from(documents).where(eq(documents.organizationId, orgId));
       for (const doc of orgDocuments) {

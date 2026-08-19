@@ -3,9 +3,9 @@ import Decimal from 'decimal.js';
 import type { UnknownOr } from './margin.js';
 
 /**
- * Margin & profitability metrics beyond the 2 already registered in 009-02 (`contribution_margin`,
- * `contribution_margin_pct`) — spec 12 §C: `margin_per_item`, `total_contribution`, `margin_trend`,
- * and `margin_attribution` (§12.3, "the single most valuable analytical capability"). `menu_
+ * Margin & profitability metrics beyond the 2 already registered in earlier work (`contribution_margin`,
+ * `contribution_margin_pct`) — the design: `margin_per_item`, `total_contribution`, `margin_trend`,
+ * and `margin_attribution` (, "the single most valuable analytical capability"). `menu_
  * engineering_class` is explicitly V2 in the spec and out of scope here.
  *
  * Every function is pure — given already-fetched, already-resolved rows, it computes one number.
@@ -52,7 +52,7 @@ export type MarginTrendPoint = {
 /**
  * `margin_trend` — contribution margin % over a rolling window, one point per already-computed
  * period. This function does no computation of its own beyond assembling the series; each point's
- * percentage must already be a real `contribution_margin_percentage` result (009-02) — never
+ * percentage must already be a real `contribution_margin_percentage` result — never
  * recomputed here, so the trend and the underlying metric can never silently disagree.
  */
 export const assembleMarginTrend = (points: MarginTrendPoint[]): MarginTrendPoint[] => points;
@@ -78,26 +78,26 @@ export type MarginAttributionResult = {
 };
 
 /**
- * `margin_attribution` (spec 12 §12.3) — decomposes the change in contribution margin between two
+ * `margin_attribution` — decomposes the change in contribution margin between two
  * periods into four causes:
  *
  * ```
- * price_effect  = Σ (P₁ − P₀) × Q₀    (spec 12 §12.3's literal formula — see DEVIATION note below)
+ * price_effect  = Σ (P₁ − P₀) × Q₀   
  * cost_effect   = Σ (C₁ − C₀) × Q₀ × (−1)
  * mix_effect    = Σ (M₁ − M₀) × Q_total₁ × (P₀ − C₀)
  * volume_effect = (Q_total₁ − Q_total₀) × margin₀
  * ```
  *
- * ⚠️ **DEVIATION FROM SPEC 12 §12.3, deliberate and confirmed with the user**: the spec's own
+ * ⚠️ **DEVIATION FROM SPEC 12, deliberate and confirmed with the user**: the spec's own
  * literal formula above uses `Q₀` (base-period quantity) for `price_effect`/`cost_effect`. Verified
  * both numerically (a real 2-item, then 3-item, mix-shift example) and symbolically (sympy) that
  * this `Q₀`-weighted form does NOT reconcile exactly to the real total margin change whenever items'
  * relative quantities shift between periods — it leaves a residual, a known property of this
  * "Laspeyres-style" decomposition family in real variance-analysis literature. The exact-reconciling
  * fix, verified the same two ways: use `Q₁` (comparison-period quantity) for `price_effect`/
- * `cost_effect` instead. Spec 12 §12.3 itself states the non-negotiable requirement this formula
+ * `cost_effect` instead. the design itself states the non-negotiable requirement this formula
  * exists to satisfy — "a decomposition whose parts don't sum to the whole is a bug that would
- * otherwise ship silently" — and task.md lists exact reconciliation as a CRITICAL I7 acceptance
+ * otherwise ship silently" — and the plan lists exact reconciliation as a CRITICAL I7 acceptance
  * criterion, so reconciliation wins over the letter of the literal formula. The actual code below
  * uses `Q₁`, not `Q₀`.
  *
@@ -176,7 +176,7 @@ export const computeMarginAttribution = (
   const qTotal0 = resolved.reduce((sum, r) => sum.plus(r.q0), new Decimal(0));
   const qTotal1 = resolved.reduce((sum, r) => sum.plus(r.q1), new Decimal(0));
 
-  // price_effect = Σ (P1 - P0) * Q1 — see this file's own header for why Q1, not spec 12 §12.3's
+  // price_effect = Σ (P1 - P0) * Q1 — see this file's own header for why Q1, not the design's
   // literal Q0, is what actually makes the four components reconcile exactly.
   const priceEffect = resolved.reduce((sum, r) => sum.plus(r.p1.minus(r.p0).times(r.q1)), new Decimal(0));
 

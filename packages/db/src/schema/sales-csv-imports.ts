@@ -6,11 +6,11 @@ import { idColumn, timestamps } from './columns';
 export const csvImportStatusEnum = pgEnum('csv_import_status', ['UPLOADED', 'MAPPED', 'IMPORTED', 'FAILED']);
 
 /**
- * 006-10 (plan.md Phase 5): the state machine one CSV upload moves through — `UPLOADED` (file
+ * the state machine one CSV upload moves through — `UPLOADED` (file
  * confirmed in object storage, headers detected) → `MAPPED` (a human confirmed which column is
  * which field) → `IMPORTED` (rows written) or `FAILED`. Modeled as a real table, not implicit
  * client-side state between two independent requests, matching `stock_counts`' own reasoning
- * (`DRAFT → IN_PROGRESS → ...`): the file itself lives in object storage (already tenant-prefixed,
+ * (`DRAFT → IN_PROGRESS →...`): the file itself lives in object storage (already tenant-prefixed,
  * already has the presigned-URL pattern from `packages/storage`/`products.requestImageUpload`) —
  * this table is the lifecycle + audit trail on top of it, not a duplicate copy of the file's bytes.
  *
@@ -39,7 +39,7 @@ export const salesCsvImports = pgTable('sales_csv_imports', {
 });
 
 /**
- * plan.md: "save the column mapping per tenant so repeat imports are one click." Keyed by a
+ * the plan: "save the column mapping per tenant so repeat imports are one click." Keyed by a
  * human-chosen label (e.g. "Toast export", "Lightspeed weekly") rather than inferred from the file
  * itself — a tenant's exports from the same POS keep the same header row across uploads in
  * practice, but nothing in this codebase should assume that; the label is the explicit, human

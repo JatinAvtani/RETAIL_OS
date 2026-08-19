@@ -3,7 +3,7 @@ import { supplierProducts } from './supplier-products';
 import { idColumn, timestamps } from './columns';
 
 /**
- * Spec 07 §7.5 — effective-dated price history per SupplierProduct, sourced from invoices and
+ * the design — effective-dated price history per SupplierProduct, sourced from invoices and
  * quotes, NEVER overwritten. Correcting a wrongly-entered price means closing the bad row
  * (setting its validTo) and inserting a new one, the same append-preferred discipline as
  * stock_movements (I3), applied here to cost history instead of stock quantity.

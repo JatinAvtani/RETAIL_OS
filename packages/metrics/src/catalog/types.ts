@@ -16,7 +16,7 @@ export type MetricUnit = 'CURRENCY' | 'PERCENTAGE' | 'COUNT' | 'RATIO' | 'DAYS';
 
 /**
  * A store-scoped date range. Callers pass calendar-intent boundaries; period resolution into
- * store-local time (spec 12 §12.5, §8.2) is 009-01's fact-table job, not built yet — every metric
+ * store-local time is earlier work's fact-table job, not built yet — every metric
  * registered in this task takes `from`/`to` as already-resolved UTC instants, matching the
  * dashboard router's own current behaviour. Do not treat this as timezone-correct; it is a known,
  * explicit gap (see `packages/metrics/src/catalog/README` note in this file's header) until the
@@ -38,7 +38,7 @@ export type MetricContext = {
   organizationId: string;
   storeIds: string[] | 'ALL';
   /**
-   * Optional cache client (009-12). When present, `executeMetric` serves a cache hit and
+   * Optional cache client. When present, `executeMetric` serves a cache hit and
    * single-flights a miss instead of calling `execute` directly. Omitted entirely, this context
    * behaves exactly as it always has — a plain live query every call, matching every existing
    * caller (test files, any consumer not yet updated to pass a Redis client).
@@ -46,7 +46,7 @@ export type MetricContext = {
   cache?: Redis;
 };
 
-/** One source table (or fact table, once 009-01 exists) a metric reads — powers provenance. */
+/** One source table (or fact table, once earlier work exists) a metric reads — powers provenance. */
 export type MetricSource = string;
 
 export type MetricProvenance = {
@@ -55,7 +55,7 @@ export type MetricProvenance = {
 };
 
 /**
- * The result shape every metric returns, matching spec 10 §10.3's `MetricResult` and spec 12's
+ * The result shape every metric returns, matching the design's `MetricResult` and the design's
  * "every metric returns value, unit, period, computedAt, freshness, provenance" acceptance
  * criterion. `value` is `'unknown'` rather than `0`/`null` when the underlying computation cannot
  * produce a real number (I7) — never coerced away by a caller.
@@ -67,7 +67,7 @@ export type MetricResult = {
   period: DateRange;
   computedAt: Date;
   /** As-of time of the underlying data this result was computed from. Equals `computedAt` for a
-   * live query (every metric registered so far); will diverge once 009-01's fact tables introduce
+   * live query (every metric registered so far); will diverge once earlier work's fact tables introduce
    * incremental lag. */
   freshness: Date;
   provenance: MetricProvenance[];
@@ -77,13 +77,13 @@ export type MetricResult = {
 
 /**
  * The registered definition of one metric. `execute` is the ONLY place this metric's value is
- * computed — a dashboard, a REST endpoint, and (once EPIC-010 exists) the AI assistant all call the
+ * computed — a dashboard, a REST endpoint, and (once a later milestone exists) the AI assistant all call the
  * same function through `executeMetric`, which is what makes their results identical by
  * construction rather than by convention (I2).
  */
 export type MetricDefinition<TParams> = {
   id: string;
-  /** Used for AI-router matching once EPIC-010 exists — written in the words a user would say. */
+  /** Used for AI-router matching once a later milestone exists — written in the words a user would say. */
   description: string;
   parameters: z.ZodType<TParams>;
   unit: MetricUnit;

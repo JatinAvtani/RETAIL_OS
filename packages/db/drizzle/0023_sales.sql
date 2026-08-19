@@ -1,9 +1,9 @@
 -- Hand-written, not `drizzle-kit generate` output — the snapshot chain has been stale since
 -- migration 0005 (see 0008_units_and_conversions.sql's header and project memory for why).
 --
--- 006-01 (plan.md Phase 1): pos_items, sales_transactions, sales_transaction_lines. The first
--- schema for EPIC-006 (Sales Ingestion) — sales_transactions/pos_items didn't exist anywhere in
--- this codebase before this migration; EPIC-005's unmapped_sales/SaleConsumptionService were built
+-- pos_items, sales_transactions, sales_transaction_lines. The first
+-- schema for a later milestone (Sales Ingestion) — sales_transactions/pos_items didn't exist anywhere in
+-- this codebase before this migration; the later milestone's unmapped_sales/SaleConsumptionService were built
 -- sales-source-agnostic specifically so they could be built before this table existed.
 
 CREATE TYPE "sales_source" AS ENUM ('square', 'csv');
@@ -128,7 +128,7 @@ END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS "pos_items_store_source_external_id_idx" ON "pos_items" ("store_id", "source", "external_id");
 --> statement-breakpoint
 
--- Idempotency (006-07, plan.md Phase 3): the unique constraint .onConflictDoNothing() relies on.
+-- Idempotency (the plan Phase 3): the unique constraint.onConflictDoNothing() relies on.
 -- Scoped per-organization (not globally) since the same external_id from two different orgs' own
 -- vendor accounts is not the same transaction.
 CREATE UNIQUE INDEX IF NOT EXISTS "sales_transactions_org_source_external_id_idx" ON "sales_transactions" ("organization_id", "source", "external_id");

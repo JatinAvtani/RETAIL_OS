@@ -1,7 +1,7 @@
 -- Hand-written, not `drizzle-kit generate` output — the snapshot chain has been stale since
 -- migration 0005 (see 0008_units_and_conversions.sql's header and project memory for why).
 --
--- 005-11 (spec 05 SS5.1.4): the stocktake state machine (DRAFT -> IN_PROGRESS -> SUBMITTED ->
+-- earlier work: the stocktake state machine (DRAFT -> IN_PROGRESS -> SUBMITTED ->
 -- APPROVED | REJECTED) and its lines. The T0 snapshot (t0_at, theoretical_quantity_t0) is the
 -- whole point of this feature - see stock-counts.ts's schema comments for why.
 CREATE TYPE "stock_count_status" AS ENUM ('DRAFT', 'IN_PROGRESS', 'SUBMITTED', 'APPROVED', 'REJECTED');

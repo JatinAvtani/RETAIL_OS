@@ -7,7 +7,7 @@ import { TenantScopedRepository } from '../tenant-repository';
 /**
  * `menuItems` IS directly tenant-scoped (real `organization_id` column, unlike
  * `recipe_components`/`supplier_prices`), so this extends `TenantScopedRepository` normally.
- * `recipeGroupId` deliberately has no FK (spec 07 SS7.3: MenuItem is distinct from Product/Recipe
+ * `recipeGroupId` deliberately has no FK (the design: MenuItem is distinct from Product/Recipe
  * on purpose — see `recipes.ts`'s schema comment for why `recipe_group_id` can't be an FK target).
  */
 export class MenuItemRepository extends TenantScopedRepository<typeof menuItems> {

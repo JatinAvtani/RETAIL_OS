@@ -35,7 +35,7 @@ export const createStorageClient = (options: StorageClientOptions): S3Client =>
   });
 
 /**
- * Idempotent — safe to call on every process start (mirrors this project's `CREATE ... IF NOT
+ * Idempotent — safe to call on every process start (mirrors this project's `CREATE... IF NOT
  * EXISTS` migration convention). No bucket-creation step exists anywhere else (docker-compose.yml
  * starts MinIO with zero buckets), so something has to create it before first use.
  */
@@ -48,7 +48,7 @@ export const ensureBucketExists = async (client: S3Client, bucket: string): Prom
 };
 
 /**
- * Spec 14 §14.3/§14.7: object storage paths are tenant-prefixed, and uploads go via presigned
+ * the design/: object storage paths are tenant-prefixed, and uploads go via presigned
  * URLs, never proxied through the API. `contentType` is bound into the signature so the presigned
  * URL only accepts a PUT declaring the type the caller asked to upload as — the object's actual
  * bytes are still verified server-side after upload (see `verifyImageMagicBytes`), since a
@@ -65,7 +65,7 @@ export const createPresignedUploadUrl = async (
   return getSignedUrl(client, command, { expiresIn: expiresInSeconds });
 };
 
-/** Spec 14 §14.5: objects are never public — every read goes through a short-lived presigned URL. */
+/** the design: objects are never public — every read goes through a short-lived presigned URL. */
 export const createPresignedDownloadUrl = async (
   client: S3Client,
   bucket: string,
@@ -78,9 +78,9 @@ export const createPresignedDownloadUrl = async (
 
 /**
  * Direct server-side write — unlike every other upload path in this project (presigned URL, bytes
- * travel browser-to-S3 directly, spec 14 §14.3's "never proxy large files through the API"), an
+ * travel browser-to-S3 directly, the design's "never proxy large files through the API"), an
  * inbound email webhook's attachment bytes arrive to the API itself as part of the verified webhook
- * payload (007-03) — there is no browser in this flow to hand a presigned URL to. The size/type
+ * payload — there is no browser in this flow to hand a presigned URL to. The size/type
  * constraints this project applies elsewhere (magic-byte verification, size caps) are still enforced
  * by the CALLER before this is invoked; this function only performs the write.
  */

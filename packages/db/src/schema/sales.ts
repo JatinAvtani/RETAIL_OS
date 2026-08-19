@@ -5,8 +5,8 @@ import { menuItems } from './recipes';
 import { idColumn, timestamps } from './columns';
 
 /**
- * 006-01 (plan.md Phase 1): the two ingestion sources this codebase actually builds — Square (the
- * only vendor shipping, per task.md) and CSV (the universal fallback, "what makes the product
+ * the two ingestion sources this codebase actually builds — Square (the
+ * only vendor shipping, per the plan) and CSV (the universal fallback, "what makes the product
  * sellable to anyone during the design-partner phase"). Not a free-text column: every sales row's
  * provenance is one of a fixed, known set, same reasoning as `store_status`/`lot_status`.
  */
@@ -18,7 +18,7 @@ export const salesTransactionStatusEnum = pgEnum('sales_transaction_status', ['C
 
 /**
  * One item as the POS vendor's catalog names it — NOT a `Product`/`MenuItem`. `pos_items` is the
- * left side of the fuzzy-match mapping problem 006-11's UI solves; `menuItemId` stays NULL until a
+ * left side of the fuzzy-match mapping problem earlier work's UI solves; `menuItemId` stays NULL until a
  * human confirms a mapping (I9 — mapping is deterministic and human-confirmed, never automatic).
  * `mappingStatus` mirrors `unmappedSaleStatusEnum`'s three-way split for the same reason: `IGNORED`
  * covers a real POS catalog entry (a gift card, a service charge) that will never have a recipe,
@@ -29,7 +29,7 @@ export const salesTransactionStatusEnum = pgEnum('sales_transaction_status', ['C
  * stores each with their own Square location (their own catalog + external ids can collide
  * trivially, e.g. both use Square's own auto-incrementing internal counters).
  *
- * Deleted-upstream items are marked (`lastSeenAt` stops advancing), never deleted — plan.md Phase 2
+ * Deleted-upstream items are marked (`lastSeenAt` stops advancing), never deleted — the plan Phase 2
  * is explicit that historical sales still reference them via `sales_transaction_lines.posItemId`.
  */
 export const posItems = pgTable(
@@ -52,7 +52,7 @@ export const posItems = pgTable(
     mappingStatus: posItemMappingStatusEnum('mapping_status').notNull().default('UNMAPPED'),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
     /**
-     * 006-04 (plan.md Phase 2): "deleted upstream items are marked, not deleted — historical sales
+     * "deleted upstream items are marked, not deleted — historical sales
      * still reference them." NULL means still present in the vendor's catalog as of the last sync;
      * non-null is the moment a full catalog sync completed without seeing this item's external id
      * again (Square's own `is_deleted` flag, or simply absent from a full sync's result set). Kept
@@ -68,7 +68,7 @@ export const posItems = pgTable(
 
 /**
  * One POS sale (a Square order, a CSV row group) — the header. Idempotency is the whole point of
- * this table's shape (006-07, plan.md Phase 3, spec 05 §5.1.3): the unique index on
+ * this table's shape (the plan Phase 3, the design): the unique index on
  * `(source, external_id)` is what makes `.onConflictDoNothing()` in the future ingestion pipeline a
  * real guarantee rather than a hope. Scoped per-organization, not globally, for the same reason
  * `pos_items` is — the SAME external id from two different vendors' accounts (two different orgs
@@ -76,7 +76,7 @@ export const posItems = pgTable(
  *
  * `refundOfId` is nullable, self-referencing: a `REFUNDED` row points back at the `COMPLETED`
  * transaction it reverses. This table records the FACT of a refund; reversing the consumption
- * movements it caused is 006-08's job, one level up, against `stock_movements` (I3 — never an
+ * movements it caused is earlier work's job, one level up, against `stock_movements` (I3 — never an
  * UPDATE/DELETE on the original sale row itself).
  *
  * `subtotal`/`discount`/`tax`/`total` are separate columns, not derived — a vendor's own rounding

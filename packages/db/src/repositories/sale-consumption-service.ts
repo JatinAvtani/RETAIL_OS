@@ -50,37 +50,37 @@ export type SaleConsumptionResult =
     };
 
 /**
- * 005-07's actual scope: the CONSUMPTION side of "theoretical consumption from sales × recipe"
- * (spec 05 §5.1.3), deliberately sales-source-agnostic. `sales_transactions`/`pos_items` don't
- * exist anywhere in this codebase yet — they belong entirely to EPIC-006 (Sales Ingestion), whose
- * own task list names `006-12` "Trigger consumption on ingest (wires to EPIC-005)" — meaning
- * EPIC-006 is the one expected to call INTO this function once it exists, not the reverse.
- * Confirmed with the user rather than assumed, since guessing at EPIC-006's shape now would be
+ * earlier work's actual scope: the CONSUMPTION side of "theoretical consumption from sales × recipe"
+ * deliberately sales-source-agnostic. `sales_transactions`/`pos_items` don't
+ * exist anywhere in this codebase yet — they belong entirely to a later milestone (Sales Ingestion), whose
+ * own task list names `earlier work` "Trigger consumption on ingest (wires to a later milestone)" — meaning
+ * a later milestone is the one expected to call INTO this function once it exists, not the reverse.
+ * Confirmed with the user rather than assumed, since guessing at the later milestone's shape now would be
  * exactly the kind of speculative building CLAUDE.md warns against.
  *
  * Given an already-resolved `menuItemId` + `quantitySold` + `occurredAt` (whatever calls this
  * — eventually a POS sale line, but this function has no opinion on where they came from), does the
- * real work EPIC-005 owns:
+ * real work a later milestone owns:
  *   MenuItem -> Recipe (version valid at occurredAt)?
- *     NOT FOUND -> return `recipe_not_found`, never silently skip (spec 05 §5.1.3)
- *   -> explodeRecipe (EPIC-004, recursive, depth-limited)
+ *     NOT FOUND -> return `recipe_not_found`, never silently skip
+ *   -> explodeRecipe
  *   -> for each ingredient: resolve its default variant + base unit, convert the exploded quantity,
- *      FEFO-allocate via `MovementService.consumeFefo` (005-06)
+ *      FEFO-allocate via `MovementService.consumeFefo`
  *   -> record actual COGS from the REAL allocated lot costs (never the theoretical/planned recipe
  *      cost `recipes.cost`/`computeRecipeCost` compute — those are a different number entirely)
  *
- * Menu-item resolution failure (POSItem -> MenuItem missing) is explicitly 005-08's job (the
+ * Menu-item resolution failure (POSItem -> MenuItem missing) is explicitly earlier work's job (the
  * unmapped-sales quarantine queue) — this function starts one level in, already holding a real
  * `menuItemId`. A menu item that doesn't exist in THIS organization still returns a structured
  * `menu_item_not_found` result rather than throwing, so a caller processing many sale lines in a
- * batch can flag one bad line without the whole batch failing (spec 05 §5.1.3: "flag it, don't
+ * batch can flag one bad line without the whole batch failing (the design: "flag it, don't
  * silently drop it, and don't guess" — the same principle applies whether the flag is presented to
  * a human or returned to a batch-processing caller).
  *
  * Insufficient stock is NOT a failure of this function — `MovementService.consumeFefo` throwing
  * `InsufficientStockError` is caught per-ingredient and recorded as `insufficient_stock` with
  * `actualCost: 'unknown'`, letting every OTHER ingredient in the same sale still post normally
- * (negative stock is a signal per plan.md, but a shortfall on flour shouldn't block posting the
+ * (negative stock is a signal per the plan, but a shortfall on flour shouldn't block posting the
  * cheese and lettuce that DID have stock).
  */
 export class SaleConsumptionService {

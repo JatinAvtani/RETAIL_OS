@@ -4,7 +4,7 @@ import { Decimal } from 'decimal.js';
 import type { CurrencyCode } from '../primitives/currency.js';
 
 /**
- * 006-10 (plan.md Phase 5): CSV import's own pure parsing/mapping layer — no database, no S3, no
+ * CSV import's own pure parsing/mapping layer — no database, no S3, no
  * network. `packages/domain` never imports a database type, so the byte-level upload/storage
  * mechanics (packages/storage, apps/api) stay entirely separate from the deterministic logic of
  * turning raw bytes into row objects and row objects into the same canonical shape Square's own
@@ -35,7 +35,7 @@ export class CsvParseError extends Error {
 const MAX_PREVIEW_ROWS = 20;
 
 /**
- * Header + delimiter detection (plan.md: "detect delimiter/encoding... preview first 20 rows").
+ * Header + delimiter detection.
  * Encoding is assumed UTF-8 (BOM-stripped) — this codebase's no-card/no-cost, portfolio-scope
  * constraints rule out a full encoding-detection dependency for scope this narrow; a non-UTF-8 file
  * fails at parse time with a clear error rather than silently mis-decoding (I7's "unknown, never a
@@ -72,7 +72,7 @@ export type CsvColumnMapping = {
   unitPrice: string;
   /** Optional — a flat export with no separate discount column is common; absent means "no discount", not "unknown discount" (a real $0, not a missing fact — the CSV's own silence on the column is the fact). */
   discount?: string;
-  /** Optional — a per-line total column, when present, is trusted over quantity*unitPrice (matches the codebase's existing "vendor's own number, never recomputed" rule for sales_transactions, spec 06-01's own reasoning). */
+  /** Optional — a per-line total column, when present, is trusted over quantity*unitPrice (matches the codebase's existing "vendor's own number, never recomputed" rule for sales_transactions). */
   lineTotal?: string;
   currency?: string;
 };
@@ -98,7 +98,7 @@ export type ParsedCsvResult = {
 };
 
 /**
- * Strips thousands separators and a leading currency symbol from a numeric cell — plan.md's own
+ * Strips thousands separators and a leading currency symbol from a numeric cell — the plan's own
  * named encoding-chaos list ("currency symbols, thousands separators"). Deliberately narrow: only
  * `$`/`€`/`£` and comma-as-thousands-separator are handled, matching this codebase's currently
  * supported `CurrencyCode` set (USD/EUR/GBP/INR) — a cell this can't confidently parse becomes a
@@ -154,7 +154,7 @@ const computeRowExternalId = (fields: {
  * canonical row shape `apps/api`'s orchestration writes into `sales_transactions`/
  * `salesTransactionLines`. A row that fails to parse (missing required cell, unparseable
  * date/number) becomes an issue, not a thrown error and not a guessed value — the whole file still
- * imports, matching plan.md's Phase 3 "schema validation quarantines the WHOLE BATCH on failure"
+ * imports, matching the plan's Phase 3 "schema validation quarantines the WHOLE BATCH on failure"
  * language applied at the granularity that actually matches a spreadsheet: one bad row shouldn't
  * discard 500 good ones, but a row this function can't confidently parse must never silently become
  * a wrong number either.

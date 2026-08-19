@@ -21,9 +21,9 @@ import { buildServer } from '../../server';
 import type { FastifyInstance } from 'fastify';
 
 /**
- * 006-09: real HTTP verification for `integrations.reconcileSquareOrders`. `global.fetch` is
+ * real HTTP verification for `integrations.reconcileSquareOrders`. `global.fetch` is
  * patched (Square's own host only) — no live Square sandbox app exists yet, same standing
- * limitation as every other Square-touching task since 006-03. This file specifically proves the
+ * limitation as every other Square-touching task since earlier work. This file specifically proves the
  * two things that make reconciliation different from a plain re-run of `syncSquareOrders`: it finds
  * an order the incremental sync's own watermark would never revisit, and it never perturbs
  * `ordersSyncCursor`/`ordersSyncWatermark` — those belong solely to the incremental sync.

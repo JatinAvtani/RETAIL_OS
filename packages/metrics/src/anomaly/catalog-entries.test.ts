@@ -41,7 +41,7 @@ const ADMIN_CONNECTION_STRING =
   process.env.TEST_DATABASE_URL_ADMIN ?? 'postgresql://postgres:postgres@localhost:5432/retailos';
 
 /**
- * Real-database proof that all 4 registered anomaly metrics (spec 12 §12.4) compute correctly
+ * Real-database proof that all 4 registered anomaly metrics compute correctly
  * through `executeMetric`, using real ledger/sales/price data rather than stubbed repositories.
  */
 describe('registered anomaly metrics', () => {

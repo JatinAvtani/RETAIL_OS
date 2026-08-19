@@ -115,7 +115,7 @@ report BLOCKING I9 "AI tool definition contains a mutating verb" \
 # rate-limit counter have no organizationId to leak at all - an auth attempt has no tenant yet by
 # definition, that's what's being resolved). Documented at the call sites too, not just here.
 #
-# packages/metrics/src/catalog/cache.ts excluded too (009-12): the OPPOSITE situation from the
+# packages/metrics/src/catalog/cache.ts excluded too: the OPPOSITE situation from the
 # three above - every key here genuinely IS tenant-scoped (buildMetricCacheKey embeds
 # organizationId directly in cacheKey; the lock key is built as
 # `metrics:v1:${organizationId}:lock:${cacheKey}`, explicitly org-namespaced in its own right) -
@@ -144,14 +144,18 @@ report BLOCKING I4 "Tenant context set session-scoped (must be SET LOCAL)" \
 r=$(search '(vectorSearch|embeddingSearch|\.similaritySearch|<=>|<->)' '' '*.ts' \
    | grep -Ev 'organization_?[Ii]d|orgId|tenantId' \
    | grep -Ev ':\s*(//|\*|/\*)' \
-   | grep -Ev 'search-repository\.ts:.*ORDER BY de_emb\.embedding <=>' || true)
+   | grep -Ev 'search-repository\.ts:.*ORDER BY de_emb\.embedding <=>' \
+   | grep -Ev 'search-repository\.ts:.*ORDER BY dce\.embedding <=>' || true)
 report BLOCKING I4 "Vector/semantic query may lack an explicit tenant filter" \
   "Retrieval leakage is the likeliest serious failure in an AI product. Filter at query level, not only RLS." "$r"
-# 009-18: SearchRepository.searchDocumentsByVector's real WHERE clause explicitly filters
+# SearchRepository.searchDocumentsByVector's real WHERE clause explicitly filters
 # de_emb.organization_id = this.organizationId (verified directly, two lines above the flagged
 # ORDER BY) -- this scanner checks a single flagged line for the string "organization_id", with no
 # lookback across a multi-line SQL template, so a real, correct multi-line WHERE clause can't
 # satisfy it. Excluded here, not suppressed by weakening the check for every future query.
+# SearchRepository.searchDocumentChunksByVector is the SAME pattern one method below --
+# dce.organization_id = this.organizationId is real and present two lines above its own flagged
+# ORDER BY line, verified directly the same way before adding this exclusion.
 
 # RLS coverage: any table whose CREATE statement declares organization_id needs a policy.
 # Reads each .sql file, splits on ';', and inspects each CREATE TABLE block.
@@ -202,7 +206,24 @@ report HIGH I3 "Mutation of an append-only table" \
 # purchasing.ts excluded for the identical reason: `totalReceiptCount` (computeEmergencyPurchaseRate's
 # denominator) is a plain receipt COUNT, never a monetary value - the regex matches "Total" as a
 # substring regardless of what it's counting, same as csv-import.ts's row counts above.
-r=$(search '[A-Za-z_]*([Pp]rice|[Cc]ost|[Aa]mount|[Tt]otal|[Rr]evenue|[Mm]argin|[Qq]uantity|[Qq]ty)[A-Za-z_]*[[:space:]]*:[[:space:]]*number\b' 'apps/api/src/integrations/csv-import\.ts|packages/db/src/repositories/csv-import-repository\.ts|packages/metrics/src/margin/margin\.ts|packages/metrics/src/inventory/inventory\.ts|packages/metrics/src/purchasing/purchasing\.ts' '*.ts')
+# action-draft.ts excluded for a DIFFERENT reason, not a false-positive-naming case like the above:
+# `validateLines`'s internal `proposed` parameter type is the RAW, pre-validation shape straight off
+# a JSON-parsed model response (mirroring planning.ts's own `paramsJson: string` raw-wire-type
+# precedent) - `number` is the genuinely correct type for what JSON.parse produces at this exact
+# boundary. The function's very first act on this quantity is `new Decimal(quantity)`, and every
+# quantity that leaves this function (on `DraftActionLine`) is a real `Decimal`, never a raw number.
+# citations.ts excluded for the same reason as csv-import.ts's row counts above: `MetricCitation.
+# totalRowCount` is the SUM OF PROVENANCE ROW COUNTS (how many database rows a figure was computed
+# from) - an integer cardinality, never a monetary value. It is literally the same field name and
+# same meaning as csv-import.ts's own excluded `totalRowCount`; the regex matches "total" as a
+# substring regardless of what is being counted. The actual money in this file is `MetricResult.value`,
+# which is a `string` (the catalog's own decimal-safe wire type), never a number - and this module
+# performs no arithmetic on it at all, only projection.
+# eval/types.ts excluded for the same reason as csv-import.ts's row counts above: `EvalSummary.total`/
+# `.passed`/`.byCategory[...].total`/`.passed` are plain COUNTS of eval CASES (how many golden-set
+# questions ran/passed), never a money or quantity value - the regex matches "total" as a substring
+# regardless of what it's counting. No arithmetic on money or quantity flows through this type at all.
+r=$(search '[A-Za-z_]*([Pp]rice|[Cc]ost|[Aa]mount|[Tt]otal|[Rr]evenue|[Mm]argin|[Qq]uantity|[Qq]ty)[A-Za-z_]*[[:space:]]*:[[:space:]]*number\b' 'apps/api/src/integrations/csv-import\.ts|packages/db/src/repositories/csv-import-repository\.ts|packages/metrics/src/margin/margin\.ts|packages/metrics/src/inventory/inventory\.ts|packages/metrics/src/purchasing/purchasing\.ts|packages/assistant/src/action-draft\.ts|packages/assistant/src/eval/types\.ts|packages/assistant/src/citations\.ts' '*.ts')
 report HIGH I5 "Money or quantity typed as \`number\`" \
   "Float arithmetic on money loses precision silently. Use Money / Quantity<Unit>." "$r"
 
@@ -238,7 +259,7 @@ report HIGH I5 "Float column in a monetary/quantity path" \
 # when it can't be determined (I7 applied to the actual money value, not this quantity accumulator).
 # stock-level-repository.ts (findExpiringLots) excluded: its COALESCE(c.avg_daily_consumption, 0) is
 # the identical expiry-queue.ts LEFT JOIN idiom above, adapted for a tenant-scoped equivalent of
-# that same query (009-06) - a lot with zero SALE_CONSUMPTION rows in the trailing-30-day window
+# that same query - a lot with zero SALE_CONSUMPTION rows in the trailing-30-day window
 # genuinely has no matching join row. The zero is never fed into value_at_risk (computed straight
 # from lots.remaining_quantity * lots.unit_cost); it only decides at-risk classification, and a
 # zero-consumption lot is deliberately treated as AT RISK - the opposite of the "looks safe" failure

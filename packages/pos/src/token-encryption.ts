@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'node:crypto';
 
 /**
- * ADR-14: spec 13 §13.3 calls for "envelope encryption, KMS-managed key" for OAuth tokens at rest.
+ * ADR-14: the design calls for "envelope encryption, KMS-managed key" for OAuth tokens at rest.
  * A real cloud KMS (AWS KMS / GCP KMS / Azure Key Vault) requires a billing account — ruled out by
  * this codebase's no-card/no-cost hard constraint. Asked the user, confirmed: app-level AES-256-GCM
  * with a static symmetric key from an environment variable (`POS_TOKEN_ENCRYPTION_KEY`), the same

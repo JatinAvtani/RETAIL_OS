@@ -37,16 +37,16 @@ export type SquareOrdersSyncResult = {
 export type SquareReconciliationResult = SquareOrdersSyncResult;
 
 /**
- * 006-05 (plan.md Phase 2): "orders sync, cursor-based incremental." Mirrors `square-catalog-sync.ts`'s
- * connection-lookup + proactive-token-refresh shape, then diverges for the part plan.md calls out as
+ * "orders sync, cursor-based incremental." Mirrors `square-catalog-sync.ts`'s
+ * connection-lookup + proactive-token-refresh shape, then diverges for the part the plan calls out as
  * this task's central risk: **the cursor MUST advance in the SAME transaction as the order/line
  * writes it gates** — "advancing before a failed write silently skips data forever, and nothing
  * errors." Each fetched page is written inside exactly ONE `db.transaction`: every order's header +
  * lines insert with `.onConflictDoNothing()` (idempotent on `(organization_id, source, external_id)`,
- * proven at the schema layer by 006-01), the connection's `ordersSyncCursor` advances, and a
+ * proven at the schema layer by earlier work), the connection's `ordersSyncCursor` advances, and a
  * `sales.ingested` outbox event is inserted — all three or none, per commit (I8).
  *
- * 006-08/006-12: after each page's recording transaction COMMITS, this function triggers real
+ * after each page's recording transaction COMMITS, this function triggers real
  * consumption (`SalesIngestionPipeline.ingestSaleLine`) for every newly-recorded `COMPLETED`
  * transaction's lines, and detects/reverses refunds on orders that already existed from a prior
  * sync. Both steps run OUTSIDE the recording transaction deliberately —
@@ -99,7 +99,7 @@ export const syncSquareOrders = async (
   }
 
   // The window's start: the connection's own watermark if a prior sync completed at least one
-  // page, else 90 days back — matching plan.md's acceptance criterion ("90 days of orders sync")
+  // page, else 90 days back — matching the plan's acceptance criterion ("90 days of orders sync")
   // for a store's FIRST sync, when no watermark exists yet.
   const since = connection.ordersSyncWatermark ?? new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
 
@@ -117,7 +117,7 @@ export const syncSquareOrders = async (
 const RECONCILIATION_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
 
 /**
- * 006-09: the nightly reconciliation sweep. plan.md's own reasoning: webhooks are best-effort at
+ * the nightly reconciliation sweep. the plan's own reasoning: webhooks are best-effort at
  * every vendor, and a missed one is otherwise invisible — "occur routinely in production and none
  * of which announce themselves." Re-fetches a trailing 3-day window UNCONDITIONALLY, regardless of
  * the connection's own `ordersSyncWatermark` — a real gap could be older than the incremental
@@ -129,8 +129,8 @@ const RECONCILIATION_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
  * fast-forward the real watermark to "now" every night, masking exactly the class of gap (an old
  * missed webhook, a vendor-side correction) this sweep exists to find. Reuses the exact same
  * per-order recording/refund-detection path as `syncSquareOrders` — `.onConflictDoNothing()`
- * (006-01) makes re-seeing an already-recorded order a genuine no-op, and `processRefundIfNew`
- * (006-08) already only reacts to an incremental refund delta, so running this nightly on top of a
+ * makes re-seeing an already-recorded order a genuine no-op, and `processRefundIfNew`
+ * already only reacts to an incremental refund delta, so running this nightly on top of a
  * healthy incremental sync costs nothing beyond the re-fetch itself.
  */
 export const reconcileSquareOrders = async (
@@ -288,7 +288,7 @@ const runOrdersWindow = async (
 /**
  * Writes one order's header + lines + outbox event inside the CALLER's already-open transaction —
  * never opens its own. Idempotent via `.onConflictDoNothing()` on `sales_transactions`' real unique
- * index (006-01); returns `null` (not an error) for a duplicate, matching
+ * index; returns `null` (not an error) for a duplicate, matching
  * `SalesTransactionRepository.recordIfNew`'s own `'duplicate'`-vs-`'recorded'` convention so a
  * re-synced window (the normal case for an incremental sync with any overlap) doesn't miscount.
  * Returns the new row's id on success so the caller can trigger consumption for it AFTER this
@@ -361,13 +361,13 @@ const recordOrderInTx = async (
 };
 
 /**
- * 006-08/006-12: called once per newly-recorded `COMPLETED` `sales_transactions` row, AFTER its
+ * called once per newly-recorded `COMPLETED` `sales_transactions` row, AFTER its
  * recording transaction has committed — `SalesIngestionPipeline` opens its own transaction per
  * line, so it cannot run inside `recordOrderInTx`'s transaction (see this file's own top-level
  * comment). A `menuItemId` is resolved from `pos_items.menuItemId`/`mappingStatus`: `'MAPPED'`
  * consumes via the real recipe; anything else (`'UNMAPPED'`/`'IGNORED'`, or a line whose
  * `posItemId` never resolved during recording) quarantines instead — `SalesIngestionPipeline`
- * itself already encodes that branch (I7, 005-08), this function just supplies which branch based
+ * itself already encodes that branch (I7, earlier work), this function just supplies which branch based
  * on what THIS line's `pos_items` row actually says today, matching the sale's own line quantities
  * and revenue exactly rather than recomputing from the recipe.
  */
@@ -422,7 +422,7 @@ const triggerConsumptionForTransaction = async (
 };
 
 /**
- * 006-08 (plan.md's "subtle part"): detects a refund on an order this codebase already recorded in
+ * detects a refund on an order this codebase already recorded in
  * a PRIOR sync — the current sync's `recordOrderInTx` correctly treated it as a duplicate
  * (`onConflictDoNothing`, same `external_id`), which is exactly how Square represents a refund: an
  * addition to the SAME order object, not a new one. Idempotent by construction: the REFUNDED row's
@@ -431,7 +431,7 @@ const triggerConsumptionForTransaction = async (
  * the same total again on a later sight — never a duplicate reversal, since the delta is computed
  * from what the row ALREADY says, not reapplied blindly).
  *
- * Partial refunds reverse PROPORTIONALLY (plan.md's own acceptance criterion): the fraction is
+ * Partial refunds reverse PROPORTIONALLY: the fraction is
  * `refundedAmount / originalTotal`, applied only to the INCREMENTAL amount newly refunded since the
  * last time this function saw this order — a second, later partial refund on the same order posts
  * only the additional reversal, not a second full one.

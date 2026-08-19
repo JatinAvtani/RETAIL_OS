@@ -7,7 +7,7 @@ import { compareMoney, scaleMoney } from '../primitives/money.js';
 
 /**
  * One day's real consumption, or `null` if the store was closed that day. Closures are excluded
- * from the trimmed mean entirely (not counted as zero-consumption days), matching plan.md — a
+ * from the trimmed mean entirely (not counted as zero-consumption days), matching the plan — a
  * zero from a closure would drag the average down and understate real daily usage.
  */
 export type ConsumptionDay = {
@@ -109,7 +109,7 @@ export const roundUpToPackSize = <U extends Unit>(needed: Quantity<U>, packSize:
 };
 
 /**
- * Raises `qty` (never lowers it — plan.md's own property: MOQ enforcement never reduces below
+ * Raises `qty` (never lowers it — the plan's own property: MOQ enforcement never reduces below
  * the computed need) so the order's total value clears the supplier's minimum. Requires a real
  * `unitPrice` to compute order value; with no price or no MOQ configured, `qty` passes through
  * unchanged — an unpriced line can't be judged against a dollar minimum, and fabricating one
@@ -146,7 +146,7 @@ const confidenceFrom = (consumptionHistory: readonly ConsumptionDay[]): ReorderC
  * when wrong, while a black-box one gets ignored entirely regardless of its real accuracy.
  *
  * Returns `null` (never a guessed quantity) when there is no usable consumption history at all —
- * this is the honest "par-level only, flagged low-confidence" case plan.md and I7 both require;
+ * this is the honest "par-level only, flagged low-confidence" case the plan and I7 both require;
  * the caller is responsible for falling back to a par-level-based suggestion, which needs no
  * consumption history and is therefore out of this function's scope.
  */

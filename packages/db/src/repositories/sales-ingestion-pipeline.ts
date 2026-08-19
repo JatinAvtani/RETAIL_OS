@@ -11,22 +11,22 @@ export type SalesIngestionResult =
   | SaleConsumptionResult;
 
 /**
- * 005-08 (spec 05 §5.1.3, plan.md Phase 4): the piece that sits one level BEFORE
- * `SaleConsumptionService.recordSaleConsumption` (005-07) in the pipeline description —
- * `sales.ingested → for each line: POSItem → MenuItem? NO → unmapped_sales quarantine ... YES →
+ * the piece that sits one level BEFORE
+ * `SaleConsumptionService.recordSaleConsumption` in the pipeline description —
+ * `sales.ingested → for each line: POSItem → MenuItem? NO → unmapped_sales quarantine... YES →
  * record consumption`.
  *
- * Sales-source-agnostic, same confirmed scope as 005-07: `pos_items`/`sales_transactions` don't
- * exist yet (EPIC-006, not started), so this function has no opinion on HOW a POS item gets
+ * Sales-source-agnostic, same confirmed scope as earlier work: `pos_items`/`sales_transactions` don't
+ * exist yet, so this function has no opinion on HOW a POS item gets
  * mapped to a menu item — it only encodes the branch. `menuItemId` is `null` when the caller
- * (eventually EPIC-006's ingestion job, consulting its own `pos_items.mapping_status`) has no
+ * (eventually the later milestone's ingestion job, consulting its own `pos_items.mapping_status`) has no
  * mapping; this function then quarantines rather than guessing or dropping the sale line (I7).
  * Revenue is recorded on the quarantine row directly, independent of whether consumption ever
- * resolves — "revenue counts, consumption doesn't, nothing is silently dropped" (plan.md's exact
+ * resolves — "revenue counts, consumption doesn't, nothing is silently dropped" (the plan's exact
  * acceptance criterion), decoupling the two rather than blocking revenue recognition on a mapping.
  *
  * When `menuItemId` IS present, this delegates straight to `SaleConsumptionService` — the mapped
- * path is unchanged from 005-07, this function adds nothing on top of it.
+ * path is unchanged from earlier work, this function adds nothing on top of it.
  */
 export class SalesIngestionPipeline {
   private readonly db: Db;

@@ -45,7 +45,7 @@ const SIMPLE_CSV = 'occurred_at,item,qty,price\n2026-08-01,Cappuccino,2,4.50\n20
 const REAL_MAPPING = { occurredAt: 'occurred_at', posItemName: 'item', quantity: 'qty', unitPrice: 'price' };
 
 /**
- * 006-10: real Postgres + real Redis + real MinIO + real HTTP, proving the full upload -> detect
+ * real Postgres + real Redis + real MinIO + real HTTP, proving the full upload -> detect
  * headers -> map columns -> commit flow end to end — the same discipline every other 006-0x task
  * has used (real bytes through a real presigned URL, never a mocked upload).
  */

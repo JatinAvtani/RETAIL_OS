@@ -10,11 +10,11 @@ const mapToMenuItemInput = z.object({ id: z.string().uuid(), menuItemId: z.strin
 const ignoreInput = z.object({ id: z.string().uuid() });
 
 /**
- * 006-11 (plan.md Phase 6, the LAST task in EPIC-006): unmapped POS items ranked by sales volume
+ * unmapped POS items ranked by sales volume
  * descending ("mapping the top 20 items covers ~80% of revenue"), each with fuzzy-suggested menu
  * item matches for a human to confirm or reject (I9 — a confirmed mapping is permanent and
  * deterministic, never automatic). `PosItemRepository.findUnmapped`/`mapToMenuItem` existed since
- * 006-01/006-04 with no caller until this task; `ignore` is new here, giving a genuinely non-menu
+ * related work with no caller until this task; `ignore` is new here, giving a genuinely non-menu
  * line (gift card, service charge) somewhere to go instead of sitting unresolved forever.
  */
 export const posItemsRouter = router({

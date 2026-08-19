@@ -1,6 +1,6 @@
 import type { Permission, Role } from '@retailos/authz';
 
-/** The record stored in Redis under `session:<token>`. Matches spec 14 §14.2's session shape. */
+/** The record stored in Redis under `session:<token>`. Matches the design's session shape. */
 export type SessionRecord = {
   userId: string;
   organizationId: string;

@@ -7,32 +7,32 @@ import { suppliers } from './suppliers';
 import { purchaseOrders } from './purchase-orders';
 
 /**
- * Fact tables (009-01, spec 12 §12.6, plan.md Phase 1) — the incrementally-maintained, per-tenant-
+ * Fact tables (the design, the plan Phase 1) — the incrementally-maintained, per-tenant-
  * timezone daily aggregates every metric will EVENTUALLY read from instead of a live query over raw
- * transactional tables. Not built yet consumed by any registered metric — 009-02 through 009-15 all
+ * transactional tables. Not built yet consumed by any registered metric — earlier work through earlier work all
  * shipped as live queries and stay that way; wiring metrics to read from facts instead is real,
  * separate follow-up work once these tables have real history to read.
  *
  * Every table here is `date`-partitioned (Postgres `date`, `mode: 'string'`, `YYYY-MM-DD`), matching
- * spec 08 §8.8's explicit "Fact tables: Monthly range, rebuild/backfill per partition" guidance and
+ * the design's explicit "Fact tables: Monthly range, rebuild/backfill per partition" guidance and
  * `stock_movements`' own established partitioning template (migration `0014`) — see migration
  * `0039_fact_tables.sql` for the real `PARTITION BY RANGE` / RLS / grant structure, which Drizzle's
  * schema builder cannot express directly (same reason `stock_movements`' partitioning lives in a
  * hand-written migration, not `drizzle-kit generate` output).
  *
- * Two deliberate, confirmed scope narrowings from plan.md's literal 6-table list:
+ * Two deliberate, confirmed scope narrowings from the plan's literal 6-table list:
  * - `fact_supplier_events` is NOT built — confirmed with the user: `supplier_performance_events`
- *   (008-13) is already nearly this exact shape (`occurredAt`, `eventType`, `expectedValue`,
+ *   is already nearly this exact shape (`occurredAt`, `eventType`, `expectedValue`,
  *   `actualValue`, `variance`), append-only and small; aggregating it into a second, day-bucketed
  *   table would add real partitioning/RLS/job complexity for no query-performance or grain benefit
  *   over reading it directly. A future task can revisit this if a real need for a daily bucket
  *   surfaces.
  * - `fact_daily_consumption.theoreticalCogs` is a DOLLAR figure (reusing the exact real per-day
  *   recipe-cost-resolution pattern `sales_anomaly`'s `consumption_anomaly` detector already proved,
- *   009-11), not a per-INGREDIENT-PRODUCT `theoretical_qty`. A genuine per-product theoretical
+ *   earlier work), not a per-INGREDIENT-PRODUCT `theoretical_qty`. A genuine per-product theoretical
  *   quantity would need real recipe explosion per sold menu item per day, aggregated back down to
  *   ingredient-product grain — materially harder and riskier than the dollar-cost version, and
- *   009-11's own consumption-anomaly detector already declined the equivalent work for the same
+ *   earlier work's own consumption-anomaly detector already declined the equivalent work for the same
  *   underlying N+1-shaped explosion-cost reason. Confirmed with the user as a deliberate, narrower
  *   scope, not a silent drop of the spec's literal column name.
  */
@@ -143,10 +143,10 @@ export const factDailyStockValue = pgTable('fact_daily_stock_value', {
  * Grain: one row per (org, store, date, supplierId, productId) — `date` is the parent PO's
  * `createdAt` (when the order was PLACED), confirmed with the user over the goods-receipt date,
  * matching `total_spend`/`spend_by_category`'s own already-established `createdAt`-based period
- * convention (009-08) so this fact table stays consistent with metrics that already exist. `po`/
- * `document` (plan.md's own column names) are real ids, not aggregated away — `poId`/`documentId`
+ * convention so this fact table stays consistent with metrics that already exist. `po`/
+ * `document` are real ids, not aggregated away — `poId`/`documentId`
  * here name the SINGLE po/document a line came from; a day with multiple POs for the same supplier/
- * product produces multiple fact rows (one per PO), never a merged one, so drill-through (009-16)
+ * product produces multiple fact rows (one per PO), never a merged one, so drill-through
  * has a real single source to point at.
  */
 export const factPurchaseLines = pgTable('fact_purchase_lines', {
@@ -179,7 +179,7 @@ export const factPurchaseLines = pgTable('fact_purchase_lines', {
  * Grain: one row per (org, store, date, productId, reasonCode) — real `stock_movements` `WASTE`
  * rows summed by day and reason. `value` is `NULL` for a day/reason bucket where even one wasted
  * unit had an unknown `unit_cost` (I7), matching `computeWasteValueForReason`'s own established
- * unknown-cost discipline (009-07) — never silently excluded from the qty total, only from value.
+ * unknown-cost discipline — never silently excluded from the qty total, only from value.
  */
 export const factWaste = pgTable('fact_waste', {
   id: uuid('id').notNull(),

@@ -10,7 +10,7 @@ type Db = ReturnType<typeof drizzle<typeof schema>>;
 export type CsvImportStatus = (typeof csvImportStatusEnum.enumValues)[number];
 
 /**
- * 006-10's state-machine repository: `sales_csv_imports` walks
+ * earlier work's state-machine repository: `sales_csv_imports` walks
  * `UPLOADED -> MAPPED -> IMPORTED | FAILED`, same shape as `PosConnectionRepository`'s
  * `status`/`lastError` pattern (a plain status column + a text error field, not a separate error
  * table) — this codebase's established precedent for "one row's own health," not a growing side

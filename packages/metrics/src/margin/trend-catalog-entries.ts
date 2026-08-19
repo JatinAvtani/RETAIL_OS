@@ -6,7 +6,7 @@ import { computeCogsActual, computeFoodCostPercentage, computeNetRevenue } from 
 import { requireMarginContext, fetchConsumptionLines, type MarginMetricParams } from './catalog-entries.js';
 
 /**
- * Sparkline-shaped trend metrics for the owner dashboard (spec 12 §12.5, `009-14`) —
+ * Sparkline-shaped trend metrics for the owner dashboard —
  * `net_revenue_trend`/`food_cost_percentage_trend`, matching `margin_trend`'s own established
  * series shape exactly (a real `points` array alongside a real scalar `value`, the last known point
  * — the same `MetricResult`-extension pattern used throughout this catalog rather than a new

@@ -27,18 +27,18 @@ export type SquareCatalogSyncResult = {
 };
 
 /**
- * 006-04 (plan.md Phase 2): "items → `pos_items` with `mapping_status = 'UNMAPPED'`. Deleted
+ * "items → `pos_items` with `mapping_status = 'UNMAPPED'`. Deleted
  * upstream items are marked, not deleted." One catalog ITEM with N variations becomes N
- * `pos_items` rows — same convention `PosItemRepository`/006-01 already established: a `pos_items`
+ * `pos_items` rows — same convention `PosItemRepository`/earlier work already established: a `pos_items`
  * row is one priced, orderable SKU (the variation), not the parent grouping, matching how
  * `sales_transaction_lines.posItemId` will need to reference the exact thing that was sold.
  *
  * Lives in `apps/api`, not `packages/pos` or `packages/db` — it composes both (a vendor API client
- * plus a tenant repository), the same layering `square-routes.ts` (006-03) already established for
+ * plus a tenant repository), the same layering `square-routes.ts` already established for
  * "compose infrastructure packages into one business operation."
  *
  * Refreshes the access token proactively when Square's own `token_expires_at` has passed, mirroring
- * spec 13 §13.3's "refresh automatically; alert on refresh failure" — a sync attempt is the natural
+ * the design's "refresh automatically; alert on refresh failure" — a sync attempt is the natural
  * moment to check, since there is no scheduler in this codebase yet to do so independently (worker
  * package is still a placeholder).
  */

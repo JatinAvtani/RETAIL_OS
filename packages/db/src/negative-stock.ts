@@ -13,11 +13,11 @@ export type NegativeStockRow = {
 };
 
 /**
- * 005-14 (spec 03-product-scope.md M3, task.md's own acceptance criterion: "Negative stock raises
- * an alert but does NOT block the movement" — plan.md's design decision: "Negative stock is a
+ * earlier work (the scope's M3 milestone, the plan's own acceptance criterion: "Negative stock raises
+ * an alert but does NOT block the movement" — the plan's design decision: "Negative stock is a
  * signal, not an error — it means a receipt wasn't recorded. Alert; don't block."). A pure
- * detection function, the same scope precedent as `findStockLevelDrift` (005-04) and
- * `findBelowParLevels` (005-09): no event emission (`stock.negative` is spec 05 §5.1's named
+ * detection function, the same scope precedent as `findStockLevelDrift` and
+ * `findBelowParLevels`: no event emission (`stock.negative` is the design's named
  * event, but wiring it to an outbox write or a BullMQ alert job is out of scope here, matching
  * both prior precedents exactly), no notifications table. A future worker job or admin endpoint
  * decides what to do with the result; this function only reports which (store, product, variant)

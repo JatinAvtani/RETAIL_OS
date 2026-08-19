@@ -1,10 +1,10 @@
 -- Hand-written, not `drizzle-kit generate` output — the snapshot chain has been stale since
 -- migration 0005 (see 0008_units_and_conversions.sql's header and project memory for why).
 --
--- The projection (spec 08 SS8.6): a cache of "what's on hand right now," maintained in the SAME
+-- The projection: a cache of "what's on hand right now," maintained in the SAME
 -- transaction as every stock_movements insert. The ledger is truth; this table exists purely so
 -- reads don't have to sum the ledger. Drift between this table and the ledger sum is a bug,
--- caught by the nightly reconciliation job (005-04), not built here.
+-- caught by the nightly reconciliation job, not built here.
 CREATE TABLE IF NOT EXISTS "stock_levels" (
 	"organization_id" uuid NOT NULL,
 	"store_id" uuid NOT NULL,

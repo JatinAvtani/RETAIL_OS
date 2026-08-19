@@ -1,7 +1,7 @@
 -- Hand-written, not `drizzle-kit generate` output — the snapshot chain has been stale since
 -- migration 0005 (see 0008_units_and_conversions.sql's header and project memory for why).
 --
--- 006-06 (plan.md Phase 2): the webhook receiver's durable, deduped event record. organization_id
+-- the webhook receiver's durable, deduped event record. organization_id
 -- is NOT NULL, matching every other tenant table's RLS convention — a webhook whose merchant_id
 -- resolves to no known pos_connections row is never written here at all (logged server-side, 200
 -- returned, no row), asked the user and confirmed rather than relaxing tenant-scoping.

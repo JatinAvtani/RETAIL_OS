@@ -11,7 +11,7 @@ const createInput = z.object({
 
 /**
  * The catalog UI's category dropdown/creation needs a real endpoint — this was schema+repository
- * only (004-01) until now, no tRPC layer existed for it.
+ * only until now, no tRPC layer existed for it.
  */
 export const categoriesRouter = router({
   list: protectedProcedure.query(({ ctx }) => {

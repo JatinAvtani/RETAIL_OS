@@ -13,7 +13,7 @@ const steadyHistory = (dailyAmount: number, days: number): ConsumptionDay[] =>
     isClosureDay: false,
   }));
 
-describe('suggestReorder — concrete anchor matching plan.md\'s own worked example', () => {
+describe('suggestReorder — concrete anchor matching the plan\'s own worked example', () => {
   it('suggests a pack-rounded quantity with a full explanation when stock is low', () => {
     const input: ReorderInput = {
       stockOnHand: quantity(9, 'kg'),

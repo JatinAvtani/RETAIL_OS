@@ -61,7 +61,7 @@ const ensureBucketOnce = async () => {
 };
 
 /**
- * Spec 14 §14.3/§14.7: uploads go via presigned URLs, never proxied through the API; paths are
+ * the design/: uploads go via presigned URLs, never proxied through the API; paths are
  * tenant-prefixed; type is verified by magic bytes, not the client's claimed content-type or
  * filename extension. Two-step flow, not one: `requestImageUpload` only ever hands out a URL that
  * accepts a PUT of the declared content-type — it does not touch `products.imageUrl`, since a
@@ -71,7 +71,7 @@ const ensureBucketOnce = async () => {
  */
 export const productsRouter = router({
   /**
-   * Plain listing for now, not real trigram fuzzy search — plan.md specifies pg_trgm-based search
+   * Plain listing for now, not real trigram fuzzy search — the plan specifies pg_trgm-based search
    * for the catalog UI, but that's deferred until there's enough product volume in dev/testing to
    * meaningfully verify it finds near-matches, not just exact ones (asked the user, confirmed).
    * `nameContains` is a simple case-insensitive substring filter in the meantime.
@@ -111,7 +111,7 @@ export const productsRouter = router({
       const category = await categoryRepository.findById(input.categoryId);
       if (!category) {
         // NOT_FOUND, not BAD_REQUEST, matching every other cross-tenant guard in this codebase
-        // (stores.get, products.get, ...): from this org's perspective the id simply doesn't
+        // (stores.get, products.get,...): from this org's perspective the id simply doesn't
         // exist, whether it's a typo or genuinely belongs to another tenant — the response can't
         // and shouldn't distinguish those two cases.
         throw new TRPCError({ code: 'NOT_FOUND', message: 'categoryId does not refer to a category in this organization.' });
@@ -145,7 +145,7 @@ export const productsRouter = router({
       const category = await categoryRepository.findById(input.categoryId);
       if (!category) {
         // NOT_FOUND, not BAD_REQUEST, matching every other cross-tenant guard in this codebase
-        // (stores.get, products.get, ...): from this org's perspective the id simply doesn't
+        // (stores.get, products.get,...): from this org's perspective the id simply doesn't
         // exist, whether it's a typo or genuinely belongs to another tenant — the response can't
         // and shouldn't distinguish those two cases.
         throw new TRPCError({ code: 'NOT_FOUND', message: 'categoryId does not refer to a category in this organization.' });

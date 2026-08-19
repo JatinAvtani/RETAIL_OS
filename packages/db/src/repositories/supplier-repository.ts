@@ -29,8 +29,8 @@ export class SupplierRepository extends TenantScopedRepository<typeof suppliers>
   }
 
   /**
-   * Case-insensitive EXACT name match — used by 007-07's validation gates to resolve an
-   * extracted supplier name string to a real row without any fuzzy matching (that's 007-10's
+   * Case-insensitive EXACT name match — used by earlier work's validation gates to resolve an
+   * extracted supplier name string to a real row without any fuzzy matching (that's earlier work's
    * job). Returns `null` on no match or more than one match; an ambiguous/ absent match means the
    * caller has no confirmed supplier to compare trailing prices against, which is a real
    * "unknown," not an error to guess through.
@@ -75,7 +75,7 @@ export class SupplierRepository extends TenantScopedRepository<typeof suppliers>
   /**
    * The team-management-style "real editable record" gap the UI audit found: `create` existed,
    * but nothing let a caller change a supplier's contacts/terms/status after creation — every
-   * field below is a real, spec'd column (07 §7.5), not new scope. `leadTimeDaysContracted` is
+   * field below is a real, spec'd column (07 ), not new scope. `leadTimeDaysContracted` is
    * editable here (the negotiated promise); `leadTimeDaysMeasured` deliberately is not — it's
    * derived from real receipts (see `recordMeasuredLeadTime`), never hand-edited.
    */
@@ -113,7 +113,7 @@ export class SupplierRepository extends TenantScopedRepository<typeof suppliers>
 
   /**
    * `leadTimeDaysMeasured` is reality, distinct from the contracted promise — updated separately
-   * as real receipts accumulate (EPIC-006+), never derived from `leadTimeDaysContracted`.
+   * as real receipts accumulate, never derived from `leadTimeDaysContracted`.
    */
   async recordMeasuredLeadTime(id: string, days: number) {
     const rows = await this.runScoped((db, scopedWhere) =>

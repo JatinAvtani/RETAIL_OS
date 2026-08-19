@@ -4,7 +4,7 @@ import { RateLimiter, type createRedisClient } from '@retailos/session';
 type Redis = ReturnType<typeof createRedisClient>;
 
 /**
- * Spec 14 §14.2: "Rate limiting on auth endpoints: per IP, per account, with progressive delay and
+ * the design: "Rate limiting on auth endpoints: per IP, per account, with progressive delay and
  * lockout." Two independent scopes, checked together in `enforceAuthRateLimit` — an attacker
  * spraying different emails from one IP is caught by the IP limiter even though no single account
  * ever crosses its own threshold; a distributed attack against one account from many IPs is caught

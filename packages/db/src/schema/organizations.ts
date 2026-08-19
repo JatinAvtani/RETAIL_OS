@@ -26,7 +26,7 @@ export const organizations = pgTable('organizations', {
   tier: organizationTierEnum('tier').notNull().default('trial'),
   status: organizationStatusEnum('status').notNull().default('active'),
 
-  // 008-11 (spec D8: "avoid alert fatigue on cents"). All three nullable, matching
+  // "Avoid alert fatigue on cents". All three nullable, matching
   // memberships.approvalLimit's exact precedent — NULL means "use
   // packages/domain's DEFAULT_MATCH_TOLERANCES", never a fabricated zero (a zero tolerance would
   // flag every cent of rounding as a variance, the opposite of this feature's purpose). Percent

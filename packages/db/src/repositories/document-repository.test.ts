@@ -48,7 +48,7 @@ describe('DocumentRepository', () => {
     // outbox_events/audit_logs reference organizations, not documents directly (aggregateId/entityId
     // are plain uuids, not real FKs — same polymorphic-reference convention document_links uses), so
     // order relative to documents doesn't matter, but they must still be cleaned up per test since
-    // 007-09's approve/reject write real rows into both.
+    // earlier work's approve/reject write real rows into both.
     await adminDb.delete(extractionCorrections).where(eq(extractionCorrections.organizationId, organizationId));
     await adminDb.delete(documentExtractions).where(eq(documentExtractions.organizationId, organizationId));
     await adminDb.delete(documentLinks).where(eq(documentLinks.organizationId, organizationId));
@@ -228,7 +228,7 @@ describe('DocumentRepository', () => {
     expect(auditRow?.actorUserId).toBe(userId);
   });
 
-  it('approve also accepts an AUTO_APPROVED document — plan.md: an auto-approval is "still reviewable", a human can override it', async () => {
+  it('approve also accepts an AUTO_APPROVED document — an auto-approval is "still reviewable", a human can override it', async () => {
     const repo = new DocumentRepository(createScopedDb(client), organizationId);
     const created = await repo.create({
       storeId,
@@ -245,7 +245,7 @@ describe('DocumentRepository', () => {
     expect(approved?.status).toBe('APPROVED');
   });
 
-  it('reject moves a REVIEW_REQUIRED document to REJECTED, records the reason, and never posts (rejected documents stay out of 007-11)', async () => {
+  it('reject moves a REVIEW_REQUIRED document to REJECTED, records the reason, and never posts (rejected documents stay out of )', async () => {
     const repo = new DocumentRepository(createScopedDb(client), organizationId);
     const created = await repo.create({
       storeId,

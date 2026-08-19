@@ -158,7 +158,7 @@ describe('withMetricCache', () => {
     }
   });
 
-  it('default TTL is within spec 12 §12.6\'s stated 5-60 minute range', () => {
+  it('default TTL is within the design\'s stated 5-60 minute range', () => {
     expect(DEFAULT_METRIC_CACHE_TTL_SECONDS).toBeGreaterThanOrEqual(5 * 60);
     expect(DEFAULT_METRIC_CACHE_TTL_SECONDS).toBeLessThanOrEqual(60 * 60);
   });

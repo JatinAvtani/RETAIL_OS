@@ -12,7 +12,7 @@ const SINCE = new Date('2026-08-01T00:00:00Z');
 const LOCATION_ID = 'LOC-1';
 
 /**
- * 006-05: `fetchSquareOrders` fixtures mirror Square's REAL Orders API wire shape, researched
+ * `fetchSquareOrders` fixtures mirror Square's REAL Orders API wire shape, researched
  * directly against Square's `SearchOrders`/`Order` reference docs (not guessed) — `orders` (not
  * `items`/`results`), `state` has FOUR real values (OPEN/DRAFT/COMPLETED/CANCELED, not three), money
  * fields are integer minor-unit cents (converted via Decimal, matching `fetchSquareCatalog`'s own
@@ -199,7 +199,7 @@ describe('fetchSquareOrders', () => {
   });
 
   /**
-   * 006-08: refunds live in the SAME order object's `refunds[]` array, researched directly against
+   * refunds live in the SAME order object's `refunds[]` array, researched directly against
    * Square's Orders API reference. Only `APPROVED` entries count — `PENDING`/`REJECTED`/`FAILED`
    * refund attempts must never be treated as money that actually left (I7).
    */

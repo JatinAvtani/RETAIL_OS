@@ -1,12 +1,12 @@
 -- Hand-written, not `drizzle-kit generate` output — the snapshot chain has been stale since
 -- migration 0005 (see 0008_units_and_conversions.sql's header and project memory for why).
 --
--- 005-13 (spec 07 SS7.4's StockTransfer entity, plan.md's Phase 6): inter-store transfers with a
+-- earlier work: inter-store transfers with a
 -- real in-transit window. lot_status needs a new value: a destination lot exists but must be
 -- invisible to FEFO (findFefoCandidates/consumeFefo only ever query status = 'ACTIVE') until the
 -- transfer is actually received.
 --
--- ALTER TYPE ... ADD VALUE cannot run inside the same transaction as code that uses the new value
+-- ALTER TYPE... ADD VALUE cannot run inside the same transaction as code that uses the new value
 -- (a Postgres restriction on enum additions) - this migration ONLY adds the enum value; the
 -- stock_transfers table is a separate statement in the same file, which is safe since table
 -- creation doesn't reference the new enum value in a way that needs it committed first.

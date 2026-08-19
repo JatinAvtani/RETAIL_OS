@@ -24,7 +24,7 @@ import { buildServer } from '../../server';
 import type { FastifyInstance } from 'fastify';
 
 /**
- * 009-17 — real HTTP proof of `search.global`'s lexical search across products/suppliers/purchase
+ * real HTTP proof of `search.global`'s lexical search across products/suppliers/purchase
  * orders/documents. Every test seeds real rows and searches for them via the real GIN trigram/FTS
  * indexes `0041_search.sql` created, not a mocked repository — this is what actually proves the
  * migration and the query shapes work together, not just that the TypeScript compiles.
@@ -259,7 +259,7 @@ describe('search.global', () => {
 });
 
 /**
- * 009-18 — real HTTP proof of `search.documents`' routing (lexical-only vs. hybrid) and permission
+ * real HTTP proof of `search.documents`' routing (lexical-only vs. hybrid) and permission
  * gate. `GEMINI_API_KEY` is deliberately unset (matching `documents.test.ts`'s own established
  * precedent for this exact situation) — a hybrid-shaped query correctly degrades to lexical-only
  * without a key, proven directly rather than mocking the Gemini SDK inline in an HTTP test. The RRF

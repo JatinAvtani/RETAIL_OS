@@ -143,7 +143,7 @@ describe('TransferService', () => {
     expect(destinationLot?.status).toBe('IN_TRANSIT');
     expect(destinationLot?.storeId).toBe(destinationStoreId);
     expect(destinationLot?.remainingQuantity).toBe('20.000000');
-    // Carries across UNCHANGED — same cost and expiry as the source lot, per plan.md.
+    // Carries across UNCHANGED — same cost and expiry as the source lot, per the plan.
     expect(destinationLot?.unitCost).toBe('2.5000');
     expect(destinationLot?.expiryDate).toBe('2026-09-01');
   });

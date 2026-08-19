@@ -51,13 +51,13 @@ const resetPasswordInput = z.object({
  * doesn't match any user, so a nonexistent-email login takes roughly the same time as a
  * wrong-password one. Without this, the two cases have a measurably different response time (a
  * real Argon2id verify vs. an immediate return), which is exactly the account-enumeration timing
- * side-channel spec 14 §14.2 calls out ("timing-equalized responses").
+ * side-channel the design calls out ("timing-equalized responses").
  */
 const DUMMY_PASSWORD_HASH =
   '$argon2id$v=19$m=19456,t=2,p=1$bBI2ZkESMxXpGxfUtN7N1Q$vemx3i7Rv+2XEKGnPq7fIhqoVgEhmjs6Jc98p1tg6Kk';
 
 /**
- * Enumeration-safe by design (spec 14 §14.2's "generic errors, no enumeration" intent, applied to
+ * Enumeration-safe by design (the design's "generic errors, no enumeration" intent, applied to
  * signup too, not just login — the spec only names login's case explicitly, confirmed with the
  * user that signup should follow the same posture): the response is identical whether or not the
  * email was already registered. What SHOULD differ is which email gets sent — a real "here's your
@@ -148,7 +148,7 @@ export const authRouter = router({
 
   /**
    * Generic "invalid credentials" for every failure case (nonexistent email, wrong password,
-   * unverified email, zero/multiple accepted memberships) — spec 14 §14.2 requires this
+   * unverified email, zero/multiple accepted memberships) — the design requires this
    * specifically for login to prevent account enumeration. The one exception is the
    * unverified-email case, which is safe to be specific about: it only fires AFTER the password
    * has already been confirmed correct, so it confirms nothing an attacker without the real

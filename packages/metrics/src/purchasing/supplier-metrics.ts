@@ -2,8 +2,8 @@ import { Decimal } from 'decimal.js';
 import type { UnknownOr } from '../margin/margin.js';
 
 /**
- * Supplier metrics (spec 12 §G) with genuinely NEW compute logic — the 3 of the section's 8 that
- * `supplier-performance.ts` (008-13/008-15) doesn't already cover: `lead_time_actual`,
+ * Supplier metrics with genuinely NEW compute logic — the 3 of the section's 8 that
+ * `supplier-performance.ts` doesn't already cover: `lead_time_actual`,
  * `lead_time_variance`, `price_stability_index`. `fill_rate`/`on_time_delivery_rate`/
  * `invoice_accuracy_rate`/`quality_reject_rate` reuse that file's existing, already-tested
  * functions directly — see `catalog-entries.ts` for the thin `defineMetric` wrappers around them.
@@ -55,7 +55,7 @@ export type PriceHistoryPoint = {
 
 /**
  * `price_stability_index` = coefficient of variation (`stdev / mean`) of unit price over one
- * supplier product's real effective-dated price history (spec 12 §G) — confirmed with the user:
+ * supplier product's real effective-dated price history — confirmed with the user:
  * parameterized per `supplierProductId`, not blended across a supplier's unrelated products, since
  * no formula in the spec says how to combine price series at genuinely different price scales.
  * `'unknown'` with fewer than 2 price points (I7 — variation is undefined over a single price) or

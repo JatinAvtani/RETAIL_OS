@@ -1,4 +1,4 @@
--- 008-11: spec D8, "avoid alert fatigue on cents." Per-org override for the three-way match's
+-- "Avoid alert fatigue on cents." Per-org override for the three-way match's
 -- price/quantity tolerances (packages/domain/src/purchasing/three-way-match.ts's
 -- DEFAULT_MATCH_TOLERANCES). All nullable, matching memberships.approval_limit's exact
 -- precedent -- NULL means "use the default," never a fabricated zero (a zero tolerance would

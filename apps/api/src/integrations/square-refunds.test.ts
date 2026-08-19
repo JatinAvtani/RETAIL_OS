@@ -32,12 +32,12 @@ import { buildServer } from '../server';
 import type { FastifyInstance } from 'fastify';
 
 /**
- * 006-08 (plan.md's own named "subtle part"): end-to-end proof that a refund (1) records a
+ * end-to-end proof that a refund (1) records a
  * REFUNDED transaction linked to the original, (2) reduces net revenue, and (3) REVERSES the
  * corresponding consumption — the three explicit acceptance criteria, exercised together through
  * the real HTTP surface rather than unit-tested in isolation. Builds a real product -> recipe ->
  * menu item chain (same fixture shape `sales-ingestion-pipeline.test.ts` already established) with
- * a real lot, syncs a COMPLETED order for it (posting real consumption via 006-12's new wiring),
+ * a real lot, syncs a COMPLETED order for it (posting real consumption via earlier work's new wiring),
  * then syncs the same order again with a refund attached and proves the reversal.
  */
 describe('Square refund handling — full consumption reversal, end to end', () => {

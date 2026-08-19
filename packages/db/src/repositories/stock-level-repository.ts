@@ -13,15 +13,15 @@ const INCREASING_MOVEMENT_TYPES: ReadonlySet<MovementType> = new Set([
 ]);
 
 /**
- * The projection's write/read surface for 005-03. `recordAndProject` is the movement-service
- * primitive plan.md's Phase 3 snippet describes: insert the ledger row and upsert the projection
+ * The projection's write/read surface for earlier work. `recordAndProject` is the movement-service
+ * primitive the plan's Phase 3 snippet describes: insert the ledger row and upsert the projection
  * in the SAME transaction, so the projection can never observe a movement the ledger doesn't also
  * have (and vice versa). Outbox emission and audit logging (also shown in that snippet) are
- * 005-06's job — this task's scope is specifically the ledger-insert + projection-upsert pair.
+ * earlier work's job — this task's scope is specifically the ledger-insert + projection-upsert pair.
  *
  * `avgUnitCost` uses the standard moving-average-cost formula, recomputed ONLY on stock-increasing
  * movement types with a known `unitCost` — confirmed with the user rather than guessed, since
- * plan.md's snippet shows `quantity` being maintained but is silent on the cost formula.
+ * the plan's snippet shows `quantity` being maintained but is silent on the cost formula.
  * Consumption/waste/transfer-out movements never touch `avgUnitCost`: selling or wasting stock
  * doesn't change the cost basis of what remains, and a WASTE/SALE_CONSUMPTION movement typically
  * carries the COST OF WHAT WAS TAKEN (e.g. a lot's cost), not a new purchase price — pulling the
@@ -151,7 +151,7 @@ export class StockLevelRepository extends TenantScopedRepository<typeof stockLev
   /**
    * The trailing-`lookbackDays`-day average daily consumption per (product, variant) for one
    * store — `SUM(-quantity) / lookbackDays` over `SALE_CONSUMPTION` movements, the exact formula
-   * `findExpiryQueue`/`findReorderSuggestions` each independently re-derived inline (009-06: a
+   * `findExpiryQueue`/`findReorderSuggestions` each independently re-derived inline (earlier work: a
    * third caller needing the same number is what made extracting this the right call — see
    * `packages/metrics/src/inventory/inventory.ts` for the metrics consuming it). Deliberately does
    * NOT touch either of those two existing call sites — this is a new, additive read method, not a
@@ -187,10 +187,10 @@ export class StockLevelRepository extends TenantScopedRepository<typeof stockLev
   }
 
   /**
-   * `stock_value`'s real input (spec 12 §D: `Σ remaining_qty × lot_cost`, store/category grain) —
+   * `stock_value`'s real input —
    * sums over `lots.remaining_quantity × lots.unit_cost` for `ACTIVE` lots, the SAME source
    * `findExpiryQueue`'s `value_at_risk` reads from, deliberately NOT `stock_levels.avgUnitCost`
-   * (009-06 research: the spec's own "lot_cost" wording points at the lots table, and lot-level
+   * (earlier work research: the spec's own "lot_cost" wording points at the lots table, and lot-level
    * cost is the more granular, more correct source anyway — `stock_levels.avgUnitCost` is a
    * blended average that exists for a different purpose). Grouped by `products.category_id`;
    * `category_id IS NULL` groups under a real `categoryId: null` row rather than being dropped —
@@ -216,7 +216,7 @@ export class StockLevelRepository extends TenantScopedRepository<typeof stockLev
   }
 
   /**
-   * 009-16 (drill-through) — the real per-lot rows behind `stock_value`'s total, WITH each lot's
+   * earlier work (drill-through) — the real per-lot rows behind `stock_value`'s total, WITH each lot's
    * own id and the product's name, backing the dashboard's stock-value drill-through. Same
    * ACTIVE/remaining-quantity-positive filter as `findStockValueByCategory`, so the two figures
    * always reconcile — a human drilling in sees exactly the lots that summed to the number shown.
@@ -476,7 +476,7 @@ export class StockLevelRepository extends TenantScopedRepository<typeof stockLev
   }
 
   /**
-   * `fact_daily_stock_value`'s real input (009-01) — one row per (productId, variantId) with any
+   * `fact_daily_stock_value`'s real input — one row per (productId, variantId) with any
    * real ACTIVE lot remaining at this store, as of `asOf` (the resolved end of the store-local day
    * being aggregated, matching `findExpiringLots`'s own precedent for an "as of" snapshot query).
    * `value` is `null` (I7) the moment even ONE contributing lot has an unresolvable cost — `lots.

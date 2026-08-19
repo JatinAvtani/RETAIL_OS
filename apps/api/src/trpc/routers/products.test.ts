@@ -36,7 +36,7 @@ const REAL_JPEG_BYTES = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0
 
 /**
  * Real Postgres + real Redis + real MinIO + real HTTP: proves the two-step presigned-upload flow
- * (spec 14 §14.3/§14.7) end to end — a presigned URL is issued, a real PUT with real image bytes
+ * end to end — a presigned URL is issued, a real PUT with real image bytes
  * succeeds against it, and only THEN does `confirmImageUpload` verify the actual uploaded bytes
  * (magic bytes, not the claimed content-type) before writing `products.imageKey`.
  */

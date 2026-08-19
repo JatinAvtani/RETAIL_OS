@@ -37,9 +37,9 @@ const ensureBucketOnce = async () => {
 };
 
 /**
- * 006-10 (plan.md Phase 5): upload -> detect headers -> human maps columns -> commit (parse +
+ * upload -> detect headers -> human maps columns -> commit (parse +
  * write + trigger consumption). Same two-step upload shape as `products.requestImageUpload`/
- * `confirmImageUpload` (spec 14 §14.3/§14.7: presigned URL, never proxied through the API; bytes
+ * `confirmImageUpload` (the design/: presigned URL, never proxied through the API; bytes
  * verified server-side after upload, never trusted from the client's declared content-type) —
  * `requestUpload` never touches `sales_csv_imports` and never mints a real import id; the row is
  * created ONLY at `confirmUpload`, once the actual uploaded bytes have been downloaded and
@@ -116,7 +116,7 @@ export const csvImportRouter = router({
     return csvImportRepository.findAllForOrganization();
   }),
 
-  /** The human's confirmed column mapping (I9) — records it and, if `saveAsLabel` is given, also saves it as a reusable per-tenant mapping (plan.md: "save the column mapping per tenant so repeat imports are one click"). */
+  /** The human's confirmed column mapping (I9) — records it and, if `saveAsLabel` is given, also saves it as a reusable per-tenant mapping. */
   submitColumnMapping: protectedProcedure.input(submitMappingInput).mutation(async ({ ctx, input }) => {
     const csvImportRepository = new CsvImportRepository(ctx.db, ctx.session.organizationId);
     const importRow = await csvImportRepository.findById(input.importId);

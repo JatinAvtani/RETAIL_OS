@@ -8,7 +8,7 @@ import { buildServer } from '../../server';
 import type { FastifyInstance } from 'fastify';
 
 /**
- * 006-13 (spec 13 §13.4): real HTTP verification for `integrations.health` — every connection's
+ * real HTTP verification for `integrations.health` — every connection's
  * status, `data_freshness_lag`, and data-completeness counts (unmapped POS items, quarantined
  * sales), assembled by the registered `computeIntegrationHealthSummary` metric function
  * (`@retailos/metrics`), never computed ad hoc in this router.

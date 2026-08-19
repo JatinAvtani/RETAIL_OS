@@ -14,20 +14,20 @@ export const posConnectionStatusEnum = pgEnum('pos_connection_status', [
 ]);
 
 /**
- * 006-03: one store's link to a vendor POS account (spec 13 §13.3's "per-tenant credential
- * isolation"). Reuses `salesSourceEnum` (006-01) for `vendor` rather than a narrower dedicated
+ * one store's link to a vendor POS account (the design's "per-tenant credential
+ * isolation"). Reuses `salesSourceEnum` for `vendor` rather than a narrower dedicated
  * enum — asked the user, confirmed: `'csv'` simply never appears as a real row here (CSV import has
  * no persistent connection to store, it's a one-off upload each time), and one enum for "which POS
  * vendor" everywhere avoids a second near-identical enum to keep in sync whenever a real vendor is
  * added.
  *
  * Exactly one row per `(store, vendor)` — a store cannot have two simultaneous Square connections.
- * `storeId`, not `organizationId` alone, is the scope: spec 13 names Square's own model as
+ * `storeId`, not `organizationId` alone, is the scope: the design names Square's own model as
  * location-scoped (one connection authorizes one `externalLocationId`), matching this codebase's
  * own store-not-org boundary for stock/sales/counts.
  *
  * `accessTokenCiphertext`/`refreshTokenCiphertext` hold AES-256-GCM output (`packages/pos`'s
- * `encryptToken`/`decryptToken`), never plaintext — spec 13 §13.3 calls for "envelope encryption,
+ * `encryptToken`/`decryptToken`), never plaintext — the design calls for "envelope encryption,
  * KMS-managed key"; this codebase's no-card/no-cost constraint rules out a real cloud KMS (AWS
  * KMS/GCP KMS both require a billing account), so the KEY MANAGEMENT layer is deliberately
  * simplified to a single symmetric key from an environment variable (`POS_TOKEN_ENCRYPTION_KEY`,
@@ -36,7 +36,7 @@ export const posConnectionStatusEnum = pgEnum('pos_connection_status', [
  * plaintext, never logged) is unchanged; only the key-rotation/HSM/audit-trail infrastructure a
  * managed KMS would add is absent.
  *
- * `status` surfaces spec 13 §13.4's integration health requirement directly on this row rather than
+ * `status` surfaces the design's integration health requirement directly on this row rather than
  * inferring it from token expiry alone — a sync can be `DEGRADED` (partial failures, still
  * connected) independent of whether the OAuth token itself has actually `EXPIRED`.
  */
@@ -59,8 +59,8 @@ export const posConnections = pgTable(
     status: posConnectionStatusEnum('status').notNull().default('CONNECTED'),
     lastSuccessfulSyncAt: timestamp('last_successful_sync_at', { withTimezone: true }),
     /**
-     * 006-05: Square's own opaque `orders/search` pagination cursor — advanced ONLY in the SAME
-     * transaction as the order/line writes it gates (plan.md's own named top risk: "cursor advances
+     * Square's own opaque `orders/search` pagination cursor — advanced ONLY in the SAME
+     * transaction as the order/line writes it gates (the plan's own named top risk: "cursor advances
      * past failed write -> permanent data gap, and nothing errors"). NULL means either no sync has
      * run yet, or the last sync's final page returned no cursor (fully caught up as of
      * `ordersSyncWatermark`) — the two cases are distinguished by `ordersSyncWatermark` being set.

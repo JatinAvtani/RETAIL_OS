@@ -1,5 +1,5 @@
 /**
- * Exactly the union from spec 14 §14.3 — do not add a permission without updating that section,
+ * Exactly the union from the design — do not add a permission without updating that section,
  * since this is the ground truth for "what can be gated at all" across the whole app.
  */
 export type Permission =

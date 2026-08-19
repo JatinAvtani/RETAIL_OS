@@ -21,9 +21,9 @@ import { buildServer } from '../../server';
 import type { FastifyInstance } from 'fastify';
 
 /**
- * 006-05: real HTTP verification for `integrations.syncSquareOrders`. `global.fetch` is patched
+ * real HTTP verification for `integrations.syncSquareOrders`. `global.fetch` is patched
  * (Square's own host only) — no live Square sandbox app exists yet, same standing limitation as
- * 006-04's catalog sync. This file specifically proves plan.md's named top risk: the cursor and
+ * earlier work's catalog sync. This file specifically proves the plan's named top risk: the cursor and
  * watermark only advance together with the order/line writes they gate, inside one transaction, and
  * a re-synced (overlapping) window is genuinely idempotent — no double-counted revenue.
  */
@@ -63,7 +63,7 @@ describe('integrations.syncSquareOrders', () => {
   afterEach(async () => {
     globalThis.fetch = originalFetch;
     for (const orgId of createdOrgIds) {
-      // 006-08/006-12: syncSquareOrders now genuinely triggers consumption for each recorded line
+      // syncSquareOrders now genuinely triggers consumption for each recorded line
       // — unmapped_sales (a real menu-item quarantine) and stock_movements/stock_levels/lots (a
       // real FEFO consumption) are all real write paths now, not hypothetical ones, and each needs
       // its own cleanup before stores/organizations can be deleted.

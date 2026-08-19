@@ -43,7 +43,7 @@ const ADMIN_CONNECTION_STRING =
   process.env.TEST_DATABASE_URL_ADMIN ?? 'postgresql://postgres:postgres@localhost:5432/retailos';
 
 /**
- * The golden regression harness (009-13, spec 12 §12.6). A representative cross-section of
+ * The golden regression harness (the design). A representative cross-section of
  * registered metrics — spanning sales, cost, margin, inventory, waste, and documents — asserted
  * against ONE shared, hand-derived fixture (confirmed with the user over all 60 registered
  * metrics, which would be disproportionate effort for a portfolio-scoped task). If any of these
@@ -78,7 +78,7 @@ describe('golden regression — a representative cross-section of registered met
   // its `recipeGroupId`, before calling the low-level cost resolver. The parameter is genuinely
   // named `menuItemId` at every real call site despite the type's own parameter name; skipping this
   // translation is exactly the "menuItemId passed where recipeGroupId was expected" bug class this
-  // project's own memory already flags from 009-05 — reproduced here on the first draft, caught by
+  // project's own memory already flags from earlier work — reproduced here on the first draft, caught by
   // this harness itself before being trusted.
   const marginCtx = (organizationId: string): MarginMetricContext => ({
     db,

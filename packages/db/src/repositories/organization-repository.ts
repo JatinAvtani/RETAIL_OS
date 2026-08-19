@@ -31,7 +31,7 @@ export class OrganizationRepository {
   }
 
   /**
-   * 008-11 (spec D8): each field is independently optional — `undefined` leaves the existing
+   * each field is independently optional — `undefined` leaves the existing
    * column untouched, `null` explicitly clears an override back to
    * `DEFAULT_MATCH_TOLERANCES` for that one field. Never a bare "set everything," so an OWNER
    * tuning only the price tolerance doesn't accidentally reset quantity tolerance to null too.

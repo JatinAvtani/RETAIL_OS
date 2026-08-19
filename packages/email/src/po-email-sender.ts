@@ -1,8 +1,8 @@
 /**
- * 008-06: spec 05 §5.2.2, "SENT triggers PDF generation + email to the supplier contact." Confirmed
+ * the design, "SENT triggers PDF generation + email to the supplier contact." Confirmed
  * with the user: the transport is mocked, not a real provider — the same precedent as
  * `postmark-inbound.ts` (inbound email is really parsed; Postmark's own account/domain is not).
- * plan.md itself flags real deliverability (a dedicated transactional sending domain with
+ * the plan itself flags real deliverability (a dedicated transactional sending domain with
  * SPF/DKIM/DMARC) as a genuinely hard problem for a small supplier's spam filter — one this
  * project's no-card/no-cost constraint rules out solving for real. `PoEmailSender` is a real
  * interface (matching `ExtractionProvider`'s dual-provider precedent in packages/ai) so a real

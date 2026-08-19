@@ -4,7 +4,7 @@ import { stores } from './stores';
 import { idColumn, softDelete, timestamps, optimisticVersion } from './columns';
 
 /**
- * A physical zone within one store (walk-in fridge, dry storage, bar well) — spec 05 §5.1.4's
+ * A physical zone within one store (walk-in fridge, dry storage, bar well) — the design's
  * "grouped by physical location" stocktake ordering (B11). Scoped to a `storeId`, not shared
  * across an org's stores: a walk-in fridge is a physical place inside one specific store, the
  * same reasoning `stores.ts` already gives for why stock/counts belong to a store rather than

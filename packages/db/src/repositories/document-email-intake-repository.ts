@@ -9,7 +9,7 @@ type Db = ReturnType<typeof drizzle<typeof schema>>;
 export type DocumentEmailIntakeStatus = (typeof documentEmailIntakeStatusEnum.enumValues)[number];
 
 /**
- * 007-03: `document_email_intake`/`document_email_intake_attachments` deliberately do NOT get RLS
+ * `document_email_intake`/`document_email_intake_attachments` deliberately do NOT get RLS
  * (see the schema file's own comment — `organization_id` is nullable, a real and expected state for
  * a recipient address that doesn't resolve to any tenant at all), so this is a plain repository, not
  * a `TenantScopedRepository` subclass — there is no single organizationId to construct one with

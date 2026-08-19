@@ -12,7 +12,7 @@ import { computeFactWaste } from './fact-waste';
 type Db = ReturnType<typeof createDb>['db'];
 
 /**
- * The real orchestration entry point (009-01) — everything a scheduled job (or a future manual
+ * The real orchestration entry point — everything a scheduled job (or a future manual
  * rebuild/backfill call) needs to fully recompute ALL FIVE fact tables for ONE store's ONE
  * store-local calendar date, from real source rows, idempotently (delete-then-insert per table,
  * `FactTableWriter`'s own guarantee). Called once per store per day by the incremental job — see
@@ -21,7 +21,7 @@ type Db = ReturnType<typeof createDb>['db'];
  * `computeRecipeCost`-style layering (the callable core is testable and callable without any queue
  * infrastructure at all).
  *
- * `resolveRecipeUnitCost` is injected, not imported, even though its real implementation (009-01,
+ * `resolveRecipeUnitCost` is injected, not imported, even though its real implementation (earlier work,
  * `@retailos/metrics`) is now a normal sibling package: `packages/db` cannot depend on
  * `packages/metrics` (metrics reads FROM db, never the reverse — a real `pnpm boundaries`
  * violation the other way), so the caller (the fact-aggregation worker processor) resolves the real

@@ -4,7 +4,7 @@ import { users } from './users';
 import { idColumn, softDelete, timestamps, optimisticVersion } from './columns';
 
 /**
- * Matches spec 04 §4.1's persona role codes exactly (OWNER/MANAGER/STAFF/VIEWER_FINANCE) —
+ * Matches the design's persona role codes exactly (OWNER/MANAGER/STAFF/VIEWER_FINANCE) —
  * originally created as lowercase owner/manager/staff/accountant before the spec's exact naming
  * was consulted; renamed in a later migration to avoid a permanent translation layer between the
  * DB and every piece of code that reads a role. PLATFORM_ADMIN is deliberately NOT a value here:

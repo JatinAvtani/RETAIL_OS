@@ -14,9 +14,9 @@ export type BelowParRow = {
 };
 
 /**
- * 005-09's detection half, confirmed with the user as detection-only (no `stock.below_par` event
+ * earlier work's detection half, confirmed with the user as detection-only (no `stock.below_par` event
  * emission, no notifications table, no BullMQ job) — the same scope precedent as
- * `findStockLevelDrift` (005-04). A future worker job or admin endpoint decides what to do with
+ * `findStockLevelDrift`. A future worker job or admin endpoint decides what to do with
  * the result; this function only reports which (store, product, variant) combinations are
  * currently at or below their configured reorder point.
  *
@@ -26,7 +26,7 @@ export type BelowParRow = {
  * must not silently read as "fine," but it also must not be reported as "below par" — there is no
  * par to be below). Only rows where `reorder_point IS NOT NULL` can ever match; a row with
  * `parLevel` set but `reorderPoint` left null is a real, intentional state (par-level-only
- * tracking, spec 05 §5.1.3's fallback for a brand-new product with no consumption history) and is
+ * tracking, the design's fallback for a brand-new product with no consumption history) and is
  * correctly excluded from this specific check.
  *
  * Deliberately cross-tenant by nature, same reasoning as `findStockLevelDrift` — an internal sweep

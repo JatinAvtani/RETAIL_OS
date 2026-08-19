@@ -5,7 +5,7 @@ import { supplierProducts } from '../schema/index';
 import { TenantScopedRepository } from '../tenant-repository';
 
 /**
- * Spec 05 §5.3.2: a fuzzy match only ever *suggests* a mapping. `create` always inserts with
+ * the design: a fuzzy match only ever *suggests* a mapping. `create` always inserts with
  * `isConfirmed: false` — there is no code path in this repository that creates an already-confirmed
  * row, because a mapping earns confirmation only through a human explicitly calling `confirm()`.
  * A wrong auto-mapping corrupts cost data for months, so this asymmetry (easy to create, deliberate
@@ -31,7 +31,7 @@ export class SupplierProductRepository extends TenantScopedRepository<typeof sup
   }
 
   /**
-   * 007-10: looks up an existing mapping (confirmed or not) for one exact (supplier, SKU) pair —
+   * looks up an existing mapping (confirmed or not) for one exact (supplier, SKU) pair —
    * the real DB unique index (`supplier_products_supplier_sku_unique` on
    * `organization_id, supplier_id, supplier_sku`) guarantees at most one row, so this is a genuine
    * lookup, not a "pick the first of several" convenience. Used by the correction-capture flow to
@@ -59,7 +59,7 @@ export class SupplierProductRepository extends TenantScopedRepository<typeof sup
   }
 
   /**
-   * 008-05: every CONFIRMED mapping for one supplier — what the PO create/edit UI needs to offer
+   * every CONFIRMED mapping for one supplier — what the PO create/edit UI needs to offer
    * "which products can I order from this supplier," same I7 reasoning as `findConfirmedForProduct`
    * (an unconfirmed mapping has no reliable pack size/conversion factor, so offering it as an
    * orderable line would silently let a PO line carry made-up unit-conversion data).

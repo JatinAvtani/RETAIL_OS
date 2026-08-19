@@ -1,4 +1,4 @@
--- 008-13: spec 05 SS5.3.3, plan.md Phase 5. Only measured events -- no invented weights in MVP.
+-- the design, the plan Phase 5. Only measured events -- no invented weights in MVP.
 -- Fill rate / on-time rate / price variance / invoice accuracy / quality reject rate all read from
 -- this table via the metric catalog (I2), never recomputed ad hoc from purchase_orders /
 -- goods_receipts / invoice_matches directly.

@@ -7,14 +7,14 @@ import { idColumn, timestamps } from './columns';
 export const webhookEventTypeEnum = pgEnum('webhook_event_type', ['catalog.updated', 'transaction.updated']);
 
 /**
- * 006-06 (plan.md Phase 2): "webhooks are best-effort at every vendor" (plan.md's own words) — this
+ * "webhooks are best-effort at every vendor" — this
  * table is the durable record of every verified, deduped event a webhook receiver ever accepted,
  * independent of whether the triggered sync afterward succeeded. Two jobs: (1) idempotency — a
  * vendor's own dedup key (`ExternalEvent.externalEventId`, e.g. Square's `event_id`) means a
  * retried delivery (guaranteed at-least-once by every vendor, researched directly against Square's
  * docs: unsuccessful deliveries retry for up to 24h) is recognized and skipped, never double-synced;
  * (2) audit trail — `processedAt`/`processingError` record whether the post-response sync actually
- * ran and succeeded, giving a future 006-13 health surface something real to read, and giving a
+ * ran and succeeded, giving a future earlier work health surface something real to read, and giving a
  * future worker (once `apps/worker` is real) unprocessed rows to pick up if this synchronous
  * best-effort attempt ever needs to become a genuinely retried background job.
  *
@@ -43,7 +43,7 @@ export const webhookEvents = pgTable(
     ...timestamps,
   },
   (table) => [
-    // Idempotency (plan.md Phase 2's exact acceptance criterion): the SAME vendor event, retried
+    // Idempotency: the SAME vendor event, retried
     // any number of times, must be recognized as already-seen — scoped by organization (not just
     // source), matching every other idempotency index in this codebase (e.g.
     // sales_transactions_org_source_external_id_idx), since a bare (source, external_id) unique

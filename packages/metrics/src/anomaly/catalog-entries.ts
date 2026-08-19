@@ -12,7 +12,7 @@ import { computeConsumptionAnomalyDays, computeCostSpike, computeSalesAnomalies,
 import type { DailyPoint, FlaggedPoint } from './statistics.js';
 
 /**
- * Anomaly detection metrics (spec 12 §12.4, `009-11`) — the 4 signals with a real underlying data
+ * Anomaly detection metrics — the 4 signals with a real underlying data
  * source in this codebase: `sales_anomaly`, `cost_spike`, `waste_spike`, `consumption_anomaly`.
  * `review_sentiment_shift` is deliberately not built (confirmed with the user — no review/sentiment
  * data source exists anywhere in this schema; see this file's own commit for the reasoning).

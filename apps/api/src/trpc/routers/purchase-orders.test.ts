@@ -196,7 +196,7 @@ describe('purchaseOrders.reorderSuggestions', () => {
   });
 });
 
-describe('purchaseOrders — create/addLine/submit/approve/reject/send/cancel (008-05)', () => {
+describe('purchaseOrders — create/addLine/submit/approve/reject/send/cancel', () => {
   let app: FastifyInstance;
   const { db } = createDb(process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/retailos');
   const redis = createRedisClient(process.env.REDIS_URL ?? 'redis://localhost:6379');
@@ -423,7 +423,7 @@ describe('purchaseOrders — create/addLine/submit/approve/reject/send/cancel (0
     expect(staleSubmit.statusCode).toBe(409);
   });
 
-  describe('send — PDF generation + mocked email (008-06)', () => {
+  describe('send — PDF generation + mocked email', () => {
     it('sending a PO whose supplier has no contact email on file returns a real error, but the PO is still SENT — I7', async () => {
       const { organizationId, storeId, supplierId, productId, supplierProductId } = await setUpOrgWithSupplierProduct();
       const { token } = await issueSessionWithMembership(organizationId, 'OWNER', ['purchasing:read', 'purchasing:write', 'purchasing:approve']);
@@ -437,7 +437,7 @@ describe('purchaseOrders — create/addLine/submit/approve/reject/send/cancel (0
       const sendResponse = await call('purchaseOrders.send', token, { purchaseOrderId, expectedVersion: 3 });
       expect(sendResponse.statusCode).toBe(412);
 
-      // The transition itself already committed before the PDF/email step ran — spec 05 §5.2.2
+      // The transition itself already committed before the PDF/email step ran — the design
       // ties immutability to the state change, not to whether the notification succeeded.
       const getResponse = await query('purchaseOrders.get', token, { purchaseOrderId });
       expect(JSON.parse(getResponse.body).result.data.purchaseOrder.status).toBe('SENT');

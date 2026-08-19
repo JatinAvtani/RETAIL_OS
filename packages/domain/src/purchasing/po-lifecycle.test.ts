@@ -22,7 +22,7 @@ const ALL_STATUSES: PurchaseOrderStatus[] = [
 
 const ALL_EVENTS: PurchaseOrderEvent[] = ['SUBMIT', 'APPROVE', 'REJECT', 'SEND', 'RECEIVE_PARTIAL', 'RECEIVE_FULL', 'CANCEL'];
 
-describe('applyPurchaseOrderTransition — every legal transition from spec 05 §5.2.2\'s diagram', () => {
+describe('applyPurchaseOrderTransition — every legal transition from the design\'s diagram', () => {
   it('DRAFT --submit--> PENDING_APPROVAL', () => {
     expect(applyPurchaseOrderTransition('DRAFT', 'SUBMIT')).toEqual({ allowed: true, nextStatus: 'PENDING_APPROVAL' });
   });
@@ -116,7 +116,7 @@ describe('applyPurchaseOrderTransition — illegal transitions are rejected, not
   });
 });
 
-describe('isPurchaseOrderImmutable — immutability begins exactly at SENT (spec 05 §5.2.2)', () => {
+describe('isPurchaseOrderImmutable — immutability begins exactly at SENT', () => {
   it('DRAFT, PENDING_APPROVAL, and APPROVED are all still mutable', () => {
     expect(isPurchaseOrderImmutable('DRAFT')).toBe(false);
     expect(isPurchaseOrderImmutable('PENDING_APPROVAL')).toBe(false);

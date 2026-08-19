@@ -8,7 +8,7 @@ import { products } from './products';
 import { idColumn, timestamps } from './columns';
 
 /**
- * Spec 05 §5.3.3 (plan.md Phase 5, 008-13): "only measured events, no invented weights in MVP."
+ * the design: "only measured events, no invented weights in MVP."
  * One row per real, already-happened fact about a supplier's performance — a delivery arriving
  * late, a receipt short of what was ordered, an invoice's price variance, a damaged/wrong-item
  * receipt line. Every component metric (fill rate, on-time rate, price variance, invoice accuracy,
@@ -16,13 +16,13 @@ import { idColumn, timestamps } from './columns';
  * recomputed ad hoc from purchase_orders/goods_receipts/invoice_matches directly by a consumer.
  *
  * `expectedValue`/`actualValue`/`variance` are all nullable — an event type that has no natural
- * numeric comparison (plan.md's own literal schema still names these three generically across all
+ * numeric comparison (the plan's own literal schema still names these three generically across all
  * event types) leaves them `null` rather than fabricating a 0 (I7). `purchaseOrderId`/
  * `goodsReceiptId`/`documentId`/`productId` are provenance columns, all nullable since not every
  * event type has all four (a PRICE_VARIANCE event has a documentId but not necessarily a
  * goodsReceiptId; a DELIVERY_LATE event has a goodsReceiptId but no documentId) — each drillable to
- * whichever source rows actually produced it, matching spec 05 §5.3.3's "drillable to source
- * documents" requirement for the scorecard (008-15) this table ultimately feeds.
+ * whichever source rows actually produced it, matching the design's "drillable to source
+ * documents" requirement for the scorecard this table ultimately feeds.
  *
  * Deliberately no `pgEnum` for `eventType` — a plain `text` column with an app-layer union as the
  * source of truth, matching `discrepancyCode`'s/`invoiceMatches.status`'s own established
@@ -56,7 +56,7 @@ export const supplierPerformanceEvents = pgTable('supplier_performance_events', 
 });
 
 /**
- * Matches plan.md's own literal list exactly. `QUALITY_REJECT` (confirmed with the user, 008-13):
+ * Matches the plan's own literal list exactly. `QUALITY_REJECT` (confirmed with the user, earlier work):
  * a DAMAGED/WRONG_ITEM discrepancy-coded receipt line has no distinct "how much of this was
  * rejected vs. accepted" figure in this codebase yet — the line's own `receivedQuantityBaseUnits`
  * is used as the rejected amount (the honest reading of the only number that actually exists),
@@ -72,11 +72,11 @@ export const supplierPerformanceEventTypeEnum = [
   'INVOICE_CLEAN',
   'INVOICE_ERROR',
   /**
-   * 008-14 (spec 05 §5.3.4): a real, threshold-crossing price change detected between two
+   * a real, threshold-crossing price change detected between two
    * consecutive `supplier_prices` rows for the same supplier product — `expectedValue`/
    * `actualValue` are the old/new unit price, `variance` is the real `annualized_impact` dollar
    * figure (`Δunit_price × trailing_12mo_quantity`), `'unknown'`-mapped to `null` when no trailing
-   * receiving history exists yet (I7). Distinct from `PRICE_VARIANCE` (008-13): that event compares
+   * receiving history exists yet (I7). Distinct from `PRICE_VARIANCE`: that event compares
    * an invoiced price against the PO's agreed price on ONE invoice; this one compares two
    * consecutive real prices over time, regardless of whether a PO was ever involved.
    */

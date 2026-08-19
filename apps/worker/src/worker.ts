@@ -34,7 +34,7 @@ export const buildExtractionWorker = (config: {
 };
 
 /**
- * 009-01 — the second real `Worker` in this process, consuming the daily fact-aggregation
+ * the second real `Worker` in this process, consuming the daily fact-aggregation
  * schedule (`packages/queue`'s `upsertJobScheduler`-based repeatable job, one per store). A
  * separate `Worker` instance (its own connection, its own concurrency) rather than a second
  * handler on the extraction worker — the two job types have unrelated failure modes and load
@@ -49,7 +49,7 @@ export const buildFactAggregationWorker = (config: { redisUrl: string; databaseU
 };
 
 /**
- * 009-18 — the third real `Worker` in this process, consuming the one-shot embedding job enqueued
+ * the third real `Worker` in this process, consuming the one-shot embedding job enqueued
  * when a document reaches `APPROVED` (see `embedding-queue.ts`). Its own connection/concurrency,
  * matching the same "split by resource profile" reasoning as the fact-aggregation worker — an
  * external, rate-limited Gemini API call has a different failure/backoff profile than either

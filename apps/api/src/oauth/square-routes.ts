@@ -49,7 +49,7 @@ const decodeState = (raw: string): { nonce: string; storeId: string } | null => 
 };
 
 /**
- * 006-03: Square OAuth connect flow, plain Fastify routes — same reasoning as
+ * Square OAuth connect flow, plain Fastify routes — same reasoning as
  * `registerGoogleOAuthRoutes` (a browser-redirect flow has no tRPC representation). Structurally
  * different from Google's login flow, though: Google authenticates a person logging IN (anonymous
  * -> session); Square Connect links a store's POS account to an ALREADY-authenticated owner/manager
@@ -151,7 +151,7 @@ export const registerSquareOAuthRoutes = (app: FastifyInstance): void => {
         locations = await fetchSquareLocations(config, tokenResponse.accessToken);
       } catch {
         // A connection with a working token but a failed location fetch is still a real, useful
-        // connection — externalLocationId just stays null until a later sync populates it (006-04),
+        // connection — externalLocationId just stays null until a later sync populates it,
         // rather than discarding a token exchange that genuinely succeeded.
         locations = [];
       }

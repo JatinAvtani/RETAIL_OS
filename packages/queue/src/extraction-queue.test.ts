@@ -6,7 +6,7 @@ import { enqueueExtractionJob, type ExtractionJobData } from './extraction-queue
 const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://localhost:6379';
 
 /**
- * 007-05: proves the real BullMQ mechanics against real Redis (docker-compose.yml) — a mock queue
+ * proves the real BullMQ mechanics against real Redis (docker-compose.yml) — a mock queue
  * would only prove this project's own code calls `.add()`/constructs a `Worker` correctly, not that
  * a job genuinely round-trips through Redis and gets picked up. Each test uses its OWN queue name
  * (not the real `document-extraction` name `createExtractionQueue` hardcodes) — found the hard way

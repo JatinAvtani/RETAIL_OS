@@ -2,7 +2,7 @@ import type { Redis } from 'ioredis';
 import type { MetricResult } from './types.js';
 
 /**
- * Metric result caching (spec 12 §12.6, `009-12`). Spec's own design assumes fact tables (009-01,
+ * Metric result caching. Spec's own design assumes fact tables (earlier work,
  * not built) and a real outbox relay (no such process exists anywhere in this codebase — see
  * `packages/db/src/schema/outbox-events.ts`'s own doc comment) driving event-based invalidation
  * (`cost.updated` → drop margin keys). Confirmed with the user: build TTL-only caching now, defer

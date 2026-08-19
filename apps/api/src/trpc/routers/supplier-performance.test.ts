@@ -33,7 +33,7 @@ import type { Permission } from '@retailos/authz';
 import { buildServer } from '../../server';
 import type { FastifyInstance } from 'fastify';
 
-describe('supplierPerformance — components/events (008-13)', () => {
+describe('supplierPerformance — components/events', () => {
   let app: FastifyInstance;
   const { db } = createDb(process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/retailos');
   const redis = createRedisClient(process.env.REDIS_URL ?? 'redis://localhost:6379');
@@ -105,7 +105,7 @@ describe('supplierPerformance — components/events (008-13)', () => {
   /**
    * Drives a real PO -> SENT -> a real SHORT receipt (8 of 10 ordered) -> a real INVOICE billed at
    * a genuine price variance, matched via `documents.approve`'s own real path (`InvoiceMatchRepository
-   * .runMatch`) — the same real emission points 008-13 wired into `confirmReceipt`/`runMatch`, so
+   *.runMatch`) — the same real emission points earlier work wired into `confirmReceipt`/`runMatch`, so
    * this fixture proves the whole chain end to end over real HTTP, not a directly-inserted event row.
    */
   const setUpSupplierWithRealPerformanceHistory = async () => {
@@ -254,7 +254,7 @@ describe('supplierPerformance — components/events (008-13)', () => {
     expect(trendResponse.statusCode).toBe(404);
   });
 
-  describe('trend (008-15)', () => {
+  describe('trend', () => {
     it('a real improving on-time rate between two real windows is flagged "up", with the real previous/current values', async () => {
       const organizationId = generateId();
       createdOrgIds.push(organizationId);

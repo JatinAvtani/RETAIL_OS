@@ -11,7 +11,7 @@ export interface ExtractionJobData {
 }
 
 /**
- * 007-05: one job per document needing extraction. `attempts`/`backoff` retry a transient Gemini
+ * one job per document needing extraction. `attempts`/`backoff` retry a transient Gemini
  * failure (rate limit, timeout, a 5xx) a few times before giving up — a job that keeps failing
  * after real retries is a genuine "extraction failed" outcome the document should reflect, not
  * something to retry forever. `removeOnComplete`/`removeOnFail` keep Redis from accumulating job

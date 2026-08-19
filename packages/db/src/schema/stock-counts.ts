@@ -14,14 +14,14 @@ export const stockCountStatusEnum = pgEnum('stock_count_status', [
 ]);
 
 /**
- * 005-11 (spec 05 §5.1.4): a stocktake session, `DRAFT → IN_PROGRESS → SUBMITTED → APPROVED |
- * REJECTED` (plan.md's exact state machine). `scope` records what plan.md calls "full | by
+ * a stocktake session, `DRAFT → IN_PROGRESS → SUBMITTED → APPROVED |
+ * REJECTED`. `scope` records what the plan calls "full | by
  * category | by storage location" — free text rather than a structured filter, since this
  * schema's job is recording the count session, not building the query that generated its scope.
  *
  * `t0At` is set exactly once, on the `DRAFT → IN_PROGRESS` transition — this is the moment every
  * line's `theoreticalQuantityT0` (see `stock-count-lines.ts`) is frozen. This is THE reason the
- * whole feature exists: spec 05 §5.1.4's own words, "sales continue during a count... comparing a
+ * whole feature exists: the design's own words, "sales continue during a count... comparing a
  * count taken at 9am against a theoretical balance read at 11am produces phantom variance." Any
  * stock movement occurring after `t0At` is real, correct activity, deliberately excluded from
  * variance rather than treated as shrinkage.
@@ -60,12 +60,12 @@ export const stockCounts = pgTable('stock_counts', {
  * counted yet — I7: "not yet counted" must never read as "counted as zero").
  *
  * `varianceQuantity`/`varianceValue` are NOT generated columns — computed once, explicitly, at
- * submission time (`counted − theoretical_t0`, valued at `t0UnitCost`, spec 05 §5.1.4's exact
+ * submission time (`counted − theoretical_t0`, valued at `t0UnitCost`, the design's exact
  * formula) and stored, so a line's recorded variance reflects the values that were actually true
  * at submission, not a live recomputation against costs that may have since changed.
  *
- * `reasonCode` is free text here (unlike `stock_movements`' fixed waste-reason enum, 005-10) —
- * spec 05 §5.1.4 only says "large variances require a reason code," never naming a fixed
+ * `reasonCode` is free text here (unlike `stock_movements`' fixed waste-reason enum, earlier work) —
+ * the design only says "large variances require a reason code," never naming a fixed
  * vocabulary the way it does for waste, so this deliberately isn't constrained to an enum.
  */
 export const stockCountLines = pgTable('stock_count_lines', {

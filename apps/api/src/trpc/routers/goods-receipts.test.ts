@@ -28,7 +28,7 @@ import type { Permission } from '@retailos/authz';
 import { buildServer } from '../../server';
 import type { FastifyInstance } from 'fastify';
 
-describe('goodsReceipts — confirmReceipt/get (008-07)', () => {
+describe('goodsReceipts — confirmReceipt/get', () => {
   let app: FastifyInstance;
   const { db } = createDb(process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/retailos');
   const redis = createRedisClient(process.env.REDIS_URL ?? 'redis://localhost:6379');
@@ -45,7 +45,7 @@ describe('goodsReceipts — confirmReceipt/get (008-07)', () => {
     for (const orgId of createdOrgIds) {
       await db.delete(outboxEvents).where(eq(outboxEvents.organizationId, orgId));
       await db.delete(auditLogs).where(eq(auditLogs.organizationId, orgId));
-      // 008-13: supplier_performance_events references goods_receipts (and purchase_orders/documents
+      // supplier_performance_events references goods_receipts (and purchase_orders/documents
       // in other test files) — must be deleted before those parent tables, the same recurring
       // FK-teardown-order class every new table with provenance FKs to already-existing tables hits.
       await db.delete(supplierPerformanceEvents).where(eq(supplierPerformanceEvents.organizationId, orgId));
@@ -98,7 +98,7 @@ describe('goodsReceipts — confirmReceipt/get (008-07)', () => {
     return token;
   };
 
-  /** 008-09: a real store/supplier/product with NO purchase order at all — the walk-in-receipt fixture. */
+  /** earlier work: a real store/supplier/product with NO purchase order at all — the walk-in-receipt fixture. */
   const setUpStoreSupplierProduct = async () => {
     const organizationId = generateId();
     createdOrgIds.push(organizationId);
@@ -256,7 +256,7 @@ describe('goodsReceipts — confirmReceipt/get (008-07)', () => {
     expect(response.statusCode).toBe(404);
   });
 
-  describe('receipt without a PO — walk-in/emergency purchases (008-09)', () => {
+  describe('receipt without a PO — walk-in/emergency purchases', () => {
     it('confirmReceipt with no purchaseOrderId succeeds over real HTTP, using an explicit productId/unitCost per line', async () => {
       const { storeId, supplierId, productId, variantId, token } = await setUpStoreSupplierProduct();
 
@@ -307,10 +307,10 @@ describe('goodsReceipts — confirmReceipt/get (008-07)', () => {
 });
 
 /**
- * 008-08 ("photos for damage claims"): real Postgres + real Redis + real MinIO + real HTTP — proves
+ * earlier work ("photos for damage claims"): real Postgres + real Redis + real MinIO + real HTTP — proves
  * the two-step presigned-upload flow end to end, matching `products.test.ts`'s own precedent exactly.
  */
-describe('goodsReceipts — requestPhotoUpload/confirmPhotoUpload (008-08)', () => {
+describe('goodsReceipts — requestPhotoUpload/confirmPhotoUpload', () => {
   let app: FastifyInstance;
   const { db } = createDb(process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/retailos');
   const redis = createRedisClient(process.env.REDIS_URL ?? 'redis://localhost:6379');

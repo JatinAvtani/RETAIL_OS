@@ -23,8 +23,8 @@ const ADMIN_CONNECTION_STRING =
   process.env.TEST_DATABASE_URL_ADMIN ?? 'postgresql://postgres:postgres@localhost:5432/retailos';
 
 /**
- * Real-database proof that `menu_items_without_recipe` (spec 12 §H) computes correctly through
- * `executeMetric`. `recipeGroupId` has deliberately no FK (spec 07 §7.3), so "no recipe" means no
+ * Real-database proof that `menu_items_without_recipe` computes correctly through
+ * `executeMetric`. `recipeGroupId` has deliberately no FK, so "no recipe" means no
  * CURRENTLY VALID `recipes` row for that group — this test proves both a menu item with a real
  * current recipe (excluded) and one with only an EXPIRED recipe version (counted, since it has no
  * currently valid one) are handled correctly, not just the trivial "recipeGroupId is some random

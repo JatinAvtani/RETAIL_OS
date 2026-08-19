@@ -51,7 +51,7 @@ const asError = (body: TrpcSuccess | TrpcError): TrpcError['error'] => {
 const REAL_PDF_BYTES = Buffer.from('%PDF-1.4\n%%EOF');
 
 /**
- * 007-04: `confirmUpload` now calls the real Gemini vision API for classification when
+ * `confirmUpload` now calls the real Gemini vision API for classification when
  * `GEMINI_API_KEY` is set. This suite asserts a deterministic `type: 'OTHER'` outcome for a
  * trivial fake PDF with no real invoice content — a real classification call would be slow,
  * rate-limited (free tier), and could legitimately classify meaningless bytes as something other
@@ -64,7 +64,7 @@ delete process.env.GEMINI_API_KEY;
 
 /**
  * Real Postgres + real Redis + real MinIO + real HTTP: proves the two-step presigned-upload flow
- * (spec 14 §14.3/§14.7) end to end for the document pipeline — a presigned URL is issued, a real
+ * end to end for the document pipeline — a presigned URL is issued, a real
  * PUT with real PDF bytes succeeds against it, and only THEN does `confirmUpload` verify the actual
  * uploaded bytes (magic bytes, not the claimed content-type) before creating the `documents` row.
  */
@@ -88,7 +88,7 @@ describe('documents router — upload', () => {
     // repeatedly (see project memory: a describe block's own inserted rows must be deleted before
     // a shared fixture's cleanup deletes a parent row they reference).
     for (const orgId of createdOrgIds) {
-      // 007-05: every confirmUpload in this file enqueues a REAL BullMQ job (jobId === documentId)
+      // every confirmUpload in this file enqueues a REAL BullMQ job (jobId === documentId)
       // against the real extractionQueue — cleaned up here, before the row itself is deleted,
       // since the job lookup needs the documentId. Left-behind test jobs would otherwise
       // accumulate in Redis indefinitely (no worker runs during this suite to drain them).
@@ -212,7 +212,7 @@ describe('documents router — upload', () => {
     expect(row?.mimeType).toBe('application/pdf');
     expect(row?.contentHash).toBeTruthy();
 
-    // 007-05: confirmUpload enqueues a real extraction job (jobId === documentId) — checked
+    // confirmUpload enqueues a real extraction job (jobId === documentId) — checked
     // directly against the real queue, not mocked, matching this project's "no mock queue" rule
     // for BullMQ (packages/queue/extraction-queue.test.ts proves the underlying mechanics
     // separately; this proves the ROUTE actually calls enqueueExtractionJob).
@@ -317,7 +317,7 @@ describe('documents router — upload', () => {
     expect(list).toHaveLength(1);
   });
 
-  it('search filters by status via real HTTP (007-13)', async () => {
+  it('search filters by status via real HTTP', async () => {
     const { storeId, sessionCookie } = await setUpOrgWithStore();
 
     const requestResponse = await app.inject({ method: 'POST', url: '/trpc/documents.requestUpload', payload: { storeId }, cookies: { '__Host-session': sessionCookie } });
@@ -356,14 +356,14 @@ describe('documents router — upload', () => {
 });
 
 /**
- * 007-09: the review workflow's real HTTP surface — `getForReview` (everything the screen needs in
+ * the review workflow's real HTTP surface — `getForReview` (everything the screen needs in
  * one call), `approve`, `reject`. Real Postgres + real Redis + real MinIO (a presigned download url
  * genuinely needs a real object to point at). `documents:approve` is deliberately a STRICTER, SEPARATE
- * permission from `documents:read` (spec 04 §4.8: Accountant/VIEWER_FINANCE can view a document but
+ * permission from `documents:read` (the design: Accountant/VIEWER_FINANCE can view a document but
  * never approve one) — tested directly with a real VIEWER_FINANCE session, not assumed from the
  * permission model alone.
  */
-describe('documents router — review (007-09)', () => {
+describe('documents router — review', () => {
   let app: FastifyInstance;
   const { db } = createDb(process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/retailos');
   const redis = createRedisClient(process.env.REDIS_URL ?? 'redis://localhost:6379');
@@ -506,7 +506,7 @@ describe('documents router — review (007-09)', () => {
     expect(imageResponse.ok).toBe(true);
   });
 
-  it('a VIEWER_FINANCE session in the SAME org can view a document for review but cannot approve it — documents:approve is a stricter, separate permission from documents:read (spec 04 §4.8)', async () => {
+  it('a VIEWER_FINANCE session in the SAME org can view a document for review but cannot approve it — documents:approve is a stricter, separate permission from documents:read', async () => {
     const owner = await setUpOrgWithStore('OWNER');
     const documentId = await seedDocumentAwaitingReview(owner.organizationId, owner.storeId, owner.sessionCookie);
 
@@ -539,13 +539,13 @@ describe('documents router — review (007-09)', () => {
     expect(approveResponse.statusCode).toBe(403);
   });
 
-  it('approve moves a REVIEW_REQUIRED document all the way to POSTED (007-11: approve triggers posting synchronously) for a caller with documents:approve', async () => {
+  it('approve moves a REVIEW_REQUIRED document all the way to POSTED (approve triggers posting synchronously) for a caller with documents:approve', async () => {
     const { organizationId, storeId, sessionCookie } = await setUpOrgWithStore('MANAGER');
     // seedDocumentAwaitingReview's fixture has `lines: []` — no line items, so PostingService
     // trivially posts nothing per-line and moves straight to POSTED (never getting stuck at
-    // APPROVED). posting-service.test.ts and the dedicated 007-11 describe block below cover the
+    // APPROVED). posting-service.test.ts and the dedicated earlier work describe block below cover the
     // real per-line posting math; this test only proves the status transition genuinely reaches
-    // POSTED via the real HTTP endpoint, not just APPROVED as it did before 007-11 existed.
+    // POSTED via the real HTTP endpoint, not just APPROVED as it did before earlier work existed.
     const documentId = await seedDocumentAwaitingReview(organizationId, storeId, sessionCookie);
 
     const response = await app.inject({
@@ -579,7 +579,7 @@ describe('documents router — review (007-09)', () => {
     expect(body.status).toBe('REJECTED');
   });
 
-  it('a STAFF session gets 403 attempting getForReview — documents:read is not granted to Staff (spec 04 §4.8)', async () => {
+  it('a STAFF session gets 403 attempting getForReview — documents:read is not granted to Staff', async () => {
     const { sessionCookie } = await setUpOrgWithStore('STAFF');
 
     const response = await app.inject({
@@ -608,11 +608,11 @@ describe('documents router — review (007-09)', () => {
 });
 
 /**
- * 007-10: correction capture → supplier-SKU mapping table (plan.md Phase 5). Real Postgres + real
+ * correction capture → supplier-SKU mapping table. Real Postgres + real
  * Redis + real MinIO. `documents.confirmLineMapping` is the endpoint that turns an extraction
- * line's SKU into a PERMANENT `supplier_products` row — the input 007-11's posting engine needs.
+ * line's SKU into a PERMANENT `supplier_products` row — the input earlier work's posting engine needs.
  */
-describe('documents router — corrections / supplier-SKU mapping (007-10)', () => {
+describe('documents router — corrections / supplier-SKU mapping', () => {
   let app: FastifyInstance;
   const { db } = createDb(process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/retailos');
   const redis = createRedisClient(process.env.REDIS_URL ?? 'redis://localhost:6379');
@@ -638,7 +638,7 @@ describe('documents router — corrections / supplier-SKU mapping (007-10)', () 
       await db.delete(auditLogs).where(eq(auditLogs.organizationId, orgId));
       await db.delete(outboxEvents).where(eq(outboxEvents.organizationId, orgId));
       await db.delete(documents).where(eq(documents.organizationId, orgId));
-      // 007-10's own new writes: supplier_products references products (FK) and suppliers (FK) —
+      // earlier work's own new writes: supplier_products references products (FK) and suppliers (FK) —
       // must be gone before those parent rows are deleted below. Same recurring FK-teardown-order
       // class this project has hit repeatedly.
       await db.delete(supplierProducts).where(eq(supplierProducts.organizationId, orgId));
@@ -896,11 +896,11 @@ describe('documents router — corrections / supplier-SKU mapping (007-10)', () 
 });
 
 /**
- * 007-11: `documents.approve` genuinely triggers `PostingService.postDocument` end to end — this
+ * `documents.approve` genuinely triggers `PostingService.postDocument` end to end — this
  * proves the real HTTP path, not just the service class in isolation (that's
  * `posting-service.test.ts`'s own job). Real Postgres + real Redis + real MinIO.
  */
-describe('documents router — approve triggers posting (007-11)', () => {
+describe('documents router — approve triggers posting', () => {
   let app: FastifyInstance;
   const { db } = createDb(process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/retailos');
   const redis = createRedisClient(process.env.REDIS_URL ?? 'redis://localhost:6379');
@@ -929,10 +929,10 @@ describe('documents router — approve triggers posting (007-11)', () => {
       await db.delete(documentExtractions).where(eq(documentExtractions.organizationId, orgId));
       await db.delete(auditLogs).where(eq(auditLogs.organizationId, orgId));
       await db.delete(outboxEvents).where(eq(outboxEvents.organizationId, orgId));
-      // 008-10: `approve` now runs InvoiceMatchRepository.runMatch for INVOICE-type documents —
+      // `approve` now runs InvoiceMatchRepository.runMatch for INVOICE-type documents —
       // invoice_matches/invoice_match_lines reference documents (and, when a PO was resolved,
       // purchase_order_lines) and must be gone before the documents delete just below.
-      // 008-13: supplier_performance_events references documents too (PRICE_VARIANCE/INVOICE_*
+      // supplier_performance_events references documents too (PRICE_VARIANCE/INVOICE_*
       // events written by the same runMatch call) — must go before the documents delete as well.
       await db.delete(supplierPerformanceEvents).where(eq(supplierPerformanceEvents.organizationId, orgId));
       await db.delete(invoiceMatchLines).where(eq(invoiceMatchLines.organizationId, orgId));
@@ -1006,7 +1006,7 @@ describe('documents router — approve triggers posting (007-11)', () => {
     const productRepository = new ProductRepository(db, organizationId);
     const product = await productRepository.create({ id: generateId(), sku: `POST-E2E-${generateId()}`, name: 'Posting E2E Ingredient', baseUnitId: eachUnit!.id, type: 'INGREDIENT' });
 
-    // 007-10's own real endpoint creates the confirmed mapping — proving the two tasks compose, not just each in isolation.
+    // earlier work's own real endpoint creates the confirmed mapping — proving the two tasks compose, not just each in isolation.
     const requestResponse = await app.inject({
       method: 'POST',
       url: '/trpc/documents.requestUpload',
@@ -1080,7 +1080,7 @@ describe('documents router — approve triggers posting (007-11)', () => {
   });
 
   /**
-   * 008-10: `approve` also runs the real three-way match for an INVOICE-type document, immediately
+   * `approve` also runs the real three-way match for an INVOICE-type document, immediately
    * after posting, in the SAME request — confirmed with the user as the trigger point. Forces
    * `type: 'INVOICE'` directly via the DB (this suite deliberately unsets `GEMINI_API_KEY`, so
    * real classification never runs — see this file's own header comment) since the match-trigger
@@ -1174,7 +1174,7 @@ describe('documents router — approve triggers posting (007-11)', () => {
     expect(matchBody.lines[0]?.varianceType).toBe('UNORDERED_ITEM');
   });
 
-  it('getLinks returns the real document_links rows PostingService wrote for a posted document (007-12)', async () => {
+  it('getLinks returns the real document_links rows PostingService wrote for a posted document', async () => {
     const { organizationId, storeId, sessionCookie } = await setUpOrgWithStore();
 
     const supplierRepository = new SupplierRepository(db, organizationId);
@@ -1242,7 +1242,7 @@ describe('documents router — approve triggers posting (007-11)', () => {
     expect(links.map((l) => l.entityType).sort()).toEqual(['lot', 'stock_movement', 'supplier_price']);
   });
 
-  it('accuracyTelemetry computes a real auto-approval rate and validation issue frequency from real extractions (007-14)', async () => {
+  it('accuracyTelemetry computes a real auto-approval rate and validation issue frequency from real extractions', async () => {
     const { organizationId, storeId, sessionCookie } = await setUpOrgWithStore();
 
     const seedExtraction = async (overrides: { canAutoApprove: boolean; overallConfidence: string; fieldConfidence: number; issueCode?: string }) => {

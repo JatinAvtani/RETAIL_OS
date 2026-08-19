@@ -9,7 +9,7 @@ import { idColumn, timestamps } from './columns';
 export const stockTransferStatusEnum = pgEnum('stock_transfer_status', ['PENDING', 'IN_TRANSIT', 'RECEIVED', 'CANCELLED']);
 
 /**
- * 005-13 (spec 07 §7.4's `StockTransfer` entity, plan.md's Phase 6: "paired TRANSFER_OUT/
+ * earlier work (the design's `StockTransfer` entity, the plan's Phase 6: "paired TRANSFER_OUT/
  * TRANSFER_IN with an in-transit state; lots carry across with their original cost and expiry").
  * A `stock_movements` row is a point-in-time fact (I3 — append-only ledger), which cannot by
  * itself represent an ONGOING state like "still in transit" — this table is the thing that

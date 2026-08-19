@@ -41,7 +41,7 @@ const uniqueEmail = (label: string) =>
 
 /**
  * Real Postgres + real Redis, exercised through the genuine HTTP boundary — proves the actual
- * lockout behavior spec 14 §14.2 asks for ("rate limiting on auth endpoints: per IP, per account,
+ * lockout behavior the design asks for ("rate limiting on auth endpoints: per IP, per account,
  * with progressive delay and lockout"), not just that `RateLimiter`'s unit tests pass in isolation.
  */
 describe('rate limiting on auth endpoints', () => {

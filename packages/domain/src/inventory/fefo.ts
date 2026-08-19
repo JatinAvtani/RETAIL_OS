@@ -61,7 +61,7 @@ const sortForAllocation = (lots: readonly Lot[], policy: 'FEFO' | 'FIFO'): Lot[]
  * concern, not an allocation-order concern), are simply skipped once exhausted.
  *
  * Running out of lots before `required` is met produces a `shortfall`, never an exception —
- * negative stock is a signal (a receipt wasn't recorded), not a hard error, per plan.md.
+ * negative stock is a signal (a receipt wasn't recorded), not a hard error, per the plan.
  */
 export const allocateFefo = (
   lots: readonly Lot[],

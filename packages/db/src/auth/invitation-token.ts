@@ -3,7 +3,7 @@ import { issueVerificationToken, hashToken, type IssuedToken } from './verificat
 export type { IssuedToken };
 export { hashToken };
 
-const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days, per plan.md
+const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 /**
  * Same shape and entropy as an email-verification token (32 random bytes, SHA-256 hash-at-rest —

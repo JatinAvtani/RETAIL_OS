@@ -6,8 +6,8 @@ import { TenantScopedRepository } from '../tenant-repository';
 import { generateId } from '@retailos/domain';
 
 /**
- * 009-18 — the write side of document embeddings. `upsert` is delete-then-insert inside one
- * transaction (matching `FactTableWriter`'s established idempotent-rebuild pattern, 009-01) rather
+ * the write side of document embeddings. `upsert` is delete-then-insert inside one
+ * transaction (matching `FactTableWriter`'s established idempotent-rebuild pattern, earlier work) rather
  * than an `ON CONFLICT` upsert — the `embedding` vector column's equality/conflict semantics via
  * Drizzle's typed builder are exactly the class of pgvector operation with no clean builder
  * representation (`SearchRepository`'s own header comment explains this same limitation for reads).

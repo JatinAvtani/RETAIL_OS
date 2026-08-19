@@ -71,7 +71,7 @@ export class UserRepository {
    * the first time on an account you originally created with a password" case. Never called for an
    * unverified account: that would let anyone claiming a matching Google email silently take it
    * over before the real owner ever proved they controlled the address (the account-takeover path
-   * plan.md calls out explicitly).
+   * the plan calls out explicitly).
    */
   async linkGoogleId(userId: string, googleId: string) {
     await this.db.update(users).set({ googleId }).where(eq(users.id, userId));
@@ -117,7 +117,7 @@ export class UserRepository {
   /**
    * Consumes a raw verification token: looks it up by hash, rejects if already used or expired,
    * marks it used and sets email_verified_at — all in one transaction, so a token can never be
-   * consumed twice even under concurrent requests (the UPDATE ... WHERE used_at IS NULL only
+   * consumed twice even under concurrent requests (the UPDATE... WHERE used_at IS NULL only
    * succeeds for the first caller).
    */
   async verifyEmail(rawToken: string): Promise<{ ok: true } | { ok: false; reason: 'invalid' | 'expired' }> {

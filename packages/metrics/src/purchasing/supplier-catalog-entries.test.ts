@@ -44,9 +44,9 @@ const ADMIN_CONNECTION_STRING =
   process.env.TEST_DATABASE_URL_ADMIN ?? 'postgresql://postgres:postgres@localhost:5432/retailos';
 
 /**
- * Real-database proof that all 7 registered supplier metrics (spec 12 §G) compute correctly
+ * Real-database proof that all 7 registered supplier metrics compute correctly
  * through `executeMetric`, reusing the same real PO -> receive -> invoice-match fixture pipeline
- * 009-08's own wiring test established, extended with a real `expectedDeliveryDate` so
+ * earlier work's own wiring test established, extended with a real `expectedDeliveryDate` so
  * `confirmReceipt`'s own real DELIVERY_ON_TIME/LATE emission fires.
  */
 describe('registered supplier metrics', () => {
@@ -318,7 +318,7 @@ describe('registered supplier metrics', () => {
     const { organizationId, storeId, supplierId } = await setUpOrg();
     const { productId, supplierProductId, unitId } = await makeProduct(organizationId, supplierId);
 
-    // The real applyTransition('SEND', ...) call always stamps sentAt as "now" — to get a real,
+    // The real applyTransition('SEND',...) call always stamps sentAt as "now" — to get a real,
     // non-trivial lead time (days, not milliseconds) while keeping receivedAt inside this test's
     // own [from, to()) window, sentAt is backdated by a direct admin-connection UPDATE after the
     // real state-machine transition completes, then received at a real later-but-still-past instant.

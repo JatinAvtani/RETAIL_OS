@@ -32,7 +32,7 @@ import type { Permission } from '@retailos/authz';
 import { buildServer } from '../../server';
 import type { FastifyInstance } from 'fastify';
 
-describe('invoiceMatches — get/getByDocument/pending/resolve (008-10, 008-12)', () => {
+describe('invoiceMatches — get/getByDocument/pending/resolve', () => {
   let app: FastifyInstance;
   const { db } = createDb(process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/retailos');
   const redis = createRedisClient(process.env.REDIS_URL ?? 'redis://localhost:6379');
@@ -49,7 +49,7 @@ describe('invoiceMatches — get/getByDocument/pending/resolve (008-10, 008-12)'
     for (const orgId of createdOrgIds) {
       await db.delete(auditLogs).where(eq(auditLogs.organizationId, orgId));
       await db.delete(outboxEvents).where(eq(outboxEvents.organizationId, orgId));
-      // 008-13: supplier_performance_events references documents/goods_receipts/purchase_orders —
+      // supplier_performance_events references documents/goods_receipts/purchase_orders —
       // must be gone before those parent tables are deleted below.
       await db.delete(supplierPerformanceEvents).where(eq(supplierPerformanceEvents.organizationId, orgId));
       await db.delete(invoiceMatchLines).where(eq(invoiceMatchLines.organizationId, orgId));
@@ -271,7 +271,7 @@ describe('invoiceMatches — get/getByDocument/pending/resolve (008-10, 008-12)'
     expect(body.some((m) => m.id === invoiceMatchId)).toBe(true);
   });
 
-  it('pending never returns a CLEAN match — 008-12, a queue full of clean invoices defeats the point', async () => {
+  it('pending never returns a CLEAN match — a queue full of clean invoices defeats the point', async () => {
     const { storeId, invoiceMatchId, token } = await setUpCleanMatch();
 
     const response = await query('invoiceMatches.pending', token, { storeId });

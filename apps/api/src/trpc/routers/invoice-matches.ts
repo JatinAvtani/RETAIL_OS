@@ -19,7 +19,7 @@ const requirePermission = (permissions: string[], permission: string) => {
 };
 
 /**
- * 008-10 (plan.md Phase 4, spec 05 §5.2.4): the real read surface for `InvoiceMatchRepository`.
+ * the real read surface for `InvoiceMatchRepository`.
  * `runMatch` itself has no endpoint here — it runs automatically inside `documents.approve`
  * (confirmed with the user), not as a manually-triggered mutation, so this router is
  * read-only, matching `documents.ts`'s own `accuracyTelemetry`-style reporting endpoints.
@@ -83,7 +83,7 @@ export const invoiceMatchesRouter = router({
   }),
 
   /**
-   * 008-12: the one real resolution action, confirmed with the user — one mutation, a REQUIRED
+   * the one real resolution action, confirmed with the user — one mutation, a REQUIRED
    * note, `PENDING` straight to `RESOLVED`. Gated on `purchasing:approve` (not the broader
    * `purchasing:write`) since resolving a flagged variance is a real financial-control decision —
    * matching this project's existing pattern of reserving `purchasing:approve` for PO approval,

@@ -3,12 +3,12 @@ import Decimal from 'decimal.js';
 import type { UnknownOr } from '../margin/margin.js';
 
 /**
- * Purchasing metrics — spec 12 §F, all 8. Every function here is pure: given already-fetched rows,
+ * Purchasing metrics — the design, all 8. Every function here is pure: given already-fetched rows,
  * it computes one number. No database access, matching every other file in this package.
  *
  * `total_spend`/`spend_by_category` are scoped to purchase order lines whose parent PO's status is
  * `APPROVED` or later (`APPROVED`, `SENT`, `PARTIALLY_RECEIVED`, `RECEIVED`, `CLOSED`) — confirmed
- * with the user, since this codebase has no invoice-level "approved" concept at all (spec 12 §F's
+ * with the user, since this codebase has no invoice-level "approved" concept at all (the design's
  * literal "approved invoice totals" wording has no real schema referent — `invoice_matches.status`
  * is a review-workflow state, PENDING/REVIEWED/RESOLVED, not an approval/payment gate). PO-level
  * approval is the real, existing "someone signed off on this spend" fact in the schema.
@@ -63,7 +63,7 @@ export type PriceVarianceLine = {
 };
 
 /**
- * `price_variance_total` = `Σ(invoice_price − po_price) × qty` (spec 12 §F's literal formula) —
+ * `price_variance_total` = `Σ(invoice_price − po_price) × qty` —
  * `priceVariance` is already the per-unit `(invoice_price − po_price)` difference, so this function
  * multiplies each line by its invoice quantity and sums. Only lines where BOTH `priceVariance` and
  * `invoiceQuantity` are present are included — `classifyLineMatch` populates these independently
@@ -82,8 +82,8 @@ export const computePriceVarianceTotal = (
 /* ------------------------------------------------------------------ price_change_impact */
 
 /**
- * `price_change_impact` = `Δunit_price × trailing_12mo_qty` (spec 12 §F). This is NOT recomputed
- * here — `packages/domain`'s `detectPriceChange` (008-14) already implements this exact formula
+ * `price_change_impact` = `Δunit_price × trailing_12mo_qty`. This is NOT recomputed
+ * here — `packages/domain`'s `detectPriceChange` already implements this exact formula
  * and `PostingService` already persists its result as a `supplier_performance_events` row's
  * `variance` field on every real, threshold-crossing `PRICE_CHANGE` event (see that schema file's
  * own doc comment). This function's only job is picking the most recent such event and reading its
@@ -116,7 +116,7 @@ export type PoCycleTimeLine = {
 };
 
 /**
- * `po_cycle_time` — spec 12 §F's literal wording is "avg hours: created → sent," but the metric
+ * `po_cycle_time` — the design's literal wording is "avg hours: created → sent," but the metric
  * catalog's `MetricUnit` type has no `HOURS` option (only `CURRENCY | PERCENTAGE | COUNT | RATIO |
  * DAYS`) — confirmed with the user: compute in DAYS instead (dividing by 24), registered as
  * `unit: 'DAYS'`, rather than mislabeling an hours-value as days or widening a shared catalog type
@@ -157,7 +157,7 @@ export const computeAverageOrderValue = (
 /**
  * `emergency_purchase_rate` = receipts with no linked PO ÷ all receipts (`goods_receipts.
  * purchaseOrderId IS NULL` is the real, schema-native signal for a walk-in/emergency purchase —
- * 008-09's own scope). `'unknown'` with zero receipts in the period (I7 — never a fabricated 0%,
+ * earlier work's own scope). `'unknown'` with zero receipts in the period (I7 — never a fabricated 0%,
  * since "no receipts at all" says nothing about planning quality, the thing this rate measures).
  */
 export const computeEmergencyPurchaseRate = (

@@ -1,4 +1,4 @@
--- 008-07: spec 05 SS5.2.3 / 07 SS7.5's GoodsReceipt/GoodsReceiptLine — "what physically arrived."
+-- the design's GoodsReceipt/GoodsReceiptLine — "what physically arrived."
 CREATE TABLE IF NOT EXISTS "goods_receipts" (
 	"id" uuid PRIMARY KEY NOT NULL,
 	"organization_id" uuid NOT NULL,
@@ -107,7 +107,7 @@ EXCEPTION
 END $$;
 --> statement-breakpoint
 
--- 008-01's own deferred column (added back in 005-02, when the goods_receipt_lines table this FK
+-- earlier work's own deferred column (added back in earlier work, when the goods_receipt_lines table this FK
 -- references didn't exist yet) — closed now, matching the same "add the column now, wire the real
 -- FK once its target epic ships" precedent already used for unit_conversions.product_id.
 DO $$ BEGIN

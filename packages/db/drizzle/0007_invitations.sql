@@ -67,7 +67,7 @@ $$;
 -- Accepting an invitation needs to do TWO things atomically: mark the invitation accepted, and
 -- create the real membership row — and creating that row hits the exact same chicken-and-egg
 -- problem as the read above (INSERT is gated by the same USING policy as SELECT/UPDATE/DELETE
--- under FORCE ROW LEVEL SECURITY, confirmed directly: `INSERT INTO memberships ...` as
+-- under FORCE ROW LEVEL SECURITY, confirmed directly: `INSERT INTO memberships...` as
 -- retailos_app with no SET LOCAL throws the identical "unrecognized configuration parameter"
 -- error a raw SELECT would). One SECURITY DEFINER function doing both in a single statement (a
 -- CTE chains the UPDATE and INSERT so they succeed or fail together — this is not two separate
@@ -76,7 +76,7 @@ $$;
 --
 -- p_user_id is the ALREADY-AUTHENTICATED caller accepting the invite — this function does not
 -- resolve or trust an email from the token; the caller's own session determines whose membership
--- gets created, closing the "accepting while logged in as someone else" bug class plan.md calls
+-- gets created, closing the "accepting while logged in as someone else" bug class the plan calls
 -- out explicitly. The invitee-email match against the invitation is enforced at the application
 -- layer (InvitationRepository/the tRPC procedure), before this function is ever called, using the
 -- read function above.

@@ -1,15 +1,15 @@
 import { Decimal } from 'decimal.js';
 
 /**
- * 008-10 (plan.md Phase 4, spec 05 §5.2.4): "the financial control that catches real money."
+ * "the financial control that catches real money."
  * A pure function (I1 — no I/O, no business number computed anywhere but here) classifying ONE
  * invoice line's variance against what was ordered (PO) and what arrived (receipt). The caller
- * (008-10's repository) is responsible for finding the candidate PO/receipt line — this function
+ * is responsible for finding the candidate PO/receipt line — this function
  * only classifies, given already-resolved inputs, matching `validateExtraction`'s own separation
  * of "find the comparison data" (repository) from "decide what it means" (domain).
  *
- * Tolerances default to plan.md's own literal example ("e.g. ≤2% or ≤$5 auto-accept") — a real,
- * cited default, not an arbitrary number invented for this task. 008-11 (configurable match
+ * Tolerances default to the plan's own literal example ("e.g. ≤2% or ≤$5 auto-accept") — a real,
+ * cited default, not an arbitrary number invented for this task. earlier work (configurable match
  * tolerances) is the real place a per-org override gets built; this function already accepts a
  * `tolerances` parameter so that task only needs to plumb a config value through, not touch this
  * classification logic.
@@ -55,9 +55,9 @@ export interface LineMatchResult {
 }
 
 /**
- * Classifies one invoice line per plan.md's variance table. Order of checks matters: an unordered
+ * Classifies one invoice line per the plan's variance table. Order of checks matters: an unordered
  * item (no PO/receipt match resolved at all) is checked before price/quantity comparisons, since
- * there is nothing to compare against. `INVOICED_NOT_RECEIVED` — plan.md's own "possible
+ * there is nothing to compare against. `INVOICED_NOT_RECEIVED` — the plan's own "possible
  * fraud/error" framing — fires when a PO line was matched (so the item genuinely was ordered) but
  * no receipt exists for it; `UNORDERED_ITEM` is the case with no PO match either.
  *

@@ -8,7 +8,7 @@ import { idColumn, timestamps } from './columns';
  * A separate table from `memberships`, not a pending (accepted_at IS NULL) membership row —
  * `memberships.user_id` is NOT NULL, and an invitation must be sendable to an email address that
  * has no RetailOS account yet. Role and store scoping are captured here, at issue time, per
- * plan.md ("scoped to the exact org+role at issue time, so changing the invite later doesn't
+ * the plan ("scoped to the exact org+role at issue time, so changing the invite later doesn't
  * grant more") — a real `memberships` row is only created once the invite is accepted, using
  * exactly this snapshot, not whatever the inviter's intent might be by then.
  *

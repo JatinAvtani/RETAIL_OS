@@ -64,7 +64,7 @@ export class RecipeVersionNotFoundError extends Error {
 }
 
 /**
- * Recursive, depth-limited recipe explosion (plan.md's Phase 4 core algorithm). Scales every
+ * Recursive, depth-limited recipe explosion. Scales every
  * component by `requestedQty / recipe.yieldQuantity`, applies `wasteFactor` as a multiplier
  * (>= 1, enforced at the database layer too — see recipe_components' CHECK constraint), recurses
  * into sub-recipe components using the version of that sub-recipe valid `asOf` (so historical
@@ -120,7 +120,7 @@ export const explodeRecipe = (
 };
 
 /**
- * "Flour appearing in both a sauce sub-recipe and directly must sum, not appear twice" (plan.md).
+ * "Flour appearing in both a sauce sub-recipe and directly must sum, not appear twice".
  * Merging is scoped to (productId, unit) pairs deliberately, not productId alone — two exploded
  * lines for the same product in DIFFERENT units are a real signal that a unit-conversion boundary
  * was crossed somewhere upstream inconsistently, and silently summing across units here would be

@@ -5,12 +5,12 @@ import { lots } from '../schema/index';
 import { TenantScopedRepository } from '../tenant-repository';
 
 /**
- * The 005-02 scope: schema + a minimal repository proving the FEFO ordering and the
+ * The earlier work scope: schema + a minimal repository proving the FEFO ordering and the
  * remaining-quantity guard are real. The FEFO allocation ALGORITHM (choosing how much to draw
  * from which lot for a given required quantity) is pure domain logic in `packages/domain`
- * (005-05) — this class only surfaces lots in the correct order and lets a caller record what was
+ * — this class only surfaces lots in the correct order and lets a caller record what was
  * drawn. The movement-service integration (posting a SALE_CONSUMPTION/WASTE movement and updating
- * `remaining_quantity` in the same transaction as the ledger insert) is 005-06's job.
+ * `remaining_quantity` in the same transaction as the ledger insert) is earlier work's job.
  */
 export class LotRepository extends TenantScopedRepository<typeof lots> {
   constructor(db: ReturnType<typeof drizzle<typeof schema>>, organizationId: string) {
@@ -73,9 +73,9 @@ export class LotRepository extends TenantScopedRepository<typeof lots> {
    * FEFO candidates for one store/product: ACTIVE lots with stock remaining, earliest expiry
    * first — nulls (no expiry date) last, since an item with no tracked expiry should be drawn
    * from only after every dated lot is exhausted. Ties broken by `receivedAt` (earliest first),
-   * matching plan.md's "sort by expiry (nulls last) then received_at". This method only orders
+   * matching the plan's "sort by expiry (nulls last) then received_at". This method only orders
    * candidates; it does not decide how much to take from each — that's `allocateFefo`
-   * (`packages/domain`, 005-05).
+   * (`packages/domain`, earlier work).
    */
   async findFefoCandidates(storeId: string, productId: string) {
     return this.runScoped((db, scopedWhere) =>
@@ -110,7 +110,7 @@ export class LotRepository extends TenantScopedRepository<typeof lots> {
   }
 
   /**
-   * Draws `quantity` from one lot — the primitive the movement service (005-06) calls once per
+   * Draws `quantity` from one lot — the primitive the movement service calls once per
    * lot per allocation. Never allows `remainingQuantity` to go negative or below 0 at the
    * application layer either, even though the CHECK constraint (`lots_remaining_within_initial`)
    * is the real backstop — this defense-in-depth mirrors every other tenant-scoped repository's

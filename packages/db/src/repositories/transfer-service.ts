@@ -16,14 +16,14 @@ export class InvalidTransferTransitionError extends Error {
 }
 
 /**
- * 005-13 (spec 07 §7.4's `StockTransfer` entity, plan.md's Phase 6): inter-store transfers with a
+ * inter-store transfers with a
  * real in-transit window, confirmed with the user as a two-step lifecycle
  * (`PENDING → IN_TRANSIT → RECEIVED`, or `CANCELLED`) rather than a single atomic OUT+IN pair — a
  * `stock_movements` row is a point-in-time fact and cannot by itself represent an ONGOING state.
  *
  * `initiateTransfer` immediately posts `TRANSFER_OUT` at the source store (physically, the stock
  * is gone from there right away) and creates a NEW lot at the destination store in `IN_TRANSIT`
- * status, carrying the original lot's cost/expiry UNCHANGED (plan.md's exact words: "lots carry
+ * status, carrying the original lot's cost/expiry UNCHANGED (the plan's exact words: "lots carry
  * across with their original cost and expiry"). That destination lot is invisible to FEFO
  * (`consumeFefo`/`findFefoCandidates` only ever query `status = 'ACTIVE'`) until `receiveTransfer`
  * posts `TRANSFER_IN` and flips it `ACTIVE` — mirroring the real physical process: stock in transit
@@ -95,7 +95,7 @@ export class TransferService {
           throw new InsufficientStockError(result.shortfall.amount.toString(), result.shortfall.unit);
         }
 
-        // A transfer moves ONE lot's worth of stock at a time (spec/plan.md name no
+        // A transfer moves ONE lot's worth of stock at a time (spec/the plan name no
         // multi-lot-split behavior for transfers, unlike consumeFefo/logWaste which explicitly
         // span multiple lots) — confirmed reasonable since a real transfer is normally a single
         // pallet/batch move, not a synthetic blend of several source lots. If FEFO selects more

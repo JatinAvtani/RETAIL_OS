@@ -1,10 +1,10 @@
 -- Hand-written, not `drizzle-kit generate` output — same reason as every prior partitioned-table
 -- migration (0014_stock_movements.sql): the snapshot chain has been stale since migration 0005.
 --
--- Fact tables (009-01, spec 12 §12.6, spec 08 §8.8's explicit "Fact tables: Monthly range,
--- rebuild/backfill per partition" guidance). Five tables, matching plan.md Phase 1's list minus
+-- Fact tables (earlier work, the design, the design's explicit "Fact tables: Monthly range,
+-- rebuild/backfill per partition" guidance). Five tables, matching the plan Phase 1's list minus
 -- `fact_supplier_events` (confirmed with the user as redundant with the already-existing
--- `supplier_performance_events`, 008-13 — see `packages/db/src/schema/fact-tables.ts`'s own header
+-- `supplier_performance_events`, earlier work — see `packages/db/src/schema/fact-tables.ts`'s own header
 -- for the full reasoning). Every table follows `stock_movements`' exact partitioning template:
 -- `PARTITION BY RANGE (date)`, `PRIMARY KEY (id, date)` (the partition key must be in the PK),
 -- one pre-created current-month partition + a DEFAULT catch-all, a BRIN index on `date`, plain
@@ -62,7 +62,7 @@ END $$;
 --> statement-breakpoint
 
 -- Idempotent-rebuild key: re-running the same tenant/store/day/grain must overwrite, never
--- duplicate — "fully rebuildable from source" (plan.md) is only true if this holds. NULLS are
+-- duplicate — "fully rebuildable from source" is only true if this holds. NULLS are
 -- allowed to repeat in a unique index only when Postgres treats NULL as distinct-from-NULL (the
 -- default), which is exactly wrong here — a day with 3 unmapped-menu-item rows would violate
 -- nothing and silently accumulate duplicates on every rebuild. COALESCE against a real sentinel

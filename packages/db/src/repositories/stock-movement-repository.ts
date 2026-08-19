@@ -7,9 +7,9 @@ import { TenantScopedRepository } from '../tenant-repository';
 export type MovementType = (typeof movementTypeEnum.enumValues)[number];
 
 /**
- * The ledger's write/read surface for 005-01 (schema task). Deliberately narrow: `record` inserts
+ * The ledger's write/read surface for earlier work (schema task). Deliberately narrow: `record` inserts
  * one movement and nothing else — no stock_levels projection maintenance, no outbox emission, no
- * idempotency-conflict handling. That's 005-03/005-04/005-06's job (the movement SERVICE), which
+ * idempotency-conflict handling. That's related work's job (the movement SERVICE), which
  * wraps a call to this repository inside a larger transaction alongside those other writes. This
  * class only proves the ledger itself is real, insert-only, and tenant-isolated.
  *

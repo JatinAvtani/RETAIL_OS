@@ -5,12 +5,12 @@ import { idColumn, softDelete, timestamps, optimisticVersion } from './columns';
 export const supplierStatusEnum = pgEnum('supplier_status', ['active', 'inactive']);
 
 /**
- * Spec 07 §7.5 / 05 §5.3.1: contacts, terms, lead times (contracted AND measured), delivery
+ * the design / 05 : contacts, terms, lead times (contracted AND measured), delivery
  * schedule, cut-off times, MOQ, payment terms, status.
  *
  * `leadTimeDaysContracted` (the promise) vs `leadTimeDaysMeasured` (reality) are deliberately two
  * separate columns, not one field a receiving event overwrites — reorder logic uses the measured
- * value once enough receipts exist, per plan.md, and overwriting the contracted figure would lose
+ * value once enough receipts exist, per the plan, and overwriting the contracted figure would lose
  * the original agreement to compare against.
  *
  * `minOrderValue` is NUMERIC(19,4) like every other money column in this project (I5) —

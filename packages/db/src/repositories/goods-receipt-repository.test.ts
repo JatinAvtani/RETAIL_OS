@@ -285,7 +285,7 @@ describe('GoodsReceiptRepository', () => {
     expect(receiptLine!.discrepancyNotes).toBe('2kg missing from the delivery');
   });
 
-  it('appendPhotoKey adds a photo key to a real line, never overwriting a prior one (008-08)', async () => {
+  it('appendPhotoKey adds a photo key to a real line, never overwriting a prior one', async () => {
     const { purchaseOrderId, purchaseOrderLineId } = await createSentPurchaseOrder('10', '5.00');
     const repo = new GoodsReceiptRepository(createScopedDb(client), organizationId);
 
@@ -330,7 +330,7 @@ describe('GoodsReceiptRepository', () => {
     ).rejects.toThrow(UnknownReceiptCostError);
   });
 
-  describe('receipt without a PO — walk-in/emergency purchases (008-09)', () => {
+  describe('receipt without a PO — walk-in/emergency purchases', () => {
     it('confirmReceipt with no purchaseOrderId creates a real lot + RECEIPT movement using the explicit productId/variantId/unitCost, and reports no PO status change', async () => {
       const repo = new GoodsReceiptRepository(createScopedDb(client), organizationId);
 
@@ -435,7 +435,7 @@ describe('GoodsReceiptRepository', () => {
     expect(lines).toHaveLength(1);
   });
 
-  describe('supplier performance event emission (008-13)', () => {
+  describe('supplier performance event emission', () => {
     it('a receipt matching a PO fully, on time, emits DELIVERY_ON_TIME + FILL_COMPLETE', async () => {
       const expectedDeliveryDate = new Date(Date.now() + 24 * 60 * 60 * 1000); // tomorrow
       const { purchaseOrderId, purchaseOrderLineId } = await createSentPurchaseOrder('10', '5.00', expectedDeliveryDate);

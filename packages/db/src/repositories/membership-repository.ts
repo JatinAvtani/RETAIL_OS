@@ -54,7 +54,7 @@ export class MembershipRepository {
    * RLS-protected path via a real `withTenantContext`-wrapped transaction (a plain `db.select()`
    * against `memberships`, a `FORCE ROW LEVEL SECURITY` table, throws `unrecognized configuration
    * parameter "app.current_org_id"` without this — the same class of bug confirmed 3x in this
-   * codebase; see project memory `retailos-tenant-context-outside-repository`). Used by 008-05's
+   * codebase; see project memory `retailos-tenant-context-outside-repository`). Used by earlier work's
    * PO approval flow to read the CURRENT `approvalLimit` fresh at approval time, never a stale
    * value cached on the session at login — a manager's limit can change after they logged in.
    */

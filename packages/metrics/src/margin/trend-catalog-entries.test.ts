@@ -25,7 +25,7 @@ const ADMIN_CONNECTION_STRING =
   process.env.TEST_DATABASE_URL_ADMIN ?? 'postgresql://postgres:postgres@localhost:5432/retailos';
 
 /**
- * Real-database proof that `net_revenue_trend`/`food_cost_percentage_trend` (009-14's owner
+ * Real-database proof that `net_revenue_trend`/`food_cost_percentage_trend` (earlier work's owner
  * dashboard sparkline input) compute correctly through `executeMetric`, matching `margin_trend`'s
  * own established series shape.
  */

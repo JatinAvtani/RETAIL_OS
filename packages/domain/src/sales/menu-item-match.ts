@@ -1,5 +1,5 @@
 /**
- * 006-11 (plan.md Phase 6): "fuzzy-suggest a menu item by name similarity; the human confirms."
+ * "fuzzy-suggest a menu item by name similarity; the human confirms."
  * Deliberately NOT real trigram/Levenshtein similarity — matching `products.list`'s own precedent
  * of deferring real pg_trgm search until there's enough volume to need it (see that router's doc
  * comment). A confirmed mapping is permanent and human-decided either way (I9), so the suggestion
@@ -44,7 +44,7 @@ export type MenuItemMatchSuggestion = { menuItemId: string; name: string; score:
 
 /**
  * Returns every candidate with a nonzero score, sorted best-match first. Caller decides how many
- * to actually show (plan.md doesn't specify a cutoff) — this function makes no UI decision about
+ * to actually show — this function makes no UI decision about
  * "top N", it only ranks.
  */
 export const suggestMenuItemMatches = (

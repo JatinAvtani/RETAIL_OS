@@ -3,8 +3,8 @@ import { organizations } from './organizations';
 import { idColumn } from './columns';
 
 /**
- * 007-03 (plan.md Phase 1, F2): every inbound-email webhook delivery this server accepted a real,
- * authenticated request for, whether or not the sender was ultimately trusted. Spec 05 §5.6/spec 13
+ * every inbound-email webhook delivery this server accepted a real,
+ * authenticated request for, whether or not the sender was ultimately trusted. the design
  * "email ingestion (documents)": "sender allowlist per tenant with quarantine for unknown senders —
  * an open email endpoint is an attack surface and a spam vector." `status` records the outcome
  * without needing a join back to `documents` — a quarantined email never produces one at all.
@@ -48,7 +48,7 @@ export const documentEmailIntake = pgTable('document_email_intake', {
  * multi-attachment email's bytes don't bloat that table's own row, and so an accepted email's
  * attachments (which become real `documents` rows instead) never need this table at all. A
  * quarantined attachment's bytes are kept for a human reviewer to inspect and potentially release
- * from quarantine (007-03's own future extension, not built this task) — never silently discarded,
+ * from quarantine — never silently discarded,
  * since "we don't yet trust this sender" is not the same claim as "this attachment is worthless."
  */
 export const documentEmailIntakeAttachments = pgTable('document_email_intake_attachments', {

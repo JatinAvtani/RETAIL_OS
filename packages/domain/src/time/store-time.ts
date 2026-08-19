@@ -1,5 +1,5 @@
 /**
- * Store-local time resolution — spec 08 §8.2: "Store timezone is applied at query/presentation
+ * Store-local time resolution — the design: "Store timezone is applied at query/presentation
  * time... dayparts computed in UTC are simply wrong." Every business table stores TIMESTAMPTZ in
  * UTC; this module is the ONE place a UTC instant is converted to the store's own wall-clock day
  * or hour, so every consumer (a metric, a report, a daily job) resolves "today"/"this hour"
@@ -41,7 +41,7 @@ export const resolveLocalHour = (instant: Date, timezone: StoreTimezone): number
 };
 
 /**
- * The four dayparts spec 12 §A's `revenue_per_daypart` needs, with no boundary definition given in
+ * The four dayparts the design's `revenue_per_daypart` needs, with no boundary definition given in
  * the spec itself — standard restaurant-industry buckets, confirmed with the user rather than
  * invented silently. `LATE_NIGHT` wraps past midnight (21:00-05:59), which is why this is a
  * function over the local hour rather than a simple range lookup table.
@@ -92,10 +92,10 @@ const resolveUtcOffsetMinutes = (instant: Date, timezone: StoreTimezone): number
 };
 
 /**
- * The `[from, to)` UTC instant range one store-local calendar date covers — 009-01's real need:
+ * The `[from, to)` UTC instant range one store-local calendar date covers — earlier work's real need:
  * an incremental aggregation job resolves "yesterday" per store's own timezone (this project's
  * standing example: "a three-store group across two timezones has three different yesterdays,"
- * plan.md Phase 1), then must query raw transactional tables (all stored TIMESTAMPTZ/UTC) for
+ * the plan Phase 1), then must query raw transactional tables (all stored TIMESTAMPTZ/UTC) for
  * exactly the UTC window that local day spans — never the UTC calendar day, which would silently
  * include/exclude hours at either edge for any timezone not at UTC+0.
  *

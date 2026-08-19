@@ -84,7 +84,7 @@ describe('findNegativeStock', () => {
   it('reports a product/variant whose stock_levels.quantity has genuinely gone negative', async () => {
     const stockRepo = new StockLevelRepository(createScopedDb(client), fixture.tenantA.organizationId);
     // A real negative-stock scenario: two consumption movements exceeding what was ever received
-    // (a missed receipt, per plan.md's own explanation of what negative stock signals).
+    // (a missed receipt, per the plan's own explanation of what negative stock signals).
     await stockRepo.recordAndProject({
       id: generateId(),
       storeId: fixture.tenantA.storeId,

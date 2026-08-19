@@ -64,7 +64,7 @@ const parseDecimal = (raw: string | null): Decimal | null => {
 };
 
 /**
- * 008-10 (plan.md Phase 4, spec 05 §5.2.4): "the financial control that catches real money."
+ * "the financial control that catches real money."
  * Matches an already-POSTED invoice document's lines against real PO/receipt lines, classifies
  * each line's variance (packages/domain's pure `classifyLineMatch`), and persists the result.
  *
@@ -217,7 +217,7 @@ export class InvoiceMatchRepository {
       }
     }
 
-    // INVOICE_CLEAN/INVOICE_ERROR: one event for the whole invoice (spec 05 §5.3.3's "invoice
+    // INVOICE_CLEAN/INVOICE_ERROR: one event for the whole invoice (the design's "invoice
     // accuracy = clean_invoices / total_invoices" is a per-INVOICE rate, not per-line) — clean only
     // when every real line matched within tolerance (`overallSeverity === 'NONE'`), matching
     // `findPending`'s own established "highestSeverity is the worst thing on this invoice" reading.
@@ -248,7 +248,7 @@ export class InvoiceMatchRepository {
   }
 
   /**
-   * 008-11 (spec D8, "avoid alert fatigue on cents"): reads this org's real
+   * "Avoid alert fatigue on cents": reads this org's real
    * `organizations.match*Tolerance*` columns, falling back to `DEFAULT_MATCH_TOLERANCES` PER FIELD
    * when a column is `null` — an org that has only ever set a price tolerance still gets the real
    * default quantity tolerance, not an accidentally-zero one. Never guesses a tolerance from a
@@ -307,7 +307,7 @@ export class InvoiceMatchRepository {
    * `PostingService.postLineInTx`'s exact SKU-resolution logic (exact supplier name + a CONFIRMED
    * `supplier_products.supplierSku` mapping). Prefers a receipt line that already carries a
    * `purchaseOrderLineId` (the normal PO-backed path) but also matches a receipt line with NO PO at
-   * all (008-09's walk-in receipts) purely by product — a walk-in receipt still has a real product,
+   * all purely by product — a walk-in receipt still has a real product,
    * so an invoice for that same product can still be reconciled against it even with no PO involved.
    */
   private async resolveCandidate(
@@ -350,7 +350,7 @@ export class InvoiceMatchRepository {
     // The most recent real receipt line for this product from this supplier — joined to its PO
     // line (if any) for the ordered price. `goods_receipts.supplierId` is the receipt's own real
     // supplier column (set at confirmReceipt time), not derived from the PO, so this also matches
-    // walk-in/no-PO receipts (008-09) correctly.
+    // walk-in/no-PO receipts correctly.
     const [receiptRow] = await tx
       .select({
         goodsReceiptLineId: goodsReceiptLines.id,
@@ -385,7 +385,7 @@ export class InvoiceMatchRepository {
     }
 
     // No receipt at all — check for a real, un-received PO line for this product/supplier, so a
-    // genuinely ordered-but-never-received item is classified INVOICED_NOT_RECEIVED (plan.md's
+    // genuinely ordered-but-never-received item is classified INVOICED_NOT_RECEIVED (the plan's
     // high-priority fraud/error flag), not the weaker UNORDERED_ITEM (no order exists at all).
     const [poLineRow] = await tx
       .select({ purchaseOrderId: purchaseOrderLines.purchaseOrderId, unitPrice: purchaseOrderLines.unitPrice })
@@ -446,9 +446,9 @@ export class InvoiceMatchRepository {
   }
 
   /**
-   * The review queue's real read path (008-12). Confirmed with the user: a CLEAN match
+   * The review queue's real read path. Confirmed with the user: a CLEAN match
    * (`highestSeverity = 'NONE'`, every line matched within tolerance) never appears here — a queue
-   * full of clean invoices defeats the point of 008-11's configurable tolerances, which exist
+   * full of clean invoices defeats the point of earlier work's configurable tolerances, which exist
    * specifically to keep alert-worthy variances from being drowned out by noise. `status = 'PENDING'`
    * alone is not enough to express this, since a match can be `PENDING` and still have zero real
    * variance; the `highestSeverity <> 'NONE'` predicate is what actually encodes "worth a manager's
@@ -475,7 +475,7 @@ export class InvoiceMatchRepository {
   }
 
   /**
-   * 008-12: the one real resolution action, confirmed with the user — `PENDING` moves straight to
+   * the one real resolution action, confirmed with the user — `PENDING` moves straight to
    * `RESOLVED` with a REQUIRED note (never optional, unlike `purchase_orders.rejectionReason`'s own
    * optional precedent — a variance resolution needs an audit trail explaining where the money/
    * quantity discrepancy actually went, not just that someone looked at it). Refuses to resolve a
@@ -515,7 +515,7 @@ export class InvoiceMatchRepository {
   }
 
   /**
-   * `price_variance_total`'s real input (spec 12 §F) — every invoice line matched to one supplier
+   * `price_variance_total`'s real input — every invoice line matched to one supplier
    * in a period with both `priceVariance` and `invoiceQuantity` present. `classifyLineMatch`
    * populates these two fields independently (one gated on whether a PO price was found, the other
    * on whether the invoice line itself parsed) — see `three-way-match.ts` — so both are checked

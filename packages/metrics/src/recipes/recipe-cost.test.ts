@@ -55,7 +55,7 @@ describe('computeRecipeCost', () => {
     expect(result.lines.map((l) => l.productId)).toEqual(['flour', 'mystery']);
   });
 
-  // plan.md's costing-chain property test list: margin attribution components must sum exactly
+  // the plan's costing-chain property test list: margin attribution components must sum exactly
   // to the total. Applied here one link earlier in the chain — the SAME property for recipe cost.
   it('property: the total exactly equals the sum of all known line amounts, for any all-known set of lines', () => {
     fc.assert(

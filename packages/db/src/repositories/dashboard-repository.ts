@@ -276,7 +276,7 @@ export class DashboardRepository extends TenantScopedRepository<typeof salesTran
   }
 
   /**
-   * `sales_anomaly`'s real input (009-11, spec 12 §12.4) — one row per real calendar day with
+   * `sales_anomaly`'s real input (the design) — one row per real calendar day with
    * completed gross revenue in `[from, to)`, using the SAME `subtotal`-is-authoritative convention
    * `findTransactions` already established (never recomputed from lines). A day with zero completed
    * sales simply has no row — the anomaly detector's own decomposition only ever sees days that
@@ -303,7 +303,7 @@ export class DashboardRepository extends TenantScopedRepository<typeof salesTran
   }
 
   /**
-   * `waste_spike`'s real input (009-11) — one row per real calendar day with waste in `[from, to)`,
+   * `waste_spike`'s real input — one row per real calendar day with waste in `[from, to)`,
    * `quantity * unitCost` summed per day. A `WASTE` movement with a `null` unitCost (I7 — cost
    * unknown, never coerced to zero) is EXCLUDED from this specific day's total rather than treated
    * as zero-value waste, matching every other waste-value compute function's own established
@@ -332,7 +332,7 @@ export class DashboardRepository extends TenantScopedRepository<typeof salesTran
   }
 
   /**
-   * `consumption_anomaly`'s real ACTUAL-COGS half (009-11) — one row per real calendar day with
+   * `consumption_anomaly`'s real ACTUAL-COGS half — one row per real calendar day with
    * `SALE_CONSUMPTION` movement in `[from, to)`, `ABS(quantity) * unit_cost` summed. Confirmed with
    * the user: this signal compares actual vs. theoretical COGS in DOLLARS per day (reusing
    * `computeCogsActual`'s existing formula, applied once per day), not a raw ingredient quantity —
@@ -361,7 +361,7 @@ export class DashboardRepository extends TenantScopedRepository<typeof salesTran
   }
 
   /**
-   * `consumption_anomaly`'s real THEORETICAL-COGS half (009-11) — the SAME day-grouped shape as
+   * `consumption_anomaly`'s real THEORETICAL-COGS half — the SAME day-grouped shape as
    * `findSoldMappedItems` above, with `occurred_at::date` added to the GROUP BY. Deliberately
    * returns raw per-day (`menuItemId`, `quantitySold`) pairs rather than a resolved dollar figure —
    * the caller resolves each DISTINCT menu item's unit recipe cost exactly ONCE for the whole window
@@ -395,7 +395,7 @@ export class DashboardRepository extends TenantScopedRepository<typeof salesTran
   }
 
   /**
-   * `fact_daily_sales`'s real input (009-01) — every real COMPLETED line for one store within an
+   * `fact_daily_sales`'s real input — every real COMPLETED line for one store within an
    * ALREADY-RESOLVED `[from, to)` UTC window (the caller resolves this via
    * `resolveLocalDateRange` against the store's own timezone; this method does no timezone logic
    * itself, matching `packages/domain/src/time/store-time.ts`'s own "one place resolves store-local
@@ -438,7 +438,7 @@ export class DashboardRepository extends TenantScopedRepository<typeof salesTran
   }
 
   /**
-   * `fact_daily_sales`'s refund half (009-01) — every real `REFUNDED` transaction whose ORIGINAL
+   * `fact_daily_sales`'s refund half — every real `REFUNDED` transaction whose ORIGINAL
    * (`refundOfId`-referenced) transaction occurred within the resolved local day, even if the
    * refund itself was recorded later (a refund processed the next calendar day still belongs to
    * the sale it reverses, for fact-table attribution purposes — matching this project's own
@@ -475,7 +475,7 @@ export class DashboardRepository extends TenantScopedRepository<typeof salesTran
   }
 
   /**
-   * `fact_daily_consumption`'s real ACTUAL-consumption input (009-01) — the same real
+   * `fact_daily_consumption`'s real ACTUAL-consumption input — the same real
    * `SALE_CONSUMPTION` movements `findConsumption` reads, but INCLUDING `variantId`, which
    * `findConsumption`'s existing callers (margin metrics) never needed since they aggregate to a
    * single period total, not a per-variant fact row. A new method rather than widening
@@ -511,10 +511,10 @@ export class DashboardRepository extends TenantScopedRepository<typeof salesTran
   }
 
   /**
-   * `fact_waste`'s real input (009-01) — real `WASTE` movements including `reasonCode` (NOT NULL
+   * `fact_waste`'s real input — real `WASTE` movements including `reasonCode` (NOT NULL
    * on every real `WASTE` row by database constraint — `findWaste`'s own existing doc comment),
    * which neither `findWaste` (period-range, not per-store-day) nor `findDailyWasteValue`
-   * (day-bucketed but reason-blind, 009-11) carries in the shape this fact table's grain needs.
+   * (day-bucketed but reason-blind, earlier work) carries in the shape this fact table's grain needs.
    */
   async findWasteForFactAggregation(storeId: string, from: Date, to: Date) {
     return this.runScoped((db) =>
@@ -539,7 +539,7 @@ export class DashboardRepository extends TenantScopedRepository<typeof salesTran
   }
 
   /**
-   * 009-16 (drill-through) — every real completed sales line in the period, WITH its own row id and
+   * earlier work (drill-through) — every real completed sales line in the period, WITH its own row id and
    * the menu item name it's mapped to (nullable — an unmapped line still appears, `menuItemName:
    * null`, matching this dashboard's own established "surface the gap, don't hide it" completeness
    * convention). Backs `net_revenue`/`transaction_count`/`average_transaction_value`'s drill-through.
@@ -579,7 +579,7 @@ export class DashboardRepository extends TenantScopedRepository<typeof salesTran
   }
 
   /**
-   * 009-16 (drill-through) — real `SALE_CONSUMPTION` movements with their own row id and the
+   * earlier work (drill-through) — real `SALE_CONSUMPTION` movements with their own row id and the
    * product's name, backing `cogs_actual`'s drill-through. `unitCost: null` rows are included, not
    * filtered out (I7) — a human drilling into "why is actual COGS lower than expected" needs to see
    * the unknown-cost rows too, not just the ones that happened to have a cost.
@@ -612,7 +612,7 @@ export class DashboardRepository extends TenantScopedRepository<typeof salesTran
   }
 
   /**
-   * 009-16 (drill-through) — real `WASTE` movements with their own row id and the product's name,
+   * earlier work (drill-through) — real `WASTE` movements with their own row id and the product's name,
    * backing `waste_value`'s drill-through (the total AND each reason-code breakdown row, filtered
    * client-side by `reasonCode` when a specific reason is expanded).
    */

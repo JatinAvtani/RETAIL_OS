@@ -28,9 +28,9 @@ const updateInput = z.object({
 });
 
 /**
- * 007-10: the review screen's correction flow needs to resolve an extracted supplier name to a
+ * the review screen's correction flow needs to resolve an extracted supplier name to a
  * real `suppliers` row (or create one — an invoice from a genuinely new supplier is routine, not
- * an error state). `SupplierRepository` existed since 004-05 but had no tRPC surface at all until
+ * an error state). `SupplierRepository` existed since earlier work but had no tRPC surface at all until
  * this task became its first caller.
  */
 export const suppliersRouter = router({
@@ -54,7 +54,7 @@ export const suppliersRouter = router({
     return supplier;
   }),
 
-  /** Every field here is a real, spec'd column (07 §7.5) — contacts/terms/lead-time/delivery schedule/status all existed in the schema with no way to edit them after creation. */
+  /** Every field here is a real, spec'd column (07 ) — contacts/terms/lead-time/delivery schedule/status all existed in the schema with no way to edit them after creation. */
   update: protectedProcedure.input(updateInput).mutation(async ({ ctx, input }) => {
     const supplierRepository = new SupplierRepository(ctx.db, ctx.session.organizationId);
     const updated = await supplierRepository.update(input.id, {
@@ -76,7 +76,7 @@ export const suppliersRouter = router({
   }),
 
   /**
-   * 008-05: which products a manager can add to a new PO line for this supplier — only CONFIRMED
+   * which products a manager can add to a new PO line for this supplier — only CONFIRMED
    * `supplier_products` mappings (I7: an unconfirmed mapping has no reliable pack size/conversion
    * factor to trust a real order against). Enriched with each product's real name — the raw
    * mapping row only carries `productId`, and a create-PO screen needs a human-readable label, not

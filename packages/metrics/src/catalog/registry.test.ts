@@ -191,7 +191,7 @@ describe('metric catalog registry', () => {
     expect(result.unknownReason).toBe('No data in the period.');
   });
 
-  describe('executeMetric with a real Redis cache (009-12)', () => {
+  describe('executeMetric with a real Redis cache', () => {
     const redis = new Redis(REDIS_URL);
 
     afterAll(async () => {

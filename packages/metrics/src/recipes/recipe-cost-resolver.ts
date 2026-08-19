@@ -27,7 +27,7 @@ import { computeRecipeCost, type RecipeCostLine } from './recipe-cost.js';
 type Db = ReturnType<typeof createDb>['db'];
 
 /**
- * The REAL, production recipe-cost resolver (009-01) — moved here from
+ * The REAL, production recipe-cost resolver — moved here from
  * `apps/api/src/metrics/recipe-cost-resolver.ts` so BOTH `apps/api` (the dashboard's own injected
  * `resolveRecipeUnitCost`) and `apps/worker` (the fact-aggregation job's real theoretical-COGS
  * need) can share the identical implementation, rather than each app maintaining its own copy —

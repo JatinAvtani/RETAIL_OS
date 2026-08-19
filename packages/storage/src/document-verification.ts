@@ -1,12 +1,12 @@
 /**
- * 007-02: supplier documents (mostly invoices) arrive as either a PDF or a phone photo (JPEG/PNG)
- * — the exact two shapes EPIC-002's extraction spike measured accuracy against. Same "verify actual
+ * supplier documents (mostly invoices) arrive as either a PDF or a phone photo (JPEG/PNG)
+ * — the exact two shapes the later milestone's extraction spike measured accuracy against. Same "verify actual
  * bytes, never trust client content-type" discipline as `image-verification.ts`/`csv-verification.ts`.
  *
- * XXE-hardening and PDF-bomb resource limits (spec 14 §14.7/T6) apply to PARSING a PDF's internal
+ * XXE-hardening and PDF-bomb resource limits apply to PARSING a PDF's internal
  * structure, not to this magic-byte check — that hardening belongs to whatever eventually reads a
- * PDF's contents (007-05/06, extraction), not to upload-time verification, which never parses
- * anything. Malware/AV scanning is deliberately out of scope here too, matching 004-12's own
+ * PDF's contents, not to upload-time verification, which never parses
+ * anything. Malware/AV scanning is deliberately out of scope here too, matching earlier work's own
  * product-image precedent (no card, no budget for a real scanning service) — magic-byte type
  * verification + size cap are the real mitigations available under that constraint.
  */

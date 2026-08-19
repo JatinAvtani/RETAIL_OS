@@ -1,4 +1,4 @@
--- 008-06: spec 05 SS5.2.2, "SENT triggers PDF generation + email to the supplier contact."
+-- the design, "SENT triggers PDF generation + email to the supplier contact."
 -- pdf_object_key records where the generated PDF landed in object storage (same tenant-prefixed
 -- key convention as document-verification's buildDocumentKey) — nullable, since a PO in any
 -- pre-SENT state has no PDF yet (I7: absence, not a fabricated empty string).

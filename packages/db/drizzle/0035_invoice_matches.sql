@@ -1,4 +1,4 @@
--- 008-10: spec 05 SS5.2.4 / 07 SS7.5's InvoiceMatch -- the three-way match result linking
+-- the design's InvoiceMatch -- the three-way match result linking
 -- PO <-> Receipt <-> Document, with per-line variance classification.
 CREATE TABLE IF NOT EXISTS "invoice_matches" (
 	"id" uuid PRIMARY KEY NOT NULL,

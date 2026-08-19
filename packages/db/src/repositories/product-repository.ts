@@ -9,7 +9,7 @@ type ProductType = 'INGREDIENT' | 'SELLABLE' | 'BOTH';
 type TrackingPolicy = 'NONE' | 'LOT' | 'SERIAL';
 
 /**
- * "Every product gets a default variant on creation" (plan.md) is enforced here, not left to
+ * "Every product gets a default variant on creation" is enforced here, not left to
  * callers — `create` always inserts both rows in the same transaction. Food service never has to
  * think about variants; fashion/grocery get the identical schema with real variant rows added
  * later via `addVariant`, no migration needed.
@@ -140,7 +140,7 @@ export class ProductRepository extends TenantScopedRepository<typeof products> {
   }
 
   /**
-   * `imageKey` is an object storage key (packages/storage), never a URL — spec 14 §14.5: objects
+   * `imageKey` is an object storage key (packages/storage), never a URL — the design: objects
    * are never public, every read goes through a short-lived presigned URL generated on demand.
    * The caller (apps/api's `confirmImageUpload`) is responsible for verifying the object's actual
    * bytes before calling this; this method trusts the key it's given the same way every other

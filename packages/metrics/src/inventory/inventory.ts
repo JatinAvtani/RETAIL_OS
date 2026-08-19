@@ -3,13 +3,13 @@ import Decimal from 'decimal.js';
 import type { UnknownOr } from '../margin/margin.js';
 
 /**
- * Inventory metrics — spec 12 §D, all 9. Every function here is pure: given already-fetched rows,
+ * Inventory metrics — the design, all 9. Every function here is pure: given already-fetched rows,
  * it computes one number. No database access, matching every other file in this package.
  *
  * Two deliberate, confirmed deviations from the spec's literal grain (both narrower scope, not
  * formula changes — see `catalog-entries.ts` for where each is wired):
  *  - `negative_stock_incidents`: registered as a live snapshot COUNT ("currently negative"), not a
- *    store/period historical tally — `findNegativeStock` (005-14) is structurally a point-in-time
+ *    store/period historical tally — `findNegativeStock` is structurally a point-in-time
  *    sweep, and this project's own standing framing ("negative stock is a signal, not an error")
  *    treats it as a real-time signal, not a thing to count historically.
  *  - `stockout_events`/`stockout_revenue_impact` DO honor the spec's literal store/period grain —
@@ -152,12 +152,12 @@ export type StockoutRevenueImpactInput = {
 };
 
 export type StockoutRevenueImpactResult = {
-  /** `'unknown'` when either input needed for the estimate is unknown. Always labeled an estimate by the caller — this is spec 12 §D's own ONE disclosed-estimate metric. */
+  /** `'unknown'` when either input needed for the estimate is unknown. Always labeled an estimate by the caller — this is the design's own ONE disclosed-estimate metric. */
   estimatedImpact: UnknownOr<Money>;
 };
 
 /**
- * `stockout_revenue_impact` — spec 12 §D's ONE deliberate estimate in the whole catalog, "using
+ * `stockout_revenue_impact` — the design's ONE deliberate estimate in the whole catalog, "using
  * trailing average velocity." `estimated lost revenue = stockout_days × avg_daily_consumption ×
  * avg_unit_price` — the plain, disclosed method the spec calls for, not a fabricated composite.
  * `'unknown'` (never a guessed number) when either the consumption rate or the selling price is
@@ -183,7 +183,7 @@ export const computeNegativeStockIncidentCount = (rows: unknown[]): number => ro
 /* ------------------------------------------------------------------ stock_projection_drift */
 
 /**
- * `stock_projection_drift` (spec 12 §H, spec 08 §8.6's "bug detector") — registered as a COUNT of
+ * `stock_projection_drift` — registered as a COUNT of
  * drifted product/variant rows, not a summed `|projection − ledger sum|` magnitude: the underlying
  * quantities are in each product's own base unit (I6), so adding an apple's drift to a liter of
  * milk's drift would produce a meaningless mixed-unit number. A count of "how many rows disagree"

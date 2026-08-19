@@ -36,7 +36,7 @@ const ADMIN_CONNECTION_STRING =
   process.env.TEST_DATABASE_URL_ADMIN ?? 'postgresql://postgres:postgres@localhost:5432/retailos';
 
 /**
- * Real-database proof that the 4 newly-registered cost metrics (spec 12 §B) compute correctly
+ * Real-database proof that the 4 newly-registered cost metrics compute correctly
  * through `executeMetric`. The other 4 of the section's 8 metrics (`cogs_actual`,
  * `cogs_theoretical`, `food_cost_percentage`, `cost_variance`) are already covered by
  * `margin/catalog-entries.test.ts`.

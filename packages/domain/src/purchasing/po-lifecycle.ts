@@ -1,5 +1,5 @@
 /**
- * Spec 05 §5.2.2's exact state diagram:
+ * the design's exact state diagram:
  *
  *   DRAFT --submit--> PENDING_APPROVAL --approve--> APPROVED --send--> SENT
  *                            |                                          |
@@ -12,7 +12,7 @@
  *                                                                    RECEIVED --> CLOSED
  *   (CANCELLED reachable from DRAFT, PENDING_APPROVAL, APPROVED, SENT)
  *
- * A pure function, not scattered `if (status === ...)` checks in repository/route code — the same
+ * A pure function, not scattered `if (status ===...)` checks in repository/route code — the same
  * discipline `decideDocumentRouting` (packages/domain/src/documents/routing.ts) established: an
  * invalid transition is rejected explicitly here, once, rather than silently ignored or re-derived
  * differently at each call site. The database's `purchase_order_status` enum only constrains which
@@ -36,7 +36,7 @@ export type PoTransitionResult =
   | { readonly allowed: false; readonly reason: string };
 
 /**
- * `REJECT` from `PENDING_APPROVAL` returns to `DRAFT` — spec 05 §5.2.2's diagram literally shows
+ * `REJECT` from `PENDING_APPROVAL` returns to `DRAFT` — the design's diagram literally shows
  * "DRAFT/CANCELLED" as the reject target, meaning a rejection is a correctable draft state by
  * default (a manager can revise and resubmit), not an automatic dead end. Rejecting all the way to
  * `CANCELLED` is a separate, explicit `CANCEL` event from any pre-terminal state — never implied by
@@ -94,7 +94,7 @@ export const canTransitionPurchaseOrder = (currentStatus: PurchaseOrderStatus, e
 
 /**
  * `RECEIVED --> CLOSED` (spec's diagram) is not modeled as a domain EVENT here — closing is an
- * administrative/manual action (e.g. after invoice reconciliation, 008-10's three-way match) with
+ * administrative/manual action (e.g. after invoice reconciliation, earlier work's three-way match) with
  * no receiving-flow trigger of its own yet. Exposed as a direct check rather than forcing a
  * placeholder `CLOSE` event through `applyPurchaseOrderTransition` before there's a real caller —
  * matches this project's standing discipline of not building unused abstraction ahead of a real need.
@@ -102,7 +102,7 @@ export const canTransitionPurchaseOrder = (currentStatus: PurchaseOrderStatus, e
 export const canClosePurchaseOrder = (currentStatus: PurchaseOrderStatus): boolean => currentStatus === 'RECEIVED';
 
 /**
- * Spec 05 §5.2.2: "SENT triggers PDF generation + email to the supplier contact, and the PO
+ * the design: "SENT triggers PDF generation + email to the supplier contact, and the PO
  * becomes immutable." Immutability begins exactly AT `SENT`, not any earlier state —
  * `DRAFT`/`PENDING_APPROVAL`/`APPROVED` are all still freely editable; only `SENT` and every state
  * reachable from it (`PARTIALLY_RECEIVED`, `RECEIVED`, `CLOSED`) are locked. `CANCELLED` is also

@@ -1,7 +1,7 @@
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 
 /**
- * Spec 05 §5.2.2: "SENT triggers PDF generation + email to the supplier contact." Deliberately a
+ * the design: "SENT triggers PDF generation + email to the supplier contact." Deliberately a
  * pure function of already-formatted, already-fetched data (no DB/S3 access here) — matching this
  * package's discipline for every other domain module (`suggestReorder`, `computeRecipeCost`):
  * given the right inputs, compute/produce the output, fully testable without a database. The

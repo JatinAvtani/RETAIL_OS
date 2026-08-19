@@ -4,13 +4,13 @@ import { stores } from './stores';
 import { products, productVariants } from './products';
 
 /**
- * The projection (spec 08 §8.6) — a cache of "what's on hand right now," maintained in the SAME
- * transaction as every `stock_movements` insert (`INSERT ... ON CONFLICT DO UPDATE`). The ledger
+ * The projection — a cache of "what's on hand right now," maintained in the SAME
+ * transaction as every `stock_movements` insert (`INSERT... ON CONFLICT DO UPDATE`). The ledger
  * is truth; this table exists purely for O(1) read performance instead of summing the ledger on
  * every page load. Drift between this table and the ledger sum is a bug, not a data-quality
- * nuance — that's what the nightly reconciliation job (005-04) alerts on.
+ * nuance — that's what the nightly reconciliation job alerts on.
  *
- * Primary key is `(store_id, product_id, variant_id)`, exactly as spec 08 §8.6 defines it — no
+ * Primary key is `(store_id, product_id, variant_id)`, exactly as the design defines it — no
  * `organization_id` in the key, since a store already implies its organization. `organization_id`
  * is still carried as its own column (not part of the key) so this table can extend
  * `TenantScopedRepository` and get the standard RLS policy like every other tenant table — a

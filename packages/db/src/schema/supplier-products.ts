@@ -6,7 +6,7 @@ import { units } from './units';
 import { idColumn, timestamps } from './columns';
 
 /**
- * Spec 05 §5.3.2 — "the unglamorous linchpin of the whole system": supplier "FLR-00123 / Flour
+ * the design — "the unglamorous linchpin of the whole system": supplier "FLR-00123 / Flour
  * T55 25kg sack" resolves to our product "Flour, T55" with a 25kg conversion. This table IS that
  * resolution, stored permanently once confirmed.
  *
@@ -18,7 +18,7 @@ import { idColumn, timestamps } from './columns';
  * mapping's pack size is intrinsic to what a supplier SKU means, independent of whether a
  * conversion row has been separately created yet.
  *
- * `isConfirmed` — spec 05 §5.3.2's fuzzy-match flow only ever *suggests* a mapping; a human
+ * `isConfirmed` — the design's fuzzy-match flow only ever *suggests* a mapping; a human
  * confirming it is what makes `isConfirmed = true` and the row permanent. A wrong auto-mapping
  * corrupts cost data for months, so nothing reads cost through an unconfirmed row (enforced by
  * the repository layer, not a DB constraint — see SupplierProductRepository).

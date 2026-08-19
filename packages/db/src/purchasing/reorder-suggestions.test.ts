@@ -301,7 +301,7 @@ describe('findReorderSuggestions', () => {
     expect(anyMatch).toBe(false);
   });
 
-  it('groups suggestions by supplier — spec D10', async () => {
+  it('groups suggestions by supplier', async () => {
     const adminDb = drizzle(adminClient, { schema });
     const secondSupplierId = generateId();
     await adminDb.insert(suppliers).values({

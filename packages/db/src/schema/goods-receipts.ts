@@ -9,16 +9,16 @@ import { users } from './users';
 import { idColumn, timestamps } from './columns';
 
 /**
- * Spec 05 §5.2.3 / 07 §7.5's `GoodsReceipt`/`GoodsReceiptLine`: "what physically arrived."
+ * the design / 07 the design's `GoodsReceipt`/`GoodsReceiptLine`: "what physically arrived."
  * Deliberately no state machine of its own (unlike `purchase_orders`) — a receipt is recorded once,
  * atomically, on confirm; there is no draft/edit/re-open concept for a receipt itself (a correction
  * is a NEW receipt or a stock-count adjustment, matching this project's append-only bias — I3's
  * spirit extended to a table that isn't `stock_movements` itself but exists to feed it).
  *
- * `purchaseOrderId` is nullable — 008-09 (receipt without PO, walk-in/emergency purchases) is a
+ * `purchaseOrderId` is nullable — earlier work (receipt without PO, walk-in/emergency purchases) is a
  * real, confirmed later scope, not solved here, but the column is nullable now so that task doesn't
  * need a migration of its own to loosen a NOT NULL constraint (same deferred-column precedent as
- * `lots.goodsReceiptLineId` itself, added back in 005-02 for exactly this epic).
+ * `lots.goodsReceiptLineId` itself, added back in earlier work for exactly this epic).
  */
 export const goodsReceipts = pgTable('goods_receipts', {
   id: idColumn(),
@@ -39,10 +39,10 @@ export const goodsReceipts = pgTable('goods_receipts', {
 });
 
 /**
- * `discrepancyCode` matches plan.md's literal fixed set — a plain nullable `text` column (not a
+ * `discrepancyCode` matches the plan's literal fixed set — a plain nullable `text` column (not a
  * `pgEnum`) with an app-layer `DiscrepancyCode` union as the single source of truth, mirroring
  * `wasteReasonCodeEnum`'s own precedent, since a CHECK constraint on a nullable multi-select-shaped
- * column adds little here (only one discrepancy per line, the simple case plan.md describes).
+ * column adds little here (only one discrepancy per line, the simple case the plan describes).
  * `null` means "arrived exactly as ordered" — never a fabricated `'NONE'` string (I7).
  *
  * `receivedQuantityBaseUnits` is REQUIRED (not nullable) — unlike `purchase_order_lines.
@@ -56,8 +56,8 @@ export const goodsReceipts = pgTable('goods_receipts', {
  * lot creation within the SAME transaction; every persisted row has a real lot by the time the
  * transaction commits, but the column can't be NOT NULL at the table-definition level since the
  * insert order within that transaction creates the receipt line before the lot in some call shapes.
- * `photoObjectKeys` (008-08's scope: "photos for damage claims") is a real jsonb array column added
- * now, unused until 008-08 wires an upload path to it — matches `lots.goodsReceiptLineId`'s own
+ * `photoObjectKeys` is a real jsonb array column added
+ * now, unused until earlier work wires an upload path to it — matches `lots.goodsReceiptLineId`'s own
  * "add the column now, wire the feature later" precedent, not a placeholder abstraction.
  *
  * NOTE: `lot_id` here and `lots.goods_receipt_line_id` form a genuine MUTUAL FK cycle — this table

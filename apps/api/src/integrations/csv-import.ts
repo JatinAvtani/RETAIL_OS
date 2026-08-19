@@ -35,7 +35,7 @@ export class CsvImportWrongStatusError extends Error {
 }
 
 /**
- * 006-10 (plan.md Phase 5): the CSV header-detection step, run once right after the upload is
+ * the CSV header-detection step, run once right after the upload is
  * confirmed (mirrors `products.confirmImageUpload`'s "download the just-uploaded bytes, verify
  * server-side" shape, applied to text instead of an image). Records the result on the import row
  * (`UPLOADED`, unchanged) so the mapping UI can read it back without re-downloading the file.
@@ -63,7 +63,7 @@ export type CsvImportCommitResult = {
 };
 
 /**
- * 006-10: the actual import — parses every row per the human-confirmed mapping (006-10's own
+ * the actual import — parses every row per the human-confirmed mapping (earlier work's own
  * `parseCsvRows`, pure and already tested independent of this function), writes each parsed row
  * into the SAME tables Square's `recordOrderInTx` writes (`pos_items`/`sales_transactions`/
  * `salesTransactionLines`/`outbox_events`), then triggers consumption via

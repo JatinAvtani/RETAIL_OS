@@ -9,10 +9,10 @@ export type SalesSource = (typeof salesSourceEnum.enumValues)[number];
 export type UnmappedPosItemWithVolume = typeof posItems.$inferSelect & { totalRevenue: string; totalQuantity: string };
 
 /**
- * 006-01's schema-task repository: proves `pos_items` is real, tenant-isolated, and idempotent on
+ * earlier work's schema-task repository: proves `pos_items` is real, tenant-isolated, and idempotent on
  * `(store_id, source, external_id)` (a catalog sync re-run must not create duplicate rows for the
- * same vendor item). Deliberately narrow — mapping a POS item to a MenuItem (006-11) and the real
- * Square catalog sync (006-04) are separate, later tasks; this class only proves the table itself.
+ * same vendor item). Deliberately narrow — mapping a POS item to a MenuItem and the real
+ * Square catalog sync are separate, later tasks; this class only proves the table itself.
  */
 export class PosItemRepository extends TenantScopedRepository<typeof posItems> {
   constructor(db: ReturnType<typeof drizzle<typeof schema>>, organizationId: string) {
@@ -24,7 +24,7 @@ export class PosItemRepository extends TenantScopedRepository<typeof posItems> {
    * calling this repeatedly for the same vendor item must converge on one row, not accumulate
    * duplicates. `lastSeenAt` always advances to `now()` on conflict, which is how a future
    * "mark items not seen in the last sync as delisted" job would detect a deleted-upstream item —
-   * that job itself is out of scope here (006-04).
+   * that job itself is out of scope here.
    */
   async upsert(input: {
     id: string;
@@ -84,7 +84,7 @@ export class PosItemRepository extends TenantScopedRepository<typeof posItems> {
     return rows[0] ?? null;
   }
 
-  /** The 006-05 orders-sync read path: resolves a line's vendor `catalog_object_id` back to its own `pos_items.id`, so `sales_transaction_lines.posItemId` references the SKU that was actually sold. */
+  /** The orders-sync read path: resolves a line's vendor `catalog_object_id` back to its own `pos_items.id`, so `sales_transaction_lines.posItemId` references the SKU that was actually sold. */
   async findByExternalId(storeId: string, source: SalesSource, externalId: string) {
     const rows = await this.runScoped((db, scopedWhere) =>
       db
@@ -95,7 +95,7 @@ export class PosItemRepository extends TenantScopedRepository<typeof posItems> {
     return rows[0] ?? null;
   }
 
-  /** The 006-11 mapping-UI read path: unmapped items, most-sold first is a later join this method doesn't attempt yet — plain oldest-first for now. */
+  /** The earlier work mapping-UI read path: unmapped items, most-sold first is a later join this method doesn't attempt yet — plain oldest-first for now. */
   async findUnmapped(storeId?: string) {
     return this.runScoped((db, scopedWhere) =>
       db
@@ -113,8 +113,8 @@ export class PosItemRepository extends TenantScopedRepository<typeof posItems> {
   }
 
   /**
-   * The real 006-11 mapping-UI read path: unmapped items ranked by trailing sales volume,
-   * highest first — plan.md's own reasoning ("mapping the top 20 items covers ~80% of revenue")
+   * The real earlier work mapping-UI read path: unmapped items ranked by trailing sales volume,
+   * highest first — the plan's own reasoning ("mapping the top 20 items covers ~80% of revenue")
    * only works if the list is actually sorted that way, unlike the plain `findUnmapped` above.
    * `LEFT JOIN` against a revenue subquery, not `INNER JOIN` — an unmapped item that has never
    * actually sold (freshly synced from the catalog, zero transactions) is still a real unmapped
@@ -185,7 +185,7 @@ export class PosItemRepository extends TenantScopedRepository<typeof posItems> {
   }
 
   /**
-   * 006-04 (plan.md Phase 2): "deleted upstream items are marked, not deleted." Called once, after
+   * "deleted upstream items are marked, not deleted." Called once, after
    * a full catalog sync has upserted every item Square returned — any row for this store+source
    * whose `lastSeenAt` is still older than `syncStartedAt` was NOT touched by that sync, meaning
    * Square no longer lists it. Never deletes the row (`sales_transaction_lines.posItemId` still

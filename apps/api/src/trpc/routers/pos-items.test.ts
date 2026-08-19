@@ -7,7 +7,7 @@ import { buildServer } from '../../server';
 import type { FastifyInstance } from 'fastify';
 
 /**
- * 006-11 (plan.md Phase 6, the LAST task in EPIC-006): unmapped POS items ranked by sales volume,
+ * unmapped POS items ranked by sales volume,
  * fuzzy-suggested against real menu items, mapped or ignored only on a human's real HTTP request
  * (I9) — no automatic mapping path exists anywhere in this router.
  */

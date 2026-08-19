@@ -12,13 +12,13 @@ import type { CurrencyCode, StoreTimezone } from '@retailos/domain';
 import type { FactAggregationJobData } from '@retailos/queue';
 
 /**
- * 009-01 — the real worker-side handler for the daily fact-aggregation job. Resolves the store's
+ * the real worker-side handler for the daily fact-aggregation job. Resolves the store's
  * own "yesterday" (its local calendar date, not UTC's), then delegates every real aggregation step
  * to `aggregateFactTablesForDay` (`packages/db`), which has zero BullMQ/Redis awareness of its own
  * — matching `createExtractionProcessor`'s existing "processor is a thin adapter, the real logic
  * lives in a plain function" shape.
  *
- * `resolveRecipeUnitCost` (`@retailos/metrics`, 009-01) is adapted here from its real
+ * `resolveRecipeUnitCost` (`@retailos/metrics`, earlier work) is adapted here from its real
  * `(db, organizationId, recipeRepository, recipeGroupId, currency) => Money | 'unknown'` shape into
  * the narrower `RecipeUnitCostLookup` (`menuItemId => {amount} | 'unknown'`) that
  * `aggregateFactTablesForDay` actually takes — `packages/db` cannot import `@retailos/metrics`

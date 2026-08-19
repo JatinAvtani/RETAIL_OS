@@ -25,7 +25,7 @@ type Db = ReturnType<typeof drizzle<typeof schema>>;
  * normal case: receiving against a real PO), both are resolved server-side directly from that PO
  * line (`variantId` falling back to the product's default variant if the PO line never recorded
  * one), so the caller never needs to already know a product's internal variant id. Both are
- * REQUIRED when there is no `purchaseOrderLineId` (008-09's future receipt-without-PO scope) —
+ * REQUIRED when there is no `purchaseOrderLineId` —
  * there is no PO line to resolve them from.
  */
 export type ReceiveLineInput = {
@@ -60,7 +60,7 @@ export type ConfirmReceiptResult = {
  * `lots.unitCost` is NOT NULL at the database level — `MovementService`'s own doc comment: "a
  * lot's whole purpose is to carry a KNOWN cost basis for FEFO allocation." A receipt line with no
  * resolvable cost (no PO line to inherit from, and no explicit `unitCost` supplied — only possible
- * for 008-09's future receipt-without-PO scope) cannot create a lot at all; thrown, never a guessed
+ * for earlier work's future receipt-without-PO scope) cannot create a lot at all; thrown, never a guessed
  * `0` (I7), matching `UnknownCostSurplusError`'s precedent on the same class this method calls into.
  */
 export class UnknownReceiptCostError extends Error {
@@ -71,15 +71,15 @@ export class UnknownReceiptCostError extends Error {
 }
 
 /**
- * 008-07 (plan.md Phase 3, spec 05 §5.2.3): "on confirm, in one transaction: create lots → post
- * RECEIPT movements → update PO state → emit supplier performance events → outbox." 008-13 wires the
+ * "on confirm, in one transaction: create lots → post
+ * RECEIPT movements → update PO state → emit supplier performance events → outbox." earlier work wires the
  * real supplier-performance-event emission this doc comment always named: `DELIVERY_ON_TIME`/
  * `DELIVERY_LATE` (once per receipt tied to a PO, comparing `receivedAt` against that PO's
  * `expectedDeliveryDate`), `FILL_COMPLETE`/`FILL_SHORT` (once per PO-backed line, received vs.
  * ordered quantity), and `QUALITY_REJECT` (once per line carrying a discrepancy code — confirmed
  * with the user: this codebase has no distinct "how much was rejected vs. accepted" figure yet, so
  * the line's own `receivedQuantityBaseUnits` is used as the rejected amount, the honest reading of
- * the only number that actually exists). A walk-in receipt with no `purchaseOrderId` (008-09) has no
+ * the only number that actually exists). A walk-in receipt with no `purchaseOrderId` has no
  * "expected" delivery date or ordered quantity to compare against, so it emits no
  * delivery-timing/fill events at all — only `QUALITY_REJECT` still applies, since that only needs
  * the line's own discrepancy code, not a PO.
@@ -144,7 +144,7 @@ export class GoodsReceiptRepository {
   }
 
   /**
-   * 008-08: appends one verified photo key to a receipt line's `photoObjectKeys` array — never
+   * appends one verified photo key to a receipt line's `photoObjectKeys` array — never
    * overwrites, since a line can carry MULTIPLE damage-claim photos uploaded one at a time (each
    * its own `requestPhotoUpload`/`confirmPhotoUpload` round trip, matching
    * `products.requestImageUpload`'s single-asset precedent, confirmed with the user over a batch
@@ -172,7 +172,7 @@ export class GoodsReceiptRepository {
    * the real database CHECK constraint `purchase_order_lines_received_within_ordered` is the backstop
    * against ever recording more than was ordered), then transitions the PO to `PARTIALLY_RECEIVED`
    * or `RECEIVED` depending on whether every line is now fully received. A receipt with no
-   * `purchaseOrderId` (008-09's walk-in-purchase scope) still creates real lots/movements but skips
+   * `purchaseOrderId` still creates real lots/movements but skips
    * the PO-state step entirely — there is no PO to transition.
    *
    * `unitCost` on the INPUT is optional per line — a line tied to a real PO line inherits its
@@ -357,7 +357,7 @@ export class GoodsReceiptRepository {
       });
 
       // Closes the deferred FK this migration added — every lot a receiving flow creates now
-      // records exactly which receipt line produced it (spec 07 §7.4: "every RECEIPT movement
+      // records exactly which receipt line produced it (the design: "every RECEIPT movement
       // creates one of these").
       await tx.update(lots).set({ goodsReceiptLineId }).where(eq(lots.id, lotId));
 
@@ -503,9 +503,9 @@ export class GoodsReceiptRepository {
   }
 
   /**
-   * `emergency_purchase_rate`'s real input (spec 12 §F) — every receipt for one store in a period,
+   * `emergency_purchase_rate`'s real input — every receipt for one store in a period,
    * with whether it had a real linked PO. `purchaseOrderId IS NULL` is the exact, schema-native
-   * "walk-in/emergency purchase" signal 008-09 already established — no separate flag or inference
+   * "walk-in/emergency purchase" signal earlier work already established — no separate flag or inference
    * needed. `receivedAt` (not `createdAt`) is the period anchor, matching the receipt's own real
    * business-time column.
    */
@@ -528,7 +528,7 @@ export class GoodsReceiptRepository {
   }
 
   /**
-   * `lead_time_actual`/`lead_time_variance`'s real input (spec 12 §G) — `sentAt`/`receivedAt`
+   * `lead_time_actual`/`lead_time_variance`'s real input — `sentAt`/`receivedAt`
    * pairs for every receipt against a real PO for one supplier in a period. Only receipts with a
    * real linked PO whose `sentAt` is set are included (I7 — a walk-in/emergency receipt with no PO
    * at all has no "lead time" to report; neither does a receipt against a PO that was never

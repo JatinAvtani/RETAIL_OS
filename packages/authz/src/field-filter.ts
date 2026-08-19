@@ -2,7 +2,7 @@ import { hasPermission, type AuthContext } from './auth-context';
 import type { Permission } from './permission';
 
 /**
- * Spec 14 §14.3 enforcement rule 3: a caller without `financial:read` (Staff) must have cost/margin
+ * the design enforcement rule 3: a caller without `financial:read` (Staff) must have cost/margin
  * fields deleted from the response, not nulled — `'costPrice' in result` must be false, since a
  * present-but-null field still confirms the field's existence and shape to the client.
  */
@@ -11,7 +11,7 @@ export const SENSITIVE_FIELD_PERMISSION: Permission = 'financial:read';
 /**
  * Deletes `sensitiveFields` from a plain object when `ctx` lacks `financial:read` (Staff). Applied
  * recursively to arrays and to nested plain objects, so it also covers facet/aggregate shapes
- * (spec 14 §14.3 rule 4) — a nested `{ topSupplier: { totalSpend: ... } }` is filtered the same as
+ * — a nested `{ topSupplier: { totalSpend:... } }` is filtered the same as
  * a top-level cost field, not just the outermost object.
  *
  * Returns the same reference when nothing needed removing (no-op for Owner/Manager/Accountant), and

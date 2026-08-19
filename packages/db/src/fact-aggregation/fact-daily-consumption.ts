@@ -2,10 +2,10 @@ import { Decimal } from 'decimal.js';
 import { generateId } from '@retailos/domain';
 
 /**
- * `fact_daily_consumption`'s pure aggregation (009-01). `theoreticalCogs` is a DOLLAR figure, not a
+ * `fact_daily_consumption`'s pure aggregation. `theoreticalCogs` is a DOLLAR figure, not a
  * per-product quantity — see `packages/db/src/schema/fact-tables.ts`'s own header for the full,
  * confirmed reasoning (a genuine per-ingredient-product theoretical quantity needs real recipe
- * explosion per sold menu item per day, materially harder/riskier work 009-11's own
+ * explosion per sold menu item per day, materially harder/riskier work earlier work's own
  * consumption-anomaly detector already declined for the identical underlying reason).
  * `theoreticalCogs` is a STORE-WIDE figure carried on every row of that store/day (not
  * apportioned per product) — see `computeFactDailyConsumption`'s own doc comment for why.

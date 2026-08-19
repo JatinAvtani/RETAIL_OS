@@ -22,7 +22,7 @@ export type RecordSupplierPerformanceEventInput = {
 };
 
 /**
- * 008-13 (spec 05 §5.3.3, plan.md Phase 5): "only measured events, no invented weights in MVP."
+ * "only measured events, no invented weights in MVP."
  *
  * `recordInTx` is the ONLY write path, deliberately — it takes an ALREADY-OPEN transaction (`Tx`)
  * rather than opening its own, matching this project's own repeated, hard-learned lesson (
@@ -30,7 +30,7 @@ export type RecordSupplierPerformanceEventInput = {
  * repository method that opens its own `db.transaction()` cannot be composed into an outer
  * function's atomic unit. Both real callers — `GoodsReceiptRepository.confirmReceipt` (delivery
  * timing, fill rate) and `InvoiceMatchRepository.runMatch` (price variance, invoice accuracy) —
- * already open their own single transaction per plan.md's confirm-step/match-step sketch; this
+ * already open their own single transaction per the plan's confirm-step/match-step sketch; this
  * event write must land in that SAME transaction (I8) so a receipt/match can never commit while its
  * performance event silently fails to write, or vice versa. No standalone `record()` wrapping its
  * own transaction is provided, so there is no way to call this incorrectly from outside an existing
@@ -38,7 +38,7 @@ export type RecordSupplierPerformanceEventInput = {
  *
  * `expectedValue`/`actualValue`/`variance` are independently optional per call site — an event type
  * with no natural numeric comparison (there isn't one among the 8 real types this task uses, but
- * the column shape is generic per plan.md's own literal schema) simply omits them, never a
+ * the column shape is generic per the plan's own literal schema) simply omits them, never a
  * fabricated `0` (I7).
  */
 export class SupplierPerformanceEventRepository {
@@ -72,7 +72,7 @@ export class SupplierPerformanceEventRepository {
     this.organizationId = organizationId;
   }
 
-  /** The real read path for 008-13's component metrics — every event for one supplier since a given date, oldest first (metric functions in packages/metrics fold over this list; they never query the database themselves, matching `documents.accuracyTelemetry`'s own "router fetches, packages/metrics computes" split). */
+  /** The real read path for earlier work's component metrics — every event for one supplier since a given date, oldest first (metric functions in packages/metrics fold over this list; they never query the database themselves, matching `documents.accuracyTelemetry`'s own "router fetches, packages/metrics computes" split). */
   async findForSupplierSince(supplierId: string, since: Date) {
     return this.db.transaction((tx) =>
       withTenantContext(tx, this.organizationId, () =>
@@ -92,7 +92,7 @@ export class SupplierPerformanceEventRepository {
   }
 
   /**
-   * 008-15: the trend comparison's PRIOR-window read — every event strictly between `[since, until)`,
+   * the trend comparison's PRIOR-window read — every event strictly between `[since, until)`,
    * a bounded range rather than `findForSupplierSince`'s open-ended one. Used to compute the SAME
    * component metrics over the equal-length period immediately before the current window, so the
    * scorecard can show a real period-over-period delta rather than just a single snapshot.
@@ -116,7 +116,7 @@ export class SupplierPerformanceEventRepository {
     );
   }
 
-  /** Real events drilled to by the 008-15 scorecard for one product within a supplier — e.g. every PRICE_VARIANCE event for a specific SKU, not just the supplier as a whole. */
+  /** Real events drilled to by the earlier work scorecard for one product within a supplier — e.g. every PRICE_VARIANCE event for a specific SKU, not just the supplier as a whole. */
   async findForSupplierAndProductSince(supplierId: string, productId: string, since: Date) {
     return this.db.transaction((tx) =>
       withTenantContext(tx, this.organizationId, () =>

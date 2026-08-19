@@ -23,7 +23,7 @@ import { generateId } from '@retailos/domain';
 type Db = ReturnType<typeof createDb>['db'];
 
 /**
- * The golden regression fixture (009-13, spec 12 §12.6: "fixed fixture tenant, known-correct
+ * The golden regression fixture (earlier work, the design: "fixed fixture tenant, known-correct
  * values, asserted in CI. Any change altering these must be an explicit, reviewed decision.").
  *
  * One small, real, hand-derivable dataset — deliberately simple enough that every asserted metric

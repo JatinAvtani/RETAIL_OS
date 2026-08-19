@@ -1,20 +1,20 @@
 import { Decimal } from 'decimal.js';
 
 /**
- * 008-13 (spec 05 §5.3.3, plan.md Phase 5): "only measured events, no invented weights in MVP."
+ * "only measured events, no invented weights in MVP."
  * Every function here is pure — given already-fetched `supplier_performance_events` rows (I2's own
  * precedent, matching `computeExtractionAutoApprovalRate`: the router/repository fetches, this
  * package computes) — and returns ONE component metric. **No composite score is computed anywhere
- * in this file or exported from it** — spec 05 §5.3.3 is explicit that a single 0-100 weighted
+ * in this file or exported from it** — the design is explicit that a single 0-100 weighted
  * figure is deferred to V2 and only introduced if the weights can be justified against a measured
  * outcome; publishing one now would be exactly the fabricated-scoring anti-pattern this project
- * exists to avoid. The scorecard (008-15) presents these components side by side instead.
+ * exists to avoid. The scorecard presents these components side by side instead.
  *
  * `null` is returned whenever the relevant event type has zero occurrences in the window — an
  * empty period is a genuine "unknown," never a fabricated 0% (I7), matching every other rate metric
  * in this codebase (`computeExtractionAutoApprovalRate`'s own empty-input case).
  *
- * `effective unit cost` (spec 05 §5.3.3's 7th named component: "landed unit cost incl. delivery
+ * `effective unit cost` (the design's 7th named component: "landed unit cost incl. delivery
  * fees & credits") is deliberately NOT built here — this codebase has no representation anywhere
  * of delivery fees or credits on an invoice/receipt, so computing it would mean silently treating
  * "no fee data" as "zero fees," inflating the honesty of the figure (I7). A future task that adds
@@ -65,7 +65,7 @@ export const computeOnTimeRate = (events: SupplierPerformanceEventInput[]): numb
  * `Σ(invoice_price − agreed_price) × qty` per spec's literal formula would need each PRICE_VARIANCE
  * event's own invoiced quantity, which this event type does not carry (it records unit prices, not
  * line quantity — `InvoiceMatchLine` already has that figure, but the event itself is a per-unit-
- * price measurement, matching plan.md's own generic expected/actual/variance shape). This function
+ * price measurement, matching the plan's own generic expected/actual/variance shape). This function
  * instead sums the real per-unit `variance` each PRICE_VARIANCE event already recorded — the total
  * per-unit price drift across every variance event in the window, in the invoice's own currency
  * units, still a real dollar figure drillable to its source events, just not quantity-weighted.
@@ -103,7 +103,7 @@ export const computeQualityRejectRate = (events: SupplierPerformanceEventInput[]
   return rejectedTotal.dividedBy(receivedTotal).toNumber();
 };
 
-/** All four rate/dollar components together — the real read path 008-15's scorecard uses, one call per supplier per window. Each field independently `null` when its own underlying events don't exist (I7) — never a partial object standing in for a fuller one. */
+/** All four rate/dollar components together — the real read path earlier work's scorecard uses, one call per supplier per window. Each field independently `null` when its own underlying events don't exist (I7) — never a partial object standing in for a fuller one. */
 export interface SupplierPerformanceComponents {
   fillRate: number | null;
   onTimeRate: number | null;
@@ -121,9 +121,9 @@ export const computeSupplierPerformanceComponents = (events: SupplierPerformance
 });
 
 /**
- * 008-15 (plan.md: "components side by side WITH TRENDS, each drillable to source events") — the
- * one real gap between 008-13's already-built scorecard (a single-window snapshot) and plan.md's
- * literal wording. Confirmed with the user via `AskUserQuestion`: a real period-over-period
+ * the plan — the
+ * one real gap between earlier work's already-built scorecard (a single-window snapshot) and the plan's
+ * literal wording. settled deliberately: a real period-over-period
  * comparison (current window vs. the immediately-preceding EQUAL-length window), not a bucketed
  * time series — reuses the exact same 5 compute functions above over two already-fetched event
  * lists, no new domain logic.

@@ -29,7 +29,7 @@ export const resolveGoogleUser = async (
   const existingByEmail = await userRepository.findByEmail(identity.email);
 
   if (existingByEmail) {
-    // Account-takeover guard (plan.md, Phase 2): an unverified existing account cannot be silently
+    // Account-takeover guard: an unverified existing account cannot be silently
     // claimed by whoever next signs in with Google using the same email address — that would let
     // an attacker who merely knows a victim's email (not their password) take over the account by
     // racing to complete Google sign-in first. The real owner must prove password control before

@@ -36,7 +36,7 @@ const ADMIN_CONNECTION_STRING =
   process.env.TEST_DATABASE_URL_ADMIN ?? 'postgresql://postgres:postgres@localhost:5432/retailos';
 
 /**
- * Real-database proof that all 9 inventory metrics (spec 12 §D) compute correctly through
+ * Real-database proof that all 9 inventory metrics compute correctly through
  * `executeMetric`, using real ledger/lot/recipe/sales data rather than stubbed repositories —
  * following this project's own established convention that a catalog-wiring test proves the
  * REAL fetch (repository -> pure compute -> MetricResult), not just the pure math (already

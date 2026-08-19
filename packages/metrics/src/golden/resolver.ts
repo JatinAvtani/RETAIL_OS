@@ -6,7 +6,7 @@ import { explodeRecipe, money, quantity, type CurrencyCode, type Money, type Rec
 type Db = ReturnType<typeof createDb>['db'];
 
 /**
- * A REAL (not stubbed) recipe-unit-cost resolver for the golden regression fixture (009-13).
+ * A REAL (not stubbed) recipe-unit-cost resolver for the golden regression fixture.
  * Confirmed with the user over a stub: `packages/metrics`' own test convention always injects a
  * stub `resolveRecipeUnitCost` (returns 'unknown' or a hardcoded value) — a stub can never catch a
  * real recipe-explosion/cost-resolution bug, the same reasoning behind the standing

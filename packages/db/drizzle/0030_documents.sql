@@ -1,14 +1,14 @@
 -- Hand-written, not `drizzle-kit generate` output — the snapshot chain has been stale since
 -- migration 0005 (see 0008_units_and_conversions.sql's header and project memory for why).
 --
--- 007-04 (plan.md Phase 1): documents.classification_confidence added on top of 007-01's schema
+-- documents.classification_confidence added on top of earlier work's schema
 -- (this migration wasn't committed yet, so it's edited in place rather than stacking a second
 -- migration on an uncommitted one) — the model's own subjective confidence in `type`, null until
 -- classification has actually run (source = 'EMAIL'/'INTEGRATION' rows, or any row from before
 -- classification existed). A distinct WARN-worthy state from a real 0.0 confidence value, so kept
 -- nullable rather than defaulting to 0.
 --
--- 007-01 (plan.md Phase 1): the document pipeline's schema — documents, document_extractions,
+-- the document pipeline's schema — documents, document_extractions,
 -- extraction_corrections, document_links. This is link 1 of the costing chain (invoice -> price ->
 -- cost -> recipe -> margin), so every table here is org- AND store-scoped where the entity has a
 -- store, and the three child tables denormalize organization_id directly (same convention
@@ -150,14 +150,14 @@ EXCEPTION
 END $$;
 --> statement-breakpoint
 
--- Tenant-first composite indexes (§8.7), matching the spec's own literal example for this table:
+-- Tenant-first composite indexes (), matching the spec's own literal example for this table:
 -- CREATE INDEX ON documents(organization_id, created_at DESC) WHERE status = 'REVIEW_REQUIRED';
 CREATE INDEX IF NOT EXISTS "documents_org_status_idx" ON "documents" ("organization_id", "status");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "documents_org_store_idx" ON "documents" ("organization_id", "store_id");
 --> statement-breakpoint
 
--- Duplicate detection (spec 05 §5.6.3): "same content hash" is one of the two duplicate checks the
+-- Duplicate detection: "same content hash" is one of the two duplicate checks the
 -- validation gate runs. Deliberately not unique (see documents.ts's own doc comment).
 CREATE INDEX IF NOT EXISTS "documents_org_content_hash_idx" ON "documents" ("organization_id", "content_hash");
 --> statement-breakpoint
@@ -169,7 +169,7 @@ CREATE INDEX IF NOT EXISTS "extraction_corrections_org_extraction_idx" ON "extra
 --> statement-breakpoint
 
 -- Drill-through lookup: "every number a document produced" (by document) and "what document
--- produced this row" (by entity) are both real read paths (spec 07 §7.6's provenance use case).
+-- produced this row" (by entity) are both real read paths.
 CREATE INDEX IF NOT EXISTS "document_links_org_document_idx" ON "document_links" ("organization_id", "document_id");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "document_links_org_entity_idx" ON "document_links" ("organization_id", "entity_type", "entity_id");

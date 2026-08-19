@@ -40,7 +40,7 @@ const accuracyTelemetryInput = z.object({
   days: z.number().int().min(1).max(365).default(30),
 });
 
-/** 007-09: `documents:approve` gates the review decision itself; `documents:read` gates seeing the review surface at all — matches spec 04 §4.8's matrix (Accountant/VIEWER_FINANCE can view, never approve). Same plain-array-check shape `invitations.ts` already established for `users:manage`, since no endpoint has needed a full `packages/authz` `AuthContext` yet. */
+/** earlier work: `documents:approve` gates the review decision itself; `documents:read` gates seeing the review surface at all — matches the design's matrix (Accountant/VIEWER_FINANCE can view, never approve). Same plain-array-check shape `invitations.ts` already established for `users:manage`, since no endpoint has needed a full `packages/authz` `AuthContext` yet. */
 const requirePermission = (permissions: string[], permission: string) => {
   if (!permissions.includes(permission)) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'You do not have permission to perform this action.' });
@@ -56,13 +56,13 @@ const ensureBucketOnce = async () => {
 };
 
 /**
- * 007-04: classifies a freshly uploaded document synchronously, inside `confirmUpload`, using the
+ * classifies a freshly uploaded document synchronously, inside `confirmUpload`, using the
  * real Gemini vision call — confirmed with the user given classification is lighter-weight than
- * full extraction (007-05/06, which plan.md scopes to async/BullMQ specifically because of the
+ * full extraction (which the plan scopes to async/BullMQ specifically because of the
  * spike's measured 20-220s free-tier latency). No `GEMINI_API_KEY` (e.g. CI, a fresh local clone) is
  * "classification not attempted", not a guessed type — `confirmUpload` still succeeds with the
  * document left at `create`'s own `'OTHER'` default, matching how this endpoint already behaved
- * before 007-04 existed. A real provider error is treated the same way: the document is not
+ * before earlier work existed. A real provider error is treated the same way: the document is not
  * rejected over a classification failure, since upload succeeding is the load-bearing outcome here,
  * not classification.
  */
@@ -78,17 +78,17 @@ const classifyUploadedDocument = async (
 };
 
 /**
- * 007-02 (plan.md Phase 1): upload -> verify real bytes -> record. Same two-step presigned-upload
- * shape as `products.requestImageUpload`/`csvImport.requestUpload` (spec 14 §14.3/§14.7: presigned
+ * upload -> verify real bytes -> record. Same two-step presigned-upload
+ * shape as `products.requestImageUpload`/`csvImport.requestUpload` (the design/: presigned
  * URL, never proxied through the API; bytes verified server-side after upload, never trusted from
  * the client's declared content-type). `requestUpload` never touches `documents` and never mints a
  * real document id — the row is created ONLY at `confirmUpload`, once the actual uploaded bytes
  * have been downloaded, verified, and hashed.
  *
- * Malware/AV scanning is deliberately out of scope (matches 004-12's product-image precedent — no
+ * Malware/AV scanning is deliberately out of scope (matches earlier work's product-image precedent — no
  * card, no budget for a real scanning service); magic-byte format verification + a size cap are the
- * real mitigations here. XXE/PDF-bomb hardening (spec 14 §14.7) applies to PARSING a PDF's internal
- * structure, which this task never does — that belongs to 007-05/06 (extraction), not upload.
+ * real mitigations here. XXE/PDF-bomb hardening applies to PARSING a PDF's internal
+ * structure, which this task never does — that belongs to extraction, not upload.
  */
 export const documentsRouter = router({
   requestUpload: protectedProcedure.input(requestUploadInput).mutation(async ({ ctx, input }) => {
@@ -109,7 +109,7 @@ export const documentsRouter = router({
     return { uploadUrl, key };
   }),
 
-  /** Downloads and verifies the just-uploaded bytes (real magic-byte format, size cap), hashes them for future duplicate detection (007-07's job to act on), and creates the real `documents` row. */
+  /** Downloads and verifies the just-uploaded bytes (real magic-byte format, size cap), hashes them for future duplicate detection, and creates the real `documents` row. */
   confirmUpload: protectedProcedure.input(confirmUploadInput).mutation(async ({ ctx, input }) => {
     const storeRepository = new StoreRepository(ctx.db, ctx.session.organizationId);
     const store = await storeRepository.findById(input.storeId);
@@ -150,7 +150,7 @@ export const documentsRouter = router({
       await documentRepository.updateClassification(created.id, classification.type, classification.confidence);
     }
 
-    // 007-05: enqueue extraction — real, async (BullMQ), never synchronous like classification,
+    // enqueue extraction — real, async (BullMQ), never synchronous like classification,
     // since the spike measured 20-220s Gemini latency for a full extraction call. `jobId:
     // documentId` (set inside enqueueExtractionJob) makes a retried confirmUpload call idempotent
     // rather than double-enqueuing the same document.
@@ -184,9 +184,9 @@ export const documentsRouter = router({
   }),
 
   /**
-   * 007-13: the real list/search/filter view. `status`/`type` are real column filters; `query`
+   * the real list/search/filter view. `status`/`type` are real column filters; `query`
    * matches the latest extraction's supplier name or document number (extracted free text, not a
-   * real column — same JSONB-read approach 007-07's duplicate gate already established). A
+   * real column — same JSONB-read approach earlier work's duplicate gate already established). A
    * document with no extraction yet simply can't match a text query, honestly (I7).
    */
   search: protectedProcedure.input(searchInput).query(async ({ ctx, input }) => {
@@ -204,10 +204,10 @@ export const documentsRouter = router({
   }),
 
   /**
-   * 007-09: everything the review screen needs in one call — the document row, its latest
+   * everything the review screen needs in one call — the document row, its latest
    * extraction (fields/lines/confidence/validation issues), and a fresh presigned GET url for the
-   * original file (never a public URL — spec 14 §14.7, every object stays private). `documents:read`
-   * gates viewing at all (matches spec 04 §4.8: Accountant/VIEWER_FINANCE can view, Staff cannot).
+   * original file (never a public URL — the design, every object stays private). `documents:read`
+   * gates viewing at all (matches the design: Accountant/VIEWER_FINANCE can view, Staff cannot).
    * The image url is generated fresh on every call rather than cached, since a presigned url expires
    * — the review screen may sit open for a while.
    */
@@ -224,25 +224,25 @@ export const documentsRouter = router({
   }),
 
   /**
-   * A human decision on a document already at `REVIEW_REQUIRED` or `AUTO_APPROVED` (plan.md §5.6.1:
+   * A human decision on a document already at `REVIEW_REQUIRED` or `AUTO_APPROVED` (the plan :
    * an auto-approval is "still reviewable" — a human can override it). `documents:approve` is a
-   * SEPARATE, stricter permission from `documents:read` (spec 04 §4.8: Accountant can view but never
-   * approve). No field-editing/correction capture here — that is 007-10's explicit, separate scope
+   * SEPARATE, stricter permission from `documents:read` (the design: Accountant can view but never
+   * approve). No field-editing/correction capture here — that is earlier work's explicit, separate scope
    * (confirmed with the user); this endpoint only records the approve/reject decision itself.
    */
   /**
-   * 007-11 (plan.md Phase 6, "the transactional heart"): approving is not the end of the workflow
-   * — spec 05 §5.6.1's pipeline reads `APPROVED → posting`. After the approve status transition
+   * Approving is not the end of the workflow
+   * — the design's pipeline reads `APPROVED → posting`. After the approve status transition
    * succeeds, `PostingService.postDocument` runs in its own single transaction (I3/I8): price
    * history, a real stock receipt (lot + RECEIPT movement, which recomputes `stock_levels`'
    * moving-average cost), and provenance links, for every line with a CONFIRMED supplier-SKU
-   * mapping (007-10). A line with no mapping yet is skipped, not blocking (confirmed with the
+   * mapping. A line with no mapping yet is skipped, not blocking (confirmed with the
    * user) — the document still reaches `POSTED`. If posting itself fails, the approve transition
    * has already committed (a real, if narrow, two-step gap — acceptable since approve failing
    * silently would be worse than a document stuck at APPROVED needing a retry, and this project has
    * no PurchaseOrder/GoodsReceipt/InvoiceMatch tables yet to make posting fail on THEIR account).
    *
-   * 008-10 (plan.md Phase 4, spec 05 §5.2.4): immediately after posting, an `INVOICE`-type document
+   * immediately after posting, an `INVOICE`-type document
    * also runs the real three-way match (`InvoiceMatchRepository.runMatch`) — confirmed with the
    * user as the trigger point, since `PostingService` is already the one write path a posted
    * invoice goes through, and matching genuinely needs the same already-fetched extraction lines
@@ -296,7 +296,7 @@ export const documentsRouter = router({
       }
     }
 
-    // 009-18 — enqueued AFTER approve/posting genuinely succeeded, never inside the same
+    // enqueued AFTER approve/posting genuinely succeeded, never inside the same
     // transaction as either (a failed embedding job must not roll back a real approval). A
     // best-effort enqueue: a Redis hiccup here must not fail an approval that already committed.
     try {
@@ -324,16 +324,16 @@ export const documentsRouter = router({
   }),
 
   /**
-   * 007-10 (plan.md Phase 5): "correction capture → supplier-SKU mapping table." A reviewer maps
+   * "correction capture → supplier-SKU mapping table." A reviewer maps
    * one extraction line's SKU to a real product — the mapping becomes a PERMANENT
    * `supplier_products` row (`isConfirmed: true`), applied with certainty to every future invoice
-   * from this supplier carrying this exact SKU (no ML auto-mapping, per plan.md's own stated
+   * from this supplier carrying this exact SKU (no ML auto-mapping, per the plan's own stated
    * design principle: a wrong auto-mapping silently corrupts cost for months). Requires
    * `documents:approve` — mapping a supplier's product is a cost-affecting decision, the same
    * permission tier as approving the document itself, not merely viewing it (`documents:read`).
    *
    * The extracted supplier name must ALREADY resolve to a real `suppliers` row (exact,
-   * case-insensitive match, same resolution 007-07's validation gate uses) — this endpoint does
+   * case-insensitive match, same resolution earlier work's validation gate uses) — this endpoint does
    * not guess or fuzzy-match a supplier; if none exists yet, the reviewer creates one first via
    * `suppliers.create` (a genuinely new supplier on a first invoice is routine, not an error).
    *
@@ -406,9 +406,9 @@ export const documentsRouter = router({
   }),
 
   /**
-   * 007-12 (plan.md: "provenance links — document -> every number it produced"). Reads the real
-   * `document_links` rows 007-11's `PostingService` writes — the forward drill-through direction
-   * (spec 07 §7.6: "enables drill-through from any number to its source" is symmetric, but this
+   * the plan. Reads the real
+   * `document_links` rows earlier work's `PostingService` writes — the forward drill-through direction
+   * (the design: "enables drill-through from any number to its source" is symmetric, but this
    * query is the document's own view of what it produced, matching the review page's own layout).
    * `documents:read` gates this the same as `getForReview` — provenance is part of viewing a
    * document, not a separate, stricter capability.
@@ -424,9 +424,9 @@ export const documentsRouter = router({
   }),
 
   /**
-   * 007-14 (spec 12 §12.2's `extraction_auto_approval_rate`, plan.md: "measures whether the
+   * earlier work (the design's `extraction_auto_approval_rate`, the plan: "measures whether the
    * pipeline saves labor"). Org-wide (not store-scoped — matches `integrations.health`'s own
-   * 006-13 precedent that health/accuracy telemetry is a tenant-level view), no `*Id`-shaped input,
+   * earlier work precedent that health/accuracy telemetry is a tenant-level view), no `*Id`-shaped input,
    * so correctly NOT registered in the cross-tenant registry — its own dedicated cross-tenant test
    * covers the real risk directly (a different org's session sees only ITS OWN extractions).
    * `documents:read` gates it — viewing pipeline health is not a stricter capability than viewing

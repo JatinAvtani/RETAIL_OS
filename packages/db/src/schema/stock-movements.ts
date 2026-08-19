@@ -15,7 +15,7 @@ export const movementTypeEnum = pgEnum('movement_type', [
   'PRODUCTION_OUTPUT',
   'RETURN_TO_SUPPLIER',
   /**
-   * 006-08: a refund reverses the consumption a sale posted — the ingredients notionally came
+   * a refund reverses the consumption a sale posted — the ingredients notionally came
    * back into stock. A distinct value from `RETURN_TO_SUPPLIER` (a genuinely different real-world
    * event: inventory physically leaving to go back to a vendor) and from `WASTE` (which means
    * product was actually discarded, not that a sale was undone).
@@ -24,7 +24,7 @@ export const movementTypeEnum = pgEnum('movement_type', [
 ]);
 
 /**
- * 005-10 (spec 05 §5.1.5): the fixed set a `WASTE` movement's `reason_code` must be one of — "Free
+ * the fixed set a `WASTE` movement's `reason_code` must be one of — "Free
  * text here would make the whole module worthless" per the spec's own words. Not a `pgEnum` like
  * `movementTypeEnum` — `reason_code` stays a plain `text` column (it's used generically across
  * every movement type, not just `WASTE`), enforced instead by a CHECK constraint scoped to `WASTE`
@@ -45,7 +45,7 @@ export const wasteReasonCodeEnum = [
 ] as const;
 
 /**
- * The ledger (spec 07 §7.4) — the single factual record of everything that happened to stock.
+ * The ledger — the single factual record of everything that happened to stock.
  * Append-only: no UPDATE/DELETE, ever, enforced by revoking the grant from the application role
  * in the migration (see drizzle/0014_stock_movements.sql), not by application discipline alone.
  * Corrections are new compensating rows.
@@ -63,15 +63,15 @@ export const wasteReasonCodeEnum = [
  * PARTITION BY RANGE (occurred_at) and the partitions themselves are raw SQL in the migration —
  * Drizzle's schema builder cannot express partitioning (same limitation already noted on
  * audit_logs, which predates this table and was never actually partitioned; this one is, for
- * real, since 005-01 is the first task that actually needs the partitioning to exist).
+ * real, since earlier work is the first task that actually needs the partitioning to exist).
  *
  * PRIMARY KEY is (id, occurred_at), not bare id — Postgres requires every unique index on a
  * partitioned table to include the partition key, since uniqueness can't be enforced across
  * partitions by a single index.
  *
- * `lotId` has no FK yet — `lots` (005-02) doesn't exist. Same deferred-FK pattern as
+ * `lotId` has no FK yet — `lots` doesn't exist. Same deferred-FK pattern as
  * `unit_conversions.product_id` before `products` existed: the column is here now so this schema
- * doesn't need a later migration just to add it, the real FK constraint arrives with 005-02.
+ * doesn't need a later migration just to add it, the real FK constraint arrives with earlier work.
  */
 export const stockMovements = pgTable(
   'stock_movements',

@@ -14,9 +14,9 @@ const sign = (rawBody: string): string =>
   createHmac('sha256', SIGNING_KEY).update(NOTIFICATION_URL + rawBody, 'utf8').digest('base64');
 
 /**
- * 006-06: real HTTP verification for the Square webhook receiver. `global.fetch` is patched
+ * real HTTP verification for the Square webhook receiver. `global.fetch` is patched
  * (Square's host only) for the tests that let the triggered sync actually run — same standing
- * limitation as 006-04/006-05 (no live Square sandbox app exists yet).
+ * limitation as related work (no live Square sandbox app exists yet).
  */
 describe('POST /webhooks/square', () => {
   let app: FastifyInstance;

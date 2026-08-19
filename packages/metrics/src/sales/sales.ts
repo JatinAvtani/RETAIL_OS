@@ -3,7 +3,7 @@ import Decimal from 'decimal.js';
 import type { UnknownOr } from '../margin/margin.js';
 
 /**
- * Sales metrics — spec 12 §A, the 9 metrics grounding every downstream cost/margin figure. Every
+ * Sales metrics — the design, the 9 metrics grounding every downstream cost/margin figure. Every
  * function here is pure: given already-fetched rows (and, where a period boundary or daypart is
  * involved, the store's own timezone), it computes one number. No database access — that happens
  * at the boundary before these are called, matching `margin.ts`'s own precedent exactly.
@@ -154,8 +154,8 @@ export type DaypartSaleLine = { occurredAt: Date; lineTotal: Money };
 export type DaypartRevenue = Record<Daypart, Money>;
 
 /**
- * `revenue_per_daypart` — net revenue bucketed by LOCAL-time daypart (spec 12 §A: "Must use store
- * timezone," spec 08 §8.2: "dayparts computed in UTC are simply wrong"). Every line's `occurredAt`
+ * `revenue_per_daypart` — net revenue bucketed by LOCAL-time daypart (the design: "Must use store
+ * timezone," the design: "dayparts computed in UTC are simply wrong"). Every line's `occurredAt`
  * (a UTC instant) is resolved to the store's own wall-clock daypart via `resolveLocalDaypart`
  * before being summed — this is the ONE place that conversion happens, so a line occurring at
  * 23:45 local on a store in `America/Los_Angeles` is never miscounted into UTC's own, different,

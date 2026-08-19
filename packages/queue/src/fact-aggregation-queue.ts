@@ -3,7 +3,7 @@ import type Redis from 'ioredis';
 
 export const FACT_AGGREGATION_QUEUE_NAME = 'fact-aggregation';
 
-/** One job per (organizationId, storeId) — the incremental job's real per-store-timezone unit of work, matching `plan.md`'s own "a three-store group across two timezones has three different yesterdays" framing: each store gets its own job, not one job trying to handle every store's own local "yesterday" at once. */
+/** One job per (organizationId, storeId) — the incremental job's real per-store-timezone unit of work, matching `the plan`'s own "a three-store group across two timezones has three different yesterdays" framing: each store gets its own job, not one job trying to handle every store's own local "yesterday" at once. */
 export interface FactAggregationJobData {
   organizationId: string;
   storeId: string;
@@ -11,7 +11,7 @@ export interface FactAggregationJobData {
 }
 
 /**
- * 009-01 — the first REAL BullMQ repeatable job in this codebase (confirmed with the user: no
+ * the first REAL BullMQ repeatable job in this codebase (confirmed with the user: no
  * prior precedent exists anywhere; `packages/queue`'s only other queue, `document-extraction`, is
  * one-shot-per-document). `repeat.pattern` is a real cron expression (`0 5 * * *` — 05:00 UTC
  * daily, chosen to run well after every real timezone's own local midnight has passed everywhere
@@ -41,7 +41,7 @@ export const createFactAggregationQueue = (connection: Redis): Queue<FactAggrega
  * (`packages/db`) — this function has zero aggregation logic of its own, only real BullMQ
  * scheduling.
  *
- * Uses `Queue.upsertJobScheduler`, NOT `queue.add(..., { repeat: ... })` — confirmed against
+ * Uses `Queue.upsertJobScheduler`, NOT `queue.add(..., { repeat:... })` — confirmed against
  * BullMQ 6.0.8's real, currently-installed type definitions (`node_modules/.pnpm/bullmq@6.0.8.../
  * types/job-options.d.ts`) that `repeat` was removed from `Queue.add`'s own `JobsOptions` entirely
  * in this major version; its own doc comment states plainly "`repeat` is no longer a valid option

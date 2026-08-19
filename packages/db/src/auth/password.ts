@@ -2,7 +2,7 @@ import { hash, verify, type Algorithm } from '@node-rs/argon2';
 import { createHash } from 'node:crypto';
 
 /**
- * Explicit algorithm choice rather than relying on the library default — spec 14 §14.2 requires
+ * Explicit algorithm choice rather than relying on the library default — the design requires
  * Argon2id specifically (memory-hard, side-channel resistant), and a future library upgrade
  * changing its default must not silently change what this system hashes with.
  *
@@ -30,7 +30,7 @@ export type PasswordPolicyViolation = 'too_short' | 'breached';
 
 /**
  * Length-based policy plus a k-anonymity breach check against the HIBP Pwned Passwords API — no
- * composition rules (spec 14 §14.2: length-based, not composition-based) and no forced rotation.
+ * composition rules and no forced rotation.
  * Returns every violation found rather than stopping at the first, so a caller can show the user
  * everything wrong with one password in one round trip.
  */

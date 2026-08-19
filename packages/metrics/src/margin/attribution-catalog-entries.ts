@@ -8,9 +8,9 @@ import { computeMarginAttribution, computeMarginPerItem, computeTotalContributio
 import { requireMarginContext, type MarginMetricContext } from './catalog-entries.js';
 
 /**
- * The remaining spec 12 §C metrics — `margin_per_item`, `total_contribution`, `margin_trend`,
- * `margin_attribution` (§12.3, the "why" engine). `contribution_margin`/`contribution_margin_pct`
- * were already registered in 009-02's `catalog-entries.ts`; `menu_engineering_class` is explicitly
+ * The remaining the design metrics — `margin_per_item`, `total_contribution`, `margin_trend`,
+ * `margin_attribution` (, the "why" engine). `contribution_margin`/`contribution_margin_pct`
+ * were already registered in earlier work's `catalog-entries.ts`; `menu_engineering_class` is explicitly
  * V2 in the spec and is not built here.
  *
  * All four reuse `MarginMetricContext`'s injected `resolveRecipeUnitCost` — the same collaborator
@@ -28,7 +28,7 @@ type SingleItemParams = z.infer<typeof singleItemParams>;
 
 /**
  * `resolveRecipeUnitCost` takes a `recipeGroupId`, not a `menuItemId` — a menu item is a distinct
- * entity from the recipe it links to (spec 07 §7.3), so every metric here resolves the menu item's
+ * entity from the recipe it links to, so every metric here resolves the menu item's
  * `recipeGroupId` first. A menu item that no longer exists (or was never linked to a real recipe)
  * yields `'unknown'` here, never a thrown error that would blank the whole metric.
  */
@@ -146,7 +146,7 @@ export type ItemContributionRow = { menuItemId: string; menuItemName: string; to
 export type ItemsByContributionMetricResult = MetricResult & { items: ItemContributionRow[] };
 
 /**
- * `items_by_contribution` (spec 12 §12.5's owner-dashboard "top/bottom items by total
+ * `items_by_contribution` (the design's owner-dashboard "top/bottom items by total
  * contribution") — genuinely new: `total_contribution` above only ever computes ONE menu item per
  * call, with no existing catalog entry ranking every item sold in a period. Reuses
  * `findSoldMappedItemLines` (already `margin_attribution`'s own source for "which menu items sold")
@@ -298,7 +298,7 @@ export type MarginAttributionMetricResult = MetricResult & {
 };
 
 /**
- * `margin_attribution` (spec 12 §12.3) — see `attribution.ts`'s own header for the full formula
+ * `margin_attribution` — see `attribution.ts`'s own header for the full formula
  * and ADR-15 (docs/spec/18-engineering-decisions.md) for the deliberate, verified deviation from
  * the spec's literal `Q₀`-weighted `price_effect`/`cost_effect` terms.
  */

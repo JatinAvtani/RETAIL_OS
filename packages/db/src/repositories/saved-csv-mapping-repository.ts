@@ -8,7 +8,7 @@ import { TenantScopedRepository } from '../tenant-repository';
 type Db = ReturnType<typeof drizzle<typeof schema>>;
 
 /**
- * 006-10: plan.md's "save the column mapping per tenant so repeat imports are one click." One row
+ * the plan's "save the column mapping per tenant so repeat imports are one click." One row
  * per (organization, label) — `upsert` by label rather than a separate create/update pair, since
  * re-saving under the same label (a tenant tweaking their own saved mapping) is the common case,
  * not an error.

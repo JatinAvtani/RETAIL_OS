@@ -20,21 +20,21 @@ import {
 } from './purchasing.js';
 
 /**
- * Purchasing metrics registered into the catalog (spec 12 §F). Every `execute` follows the same
+ * Purchasing metrics registered into the catalog. Every `execute` follows the same
  * fetch-then-compute split as every other catalog file: a repository method fetches already-scoped
  * rows, the pure `compute*` functions in `purchasing.ts` do the arithmetic.
  *
  * `total_spend`/`spend_by_category` are scoped to purchase order lines whose parent PO's status is
  * `APPROVED` or later — confirmed with the user, since this codebase has no invoice-level
- * "approved" concept for spec 12 §F's literal "approved invoice totals" wording to map onto.
+ * "approved" concept for the design's literal "approved invoice totals" wording to map onto.
  * `spend_by_category` is parameterized by a single `categoryId` (one call per category), matching
- * this catalog's fixed one-scalar-per-call `MetricResult` contract — the same resolution 009-07
+ * this catalog's fixed one-scalar-per-call `MetricResult` contract — the same resolution earlier work
  * used for `waste_by_reason`, extended here to open-ended per-org category ids rather than a fixed
  * enum. `price_variance_total` is a genuinely new, quantity-weighted metric reading from
  * `invoice_match_lines` — deliberately distinct from `purchasing/supplier-performance.ts`'s
  * `computeTotalPriceVariance`, which is a different, narrower, already-confirmed metric.
  * `price_change_impact` reads the already-computed `variance` off the most recent real
- * `PRICE_CHANGE` supplier-performance event (008-14's `detectPriceChange`) rather than
+ * `PRICE_CHANGE` supplier-performance event rather than
  * recomputing the same `Δunit_price × trailing_12mo_qty` formula a second time (I2).
  */
 

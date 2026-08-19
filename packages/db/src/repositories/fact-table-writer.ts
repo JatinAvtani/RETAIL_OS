@@ -21,12 +21,12 @@ export type FactDailyStockValueRow = {
 };
 
 /**
- * The write side of every fact table (009-01) — real, idempotent rebuild via DELETE-then-INSERT
+ * The write side of every fact table — real, idempotent rebuild via DELETE-then-INSERT
  * within one transaction per (organization, store, date), confirmed with the user over an
  * expression-based `ON CONFLICT` upsert: this codebase's fact-table unique indexes use `COALESCE`
  * expressions (to make NULL grain columns comparable across rebuild runs), which Drizzle's
  * `onConflictDoUpdate` doesn't cleanly target — and delete-then-insert is arguably MORE correct for
- * "fully rebuildable from source" (plan.md) anyway: if a bug fix changes which grain rows should
+ * "fully rebuildable from source" anyway: if a bug fix changes which grain rows should
  * exist for a day (e.g. a reclassified product), a real upsert matched on the OLD grain would leave
  * stale orphaned rows behind, while delete-then-insert naturally reflects the new, correct set.
  *

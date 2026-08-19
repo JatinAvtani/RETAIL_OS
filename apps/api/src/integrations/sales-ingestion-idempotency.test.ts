@@ -26,16 +26,16 @@ const NOTIFICATION_URL = 'http://localhost:3001/webhooks/square';
 const SIGNING_KEY = 'test-square-webhook-signing-key-idempotency';
 
 /**
- * 006-07 (spec G5: "Idempotent ingestion — dedupe by source id. Retries must not double-count").
+ * The requirement ("Idempotent ingestion — dedupe by source id. Retries must not double-count").
  * Single-retry idempotency for one code path at a time is already proven three times over
  * (`packages/db/src/repositories/sales-transaction-repository.test.ts`'s `recordIfNew`,
  * `integrations.test.ts`'s catalog re-sync, `integrations-orders.test.ts`'s order re-sync). What
- * none of those prove — and what plan.md names explicitly as the real risk ("retries, backfills,
+ * none of those prove — and what the plan names explicitly as the real risk ("retries, backfills,
  * and OVERLAPPING WINDOWS must be safe by construction, not by luck") — is idempotency ACROSS
  * different ingestion paths converging on the same real-world order, and a genuinely multi-page
  * backfill whose window overlaps a prior sync's already-ingested data. This file proves both.
  */
-describe('sales ingestion idempotency across paths (006-07)', () => {
+describe('sales ingestion idempotency across paths', () => {
   let app: FastifyInstance;
   let originalEnv: Record<string, string | undefined>;
   const { db } = createDb(
@@ -75,7 +75,7 @@ describe('sales ingestion idempotency across paths (006-07)', () => {
   afterEach(async () => {
     globalThis.fetch = originalFetch;
     for (const orgId of createdOrgIds) {
-      // 006-08/006-12: syncSquareOrders now genuinely triggers consumption per line — real
+      // syncSquareOrders now genuinely triggers consumption per line — real
       // unmapped_sales/stock_movements/stock_levels/lots writes, not hypothetical ones.
       await db.delete(unmappedSales).where(eq(unmappedSales.organizationId, orgId));
       await db.delete(webhookEvents).where(eq(webhookEvents.organizationId, orgId));

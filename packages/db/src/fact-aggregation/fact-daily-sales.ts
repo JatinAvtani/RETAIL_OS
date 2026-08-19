@@ -3,7 +3,7 @@ import { generateId } from '@retailos/domain';
 import { resolveLocalDaypart, type StoreTimezone } from '@retailos/domain';
 
 /**
- * `fact_daily_sales`'s pure aggregation (009-01) — real source rows (already fetched, real
+ * `fact_daily_sales`'s pure aggregation — real source rows (already fetched, real
  * `DashboardRepository` queries) in, real fact rows out. No database access here, matching every
  * `packages/metrics` `compute*` function's own precedent: fetch-then-compute, kept separate so the
  * math is testable without Postgres.

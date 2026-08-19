@@ -1,7 +1,7 @@
 import { generateId } from '@retailos/domain';
 
 /**
- * `fact_purchase_lines`'s pure aggregation (009-01) — deliberately NOT a group-and-sum function
+ * `fact_purchase_lines`'s pure aggregation — deliberately NOT a group-and-sum function
  * like every other fact table here. Grain is one row per real PO LINE (confirmed with the user,
  * `packages/db/src/schema/fact-tables.ts`'s own header) — there is nothing to aggregate; this is
  * a direct, real 1:1 mapping from a fetched line to its fact row, kept as its own named function

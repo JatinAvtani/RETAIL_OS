@@ -32,7 +32,7 @@ export type SupplierGroupedSuggestions = {
 };
 
 /**
- * The plain-language rendering plan.md's spec 05 §5.2.1 shows verbatim: "Suggest 3 cases (36 kg).
+ * The plain-language rendering the plan's the design shows verbatim: "Suggest 3 cases (36 kg).
  * You use ~4.2 kg/day, have 9 kg (2.1 days), lead time is 2 days, target cover 10 days. Pack size
  * 12 kg." Built here (not in packages/domain) since it's presentation, not domain logic — the
  * suggestion's raw numbers are what packages/domain computes; how to phrase them for a manager is
@@ -58,7 +58,7 @@ const renderExplanation = (suggestion: ReorderSuggestion, unit: string | null): 
 };
 
 /**
- * 008-04: wires 008-02's `suggestReorder` (pure domain logic) to real data for the first time.
+ * wires earlier work's `suggestReorder` (pure domain logic) to real data for the first time.
  * Deliberately org-wide-per-store, one row per confirmed `supplier_products` mapping — an unmapped
  * supplier line has no pack size/MOQ/lead-time data to suggest against at all (I7: absence of a
  * mapping is not evidence a product needs reordering, so it's simply excluded, never defaulted).
@@ -71,7 +71,7 @@ const renderExplanation = (suggestion: ReorderSuggestion, unit: string | null): 
  *  - `consumptionHistory`: the trailing `CONSUMPTION_LOOKBACK_DAYS` days of `SALE_CONSUMPTION`
  *    movements, one row per day. A day with zero consumption movements is a REAL zero-consumption
  *    day (the store was open and nothing sold), not a closure — this codebase has no closure/
- *    operating-calendar table anywhere, so "closures excluded" (plan.md's own edge case) cannot be
+ *    operating-calendar table anywhere, so "closures excluded" cannot be
  *    honestly implemented yet; every returned day is marked `isClosureDay: false`. Flagged as a
  *    real, confirmed gap, not silently guessed around.
  *  - `leadTimeDays`/`minOrderValue`: read from `suppliers`, matching `supplierProducts`'s FK.
@@ -80,7 +80,7 @@ const renderExplanation = (suggestion: ReorderSuggestion, unit: string | null): 
  *    through unchanged (I7) rather than fabricating a price.
  *
  * Returns suggestions grouped by supplier — spec's D10 ("order grouping by supplier... manager
- * orders per supplier, not per item") and the natural shape for 008-05's PO-creation flow to
+ * orders per supplier, not per item") and the natural shape for earlier work's PO-creation flow to
  * consume directly (one PO per supplier group).
  */
 export const findReorderSuggestions = async (

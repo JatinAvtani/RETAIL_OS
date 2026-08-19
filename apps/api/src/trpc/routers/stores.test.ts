@@ -31,8 +31,8 @@ const asError = (body: TrpcSuccess | TrpcError): TrpcError['error'] => {
 };
 
 /**
- * Real Postgres + real Redis + real HTTP: proves object-level store scoping (spec 14 §14.3 rule
- * 2, task 003-07) — a Manager restricted to one store in `memberships.store_ids` genuinely cannot
+ * Real Postgres + real Redis + real HTTP: proves object-level store scoping (the design rule
+ * 2, task earlier work) — a Manager restricted to one store in `memberships.store_ids` genuinely cannot
  * see or fetch another store in the SAME org, and gets a 404, not a 403 (spec: a 403 confirms the
  * resource exists, which is an enumeration leak). This is a distinct check from tenant isolation
  * (a different org entirely, already covered by StoreRepository's own cross-tenant suite) — here

@@ -2,9 +2,9 @@ import { money, type CurrencyCode, type Money } from '@retailos/domain';
 import type { UnknownOr } from '../margin/margin.js';
 
 /**
- * Cost metrics — spec 12 §B. Four of the section's 8 metrics (`cogs_actual`, `cogs_theoretical`,
+ * Cost metrics — the design. Four of the section's 8 metrics (`cogs_actual`, `cogs_theoretical`,
  * `food_cost_percentage`, `cost_variance`) are already registered via `margin/catalog-entries.ts`
- * (009-02) — this file covers the remaining 4: `unit_cost_weighted_avg`, `unit_cost_latest`,
+ * — this file covers the remaining 4: `unit_cost_weighted_avg`, `unit_cost_latest`,
  * `recipe_cost`, `menu_item_cost`.
  *
  * `unit_cost_weighted_avg`/`unit_cost_latest` are thin — the real work (maintaining a weighted

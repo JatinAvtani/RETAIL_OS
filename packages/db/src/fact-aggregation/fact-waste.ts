@@ -2,10 +2,10 @@ import { Decimal } from 'decimal.js';
 import { generateId } from '@retailos/domain';
 
 /**
- * `fact_waste`'s pure aggregation (009-01). Grain: (productId, reasonCode). `qty` is always the
+ * `fact_waste`'s pure aggregation. Grain: (productId, reasonCode). `qty` is always the
  * real absolute quantity wasted; `value` is `null` (I7) the moment even one contributing movement
  * has an unknown `unit_cost` — never silently excluded from the qty total, matching
- * `computeWasteValueForReason`'s (009-07) own established unknown-cost discipline exactly.
+ * `computeWasteValueForReason`'s own established unknown-cost discipline exactly.
  */
 
 export type WasteRowForAggregation = {

@@ -111,7 +111,7 @@ describe('StockCountService', () => {
     await adminClient.end();
   });
 
-  it('freezes theoretical_quantity_t0 at startCount and does NOT change it even if stock_levels changes afterward (the T0 subtlety, spec 05 §5.1.4)', async () => {
+  it('freezes theoretical_quantity_t0 at startCount and does NOT change it even if stock_levels changes afterward (the T0 subtlety, the design)', async () => {
     const movementService = new MovementService(createScopedDb(client), organizationId);
     await movementService.postMovement({
       storeId,
@@ -191,7 +191,7 @@ describe('StockCountService', () => {
     // counting 100 would show a false +10 surplus — a phantom variance caused entirely by the
     // sale, not any real discrepancy. Because theoretical_t0 stays frozen at the ORIGINAL 100,
     // variance is genuinely zero — proving the post-T0 sale was correctly excluded from the
-    // comparison, exactly the T0-snapshot subtlety spec 05 §5.1.4 exists to guarantee.
+    // comparison, exactly the T0-snapshot subtlety the design exists to guarantee.
     await service.enterCount(lineId, '100.000000', userId);
     const submitted = await service.submitCount(count.id, userId);
     expect(submitted.status).toBe('SUBMITTED');
@@ -464,7 +464,7 @@ describe('StockCountService', () => {
     expect(() => new StockCountService(createScopedDb(client), '')).toThrow();
   });
 
-  describe('scoped count creation (005-12)', () => {
+  describe('scoped count creation', () => {
     let categoryId: string;
     let storageLocationId: string;
     let scopedProductId: string;

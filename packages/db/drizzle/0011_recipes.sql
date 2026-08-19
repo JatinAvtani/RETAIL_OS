@@ -87,13 +87,13 @@ ALTER TABLE "recipe_components" ADD CONSTRAINT "recipe_components_exactly_one_re
   );
 --> statement-breakpoint
 
--- Waste factor increases quantity, never decreases (plan.md's property-test list) - enforced as a
+-- Waste factor increases quantity, never decreases - enforced as a
 -- real constraint, not just a domain-layer convention, so a bad row can never even be written.
 ALTER TABLE "recipe_components" ADD CONSTRAINT "recipe_components_waste_factor_not_negative"
   CHECK ("waste_factor" >= 1);
 --> statement-breakpoint
 
--- Effective-dating enforced by the database (spec 08 SS8.4), identical mechanism to
+-- Effective-dating enforced by the database, identical mechanism to
 -- supplier_prices: two versions of the SAME recipe (same recipe_group_id) can never have
 -- overlapping validity periods. Requires btree_gist (see docker/postgres/init/01-extensions.sql,
 -- enabled in migration 0010) for GiST to index recipe_group_id's plain UUID equality.

@@ -20,14 +20,14 @@ export type ExpiryQueueRow = {
 };
 
 /**
- * 005-15 (plan.md Phase 6): ranks active lots by value at risk of expiring before they'll be used.
+ * ranks active lots by value at risk of expiring before they'll be used.
  * Rule-based, no AI — a suggestion the operator confirms, not a decision made for them.
  *
  * `avg_daily_consumption` doesn't exist anywhere as a stored or computed value yet, so this
  * function derives it inline: the trailing-30-day sum of `SALE_CONSUMPTION` movement quantities
  * (negative in the ledger) per (store, product, variant), divided by 30. 30 days was chosen (asked
  * the user) to smooth day-of-week noise while still reacting to a real recent demand shift, the
- * same tradeoff plan.md's own par-level discussion (005-09, spec 05 §5.1.3) makes for reorder math.
+ * same tradeoff the plan's own par-level discussion (the design) makes for reorder math.
  *
  * `consumption_cover = remaining_quantity / avg_daily_consumption` is undefined for a product with
  * zero consumption in the window (new product, or a product that simply hasn't sold). Per I7 this
@@ -42,12 +42,12 @@ export type ExpiryQueueRow = {
  * defaulted.
  *
  * Only `status = 'ACTIVE' AND remaining_quantity > 0` lots are considered, mirroring the FEFO index
- * predicate (plan.md Phase 1) — a `DEPLETED` or already-`EXPIRED` lot has nothing left to lose.
+ * predicate — a `DEPLETED` or already-`EXPIRED` lot has nothing left to lose.
  *
  * Deliberately cross-tenant by nature, same reasoning as `findStockLevelDrift`/`findBelowParLevels`/
  * `findNegativeStock` — an internal sweep across every tenant, not a single organization's scoped
  * request. `db` must be an admin-equivalent connection. Detection/ranking only: no event emission,
- * no notifications table, matching every other EPIC-005 sweep function's precedent.
+ * no notifications table, matching every other a later milestone sweep function's precedent.
  */
 export const findExpiryQueue = async (db: Db, asOf: Date = new Date()): Promise<ExpiryQueueRow[]> => {
   const asOfIso = asOf.toISOString();

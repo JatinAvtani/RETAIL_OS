@@ -24,8 +24,8 @@ const ADMIN_CONNECTION_STRING =
   process.env.TEST_DATABASE_URL_ADMIN ?? 'postgresql://postgres:postgres@localhost:5432/retailos';
 
 /**
- * Real-database proof that the 8 newly-registered sales metrics (spec 12 §A) compute correctly
- * through `executeMetric`. `net_revenue` (also spec 12 §A) is already covered by
+ * Real-database proof that the 8 newly-registered sales metrics compute correctly
+ * through `executeMetric`. `net_revenue` (also the design) is already covered by
  * `margin/catalog-entries.test.ts` — not re-tested here.
  */
 describe('registered sales metrics', () => {

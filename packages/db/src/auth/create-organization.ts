@@ -10,7 +10,7 @@ type Db = ReturnType<typeof drizzle<typeof schema>>;
  * The real, previously-missing "first user creates their workspace" step (found while building the
  * signup UI: `auth.signup` only ever created a `users` row — no procedure anywhere created an
  * organization, so a brand-new signup had no path to a usable account beyond `seed-demo.mts`, a raw
- * offline script). Confirmed with the user via `AskUserQuestion`: build this for real rather than
+ * offline script). settled deliberately: build this for real rather than
  * requiring every first user to be invited by someone who doesn't yet exist.
  *
  * A plain module-level function, not a method on `OrganizationRepository` — that class requires an

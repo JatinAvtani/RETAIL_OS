@@ -1,4 +1,4 @@
--- Hand-written. Follow-up to migration 0039 (already applied) — 009-01's own design was refined
+-- Hand-written. Follow-up to migration 0039 (already applied) — earlier work's own design was refined
 -- mid-task after confirming with the user that fact_daily_consumption.theoreticalCogs (a real
 -- STORE-WIDE dollar figure, no per-ingredient breakdown available — see
 -- packages/db/src/schema/fact-tables.ts's own header) needed a dedicated sentinel row per

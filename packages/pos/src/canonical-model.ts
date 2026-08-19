@@ -1,10 +1,10 @@
 import type { CurrencyCode } from '@retailos/domain';
 
 /**
- * 006-02 (plan.md Phase 1, spec 13 §13.3): "The canonical model is designed from two vendors'
+ * "The canonical model is designed from two vendors'
  * shapes, not one — designing it against Square alone guarantees a leaky abstraction that Toast
  * breaks." Researched both real API shapes before writing this file (only Square ships in this
- * MVP; Toast is V2, per task.md).
+ * MVP; Toast is V2, per the plan).
  *
  * The load-bearing structural fact: Square's `Order` is a flat `LineItem[]` — one order, one set
  * of tenders, one payment surface. Toast's `Order` is `Check[] → Selection[]` — a single order can
@@ -21,10 +21,10 @@ import type { CurrencyCode } from '@retailos/domain';
  * into it) is the lossy flattening this whole exercise exists to avoid.
  */
 /**
- * Deliberately wider than `sales_source` (`packages/db`'s real Postgres enum, 006-01):
+ * Deliberately wider than `sales_source` (`packages/db`'s real Postgres enum, earlier work):
  * `sales_source` only has `'square'|'csv'` — CSV is the other thing that actually writes a row in
  * this MVP, not Toast. `'toast'` exists here only so this interface can be typed against Toast's
- * real shape now, per plan.md's explicit instruction, without a Toast adapter or a Toast database
+ * real shape now, per the plan's explicit instruction, without a Toast adapter or a Toast database
  * row ever needing to exist. If a real Toast adapter ships later (V2), `sales_source` gains a
  * migration-added enum value at that point — this type doesn't need to change.
  */
@@ -54,7 +54,7 @@ export type ExternalLocation = {
  * fiction: Square's `CatalogObject` (type=ITEM) has NO price of its own — every priced, orderable
  * thing is a nested `ITEM_VARIATION` with its own SKU; Toast's `MenuItem` similarly has optional
  * `portions` as its size-variant mechanism. A product with only one real SKU still gets exactly one
- * variation row here — never collapsed to a variation-less item — so `pos_items` (006-01) always
+ * variation row here — never collapsed to a variation-less item — so `pos_items` always
  * has one predictable shape to upsert into, regardless of vendor.
  */
 export type ExternalCatalogItem = {
@@ -126,7 +126,7 @@ export type ExternalTransactionStatus = 'completed' | 'refunded' | 'voided';
  * separate transaction with no back-reference — the adapter's job is to surface that link, not
  * invent a synthetic one.
  *
- * `refundedAmount` (006-08): the TOTAL amount refunded against this order so far — Square's own
+ * `refundedAmount`: the TOTAL amount refunded against this order so far — Square's own
  * `refunds[]` array can hold several entries (a merchant partially refunding in stages), so this is
  * always the adapter's own SUM of every refund entry's amount, not one entry's amount. Undefined
  * when nothing has been refunded, never `0.00` (I7 — the absence of this field is itself the "no
@@ -154,7 +154,7 @@ export type ExternalEventType = 'transaction.updated' | 'catalog.updated';
  * vendor envelope (Square: `event_id`/`type`/`data.object`; Toast: `eventCategory`/`eventType`/a
  * dedup `guid`/the full inline Order JSON) is vendor-specific and never crosses this boundary
  * unparsed. `externalEventId` is the vendor's own dedup key (Square's `event_id`, Toast's `guid`)
- * — the ingestion pipeline (006-06) dedupes on this before ever touching business logic.
+ * — the ingestion pipeline dedupes on this before ever touching business logic.
  */
 export type ExternalEvent = {
   externalEventId: string;
@@ -170,8 +170,8 @@ export type Page<T> = {
 
 /**
  * Opaque per-connection credential/session handle. Never serialized/logged directly by anything
- * outside the adapter that produced it (006-03's job to encrypt at rest, envelope encryption per
- * spec 13 §13.3 — not built here, this is only the shape `authenticate` returns).
+ * outside the adapter that produced it (earlier work's job to encrypt at rest, envelope encryption per
+ * the design — not built here, this is only the shape `authenticate` returns).
  */
 export type Connection = {
   vendor: PosVendor;
@@ -179,8 +179,8 @@ export type Connection = {
 };
 
 /**
- * The adapter contract itself (spec 13 §13.3, plan.md Phase 1's exact sketch). One adapter per
- * vendor; `SquareAdapter` (006-03+) is the only real implementation in this MVP — this interface
+ * The adapter contract itself. One adapter per
+ * vendor; `SquareAdapter` is the only real implementation in this MVP — this interface
  * exists now, validated against Toast's real shape, so THAT implementation doesn't force a
  * breaking change to this contract later (spec's own stated reason for building the abstraction
  * "for the second integration, not the first," but designing it before the first ships anyway).
@@ -198,7 +198,7 @@ export interface PosAdapter {
 }
 
 /**
- * Lets the UI degrade honestly per vendor (spec 13 §13.3: "if a POS can't report channels, the
+ * Lets the UI degrade honestly per vendor (the design: "if a POS can't report channels, the
  * channel-margin view says 'not available with your POS' rather than showing an empty chart") —
  * never a silent empty result the UI can't distinguish from "genuinely zero."
  */

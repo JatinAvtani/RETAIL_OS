@@ -4,16 +4,16 @@
 -- ⚠️ REMEMBER: this file must ALSO get an entry in drizzle/meta/_journal.json, or Drizzle's
 -- migrate() silently never runs it (found the hard way building 0014_stock_movements.sql).
 --
--- lots (spec 07 §7.4, spec 08 §8.6): a received batch with expiry and actual cost — the
+-- lots: a received batch with expiry and actual cost — the
 -- workhorse for FEFO allocation, expiry tracking, and true cost-of-consumption. NOT partitioned
--- (unlike stock_movements) — spec 08 §8.8's partitioning table only lists stock_movements,
+-- (unlike stock_movements) — the design's partitioning table only lists stock_movements,
 -- sales_transactions/_lines, audit_logs, notifications, and fact tables; lots is a much smaller,
 -- actively-queried-by-status table, not an append-only high-volume ledger.
 CREATE TYPE "public"."lot_status" AS ENUM('ACTIVE', 'DEPLETED', 'EXPIRED');
 --> statement-breakpoint
 
 -- `goods_receipt_line_id` and `source_document_id` have no FK — the tables they'd reference
--- (purchasing/receiving, EPIC-008; documents, EPIC-007) don't exist yet in this codebase. Same
+-- (purchasing/receiving, a later milestone; documents, a later milestone) don't exist yet in this codebase. Same
 -- deferred-FK pattern already used for stock_movements.lot_id before this table existed: the
 -- column is here now so a later migration doesn't need to add it, the real FK constraint arrives
 -- once those epics build their tables.
@@ -70,7 +70,7 @@ EXCEPTION
 END $$;
 --> statement-breakpoint
 
--- The deferred FK from stock_movements.lot_id (005-01), now that lots exists — same
+-- The deferred FK from stock_movements.lot_id, now that lots exists — same
 -- expand-contract "contract" step already used for unit_conversions.product_id → products.id.
 DO $$ BEGIN
  ALTER TABLE "stock_movements" ADD CONSTRAINT "stock_movements_lot_id_lots_id_fk" FOREIGN KEY ("lot_id") REFERENCES "public"."lots"("id") ON DELETE no action ON UPDATE no action;

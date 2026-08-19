@@ -12,7 +12,7 @@ import { idColumn, softDelete, timestamps, optimisticVersion } from './columns';
 export const productTrackingPolicyEnum = pgEnum('product_tracking_policy', ['NONE', 'LOT', 'SERIAL']);
 
 /**
- * One Product entity for both purchased ingredients and sellable goods (spec 07 §7.3) —
+ * One Product entity for both purchased ingredients and sellable goods —
  * deliberate: a café buys and sells the same bottle of juice, and splitting "ingredient" from
  * "product" creates constant reconciliation between two records of the same physical thing.
  * `type` is the boolean-flag-equivalent distinction the spec calls for, expressed as an enum since
@@ -26,7 +26,7 @@ export const productTypeEnum = pgEnum('product_type', ['INGREDIENT', 'SELLABLE',
  * recipe consumption units, etc. all convert to/from this one unit via `unit_conversions`, never
  * directly between each other (I6).
  *
- * `storageLocationId` now has its real FK to `storage_locations.id` (004-13) — the
+ * `storageLocationId` now has its real FK to `storage_locations.id` — the
  * expand-contract "contract" step, same shape as `unit_conversions.productId` gaining its FK
  * once `products` existed.
  */
@@ -45,7 +45,7 @@ export const products = pgTable('products', {
   isPerishable: boolean('is_perishable').notNull().default(false),
   defaultShelfLifeDays: integer('default_shelf_life_days'),
   storageLocationId: uuid('storage_location_id').references(() => storageLocations.id),
-  // Stores the object's storage KEY (packages/storage), never a URL — spec 14 §14.5 objects are
+  // Stores the object's storage KEY (packages/storage), never a URL — the design objects are
   // never public; every read goes through a short-lived presigned URL generated on demand.
   imageKey: text('image_key'),
   type: productTypeEnum('type').notNull(),
@@ -55,7 +55,7 @@ export const products = pgTable('products', {
 });
 
 /**
- * Size/color/pack variations of a product (spec 07 §7.3). Every product gets a default variant on
+ * Size/color/pack variations of a product. Every product gets a default variant on
  * creation (enforced in the repository layer, not the schema — see ProductRepository.create) so
  * food service, which barely uses this dimension, never has to see it: exactly one variant with
  * `isDefault = true` and the product's own name. Fashion/grocery/electronics get the same table

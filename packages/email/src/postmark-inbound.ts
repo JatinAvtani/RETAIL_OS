@@ -1,5 +1,5 @@
 /**
- * 007-03 (plan.md Phase 1, F2): parsing + auth for Postmark's real Inbound Parse webhook payload
+ * parsing + auth for Postmark's real Inbound Parse webhook payload
  * shape, researched directly from Postmark's own developer docs (developer.postmark.com/developer/
  * webhooks/inbound-webhook), not guessed — matching this project's established discipline of
  * researching real vendor shapes before building (Square's Orders/Catalog APIs, Google's OAuth
@@ -90,7 +90,7 @@ export const parsePostmarkInboundPayload = (rawBody: string): PostmarkInboundPay
  * doc: "Postmark does not currently support HMAC webhook signature verification") — their
  * documented mechanism is HTTP Basic Auth embedded in the configured webhook URL
  * (`https://user:pass@host/webhook`), which Postmark then sends back as a real `Authorization:
- * Basic ...` header on every delivery. This is genuinely their real, complete auth story, not a
+ * Basic...` header on every delivery. This is genuinely their real, complete auth story, not a
  * simplification — there is no stronger mechanism to implement instead.
  */
 export const verifyPostmarkBasicAuth = (authorizationHeader: string | undefined, expectedUsername: string, expectedPassword: string): boolean => {
@@ -108,7 +108,7 @@ export const verifyPostmarkBasicAuth = (authorizationHeader: string | undefined,
 };
 
 /**
- * Extracts the tenant slug from a recipient address shaped `invoices@<slug>.retailos.app` (spec 13:
+ * Extracts the tenant slug from a recipient address shaped `invoices@<slug>.retailos.app` (the design's
  * "per-tenant address"). Returns null for any address that doesn't match this exact shape — a
  * malformed or unexpected recipient is "organization not resolved," never a guessed slug.
  */

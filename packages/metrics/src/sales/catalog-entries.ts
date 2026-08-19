@@ -16,12 +16,12 @@ import {
 } from './sales.js';
 
 /**
- * Sales metrics registered into the catalog (spec 12 §A) — `net_revenue` is already registered in
+ * Sales metrics registered into the catalog — `net_revenue` is already registered in
  * `margin/catalog-entries.ts` (it was built first, for the dashboard); the other 8 live here. Every
  * `execute` follows the same fetch-then-compute split as the margin entries: `DashboardRepository`
  * fetches period/store-bounded rows, the pure `compute*` functions in `sales.ts` do the arithmetic.
  *
- * `revenue_per_daypart` is the one metric here needing the store's own timezone (spec 12 §A:
+ * `revenue_per_daypart` is the one metric here needing the store's own timezone (the design:
  * "Must use store timezone") — its `execute` looks up `stores.timezone` directly via a plain
  * tenant-scoped query, the one piece of context none of the other sales metrics need.
  */
@@ -207,7 +207,7 @@ export const refundRateMetric = defineMetric<SalesMetricParams>({
  * `sales_mix_percentage` doesn't fit `MetricResult`'s single scalar `value` shape — it's genuinely
  * a breakdown, not one number. Registered with `value` as the top mix entry's percentage (the
  * single most useful scalar if a caller only reads `.value`) and the FULL breakdown in a
- * `breakdown`-shaped array via `provenance`'s sibling — matching spec 10 §10.3's own
+ * `breakdown`-shaped array via `provenance`'s sibling — matching the design's own
  * `MetricResult.breakdown?: MetricResult[]` field would require each entry to be a full nested
  * MetricResult, which is more machinery than this needs; instead the full list is returned
  * alongside `value` in a dedicated wider result type, consumed directly by anything (a future

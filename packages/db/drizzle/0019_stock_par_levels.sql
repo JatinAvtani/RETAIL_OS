@@ -1,8 +1,8 @@
 -- Hand-written, not `drizzle-kit generate` output — the snapshot chain has been stale since
 -- migration 0005 (see 0008_units_and_conversions.sql's header and project memory for why).
 --
--- 005-09's par-level/reorder-point storage (spec 03-product-scope.md M3). Pure data - the full
--- reorder calculation is a separate, later task (008-02). Both value columns nullable, never
+-- earlier work's par-level/reorder-point storage (the scope's M3 milestone). Pure data - the full
+-- reorder calculation is a separate, later task. Both value columns nullable, never
 -- defaulted to 0 - "not configured" must stay distinguishable from "the threshold is zero".
 CREATE TABLE IF NOT EXISTS "stock_par_levels" (
 	"organization_id" uuid NOT NULL,
