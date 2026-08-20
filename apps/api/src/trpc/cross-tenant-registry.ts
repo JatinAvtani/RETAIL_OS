@@ -27,6 +27,8 @@ import {
   InvoiceMatchRepository,
   InvitationRepository,
   ConversationRepository,
+  NotificationRepository,
+  NotificationRuleRepository,
 } from '@retailos/db';
 import { eq } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
@@ -38,14 +40,14 @@ import { PRODUCT_IMAGES_BUCKET, SALES_CSV_IMPORTS_BUCKET, DOCUMENTS_BUCKET, GOOD
 type Db = ReturnType<typeof createDb>['db'];
 
 /**
- * The design: "enumerate every registered route; for each, call with tenant B's
- * session against a tenant A resource id. Expect 403/404, never 200." This is the registry half of
- * that suite (see `cross-tenant.test.ts` for the runner) — a real, generic auto-attacker can't be
- * built without SOME per-endpoint knowledge, because there is no mechanical way to derive "what a
- * resource id looks like for this procedure" from a tRPC router alone (`stores.get` needs
- * `{ id: storeId }`; a hypothetical future `purchasing.get` might need `{ id: poId }`; an endpoint
- * with no resource id at all, like `invitations.create`, isn't in scope for THIS check — it has
- * nothing to attack by id).
+ * The design: "enumerate every registered route; for each, call with tenant B's session against a
+ * tenant A resource id. Expect 403/404, never 200." This is the registry half of that suite (see
+ * `cross-tenant.test.ts` for the runner) — a real, generic auto-attacker can't be built without
+ * SOME per-endpoint knowledge, because there is no mechanical way to derive "what a resource id
+ * looks like for this procedure" from a tRPC router alone (`stores.get` needs `{ id: storeId }`;
+ * a hypothetical future `purchasing.get` might need `{ id: poId }`; an endpoint with no resource
+ * id at all, like `invitations.create`, isn't in scope for THIS check — it has nothing to attack
+ * by id).
  *
  * The reusable part — and what makes this "every future endpoint inherits it automatically" true
  * in practice — is the RUNNER, not this file. Adding cross-tenant coverage for a new endpoint is
@@ -673,6 +675,26 @@ const seedConversation = async (db: Db, organizationId: string): Promise<string>
   await db.insert(users).values({ id: userId, email: `cross-tenant-probe-conversation-user-${userId}@example.test` });
   const conversationRepository = new ConversationRepository(db, organizationId);
   const { id } = await conversationRepository.create({ userId });
+  return id;
+};
+
+const seedNotification = async (db: Db, organizationId: string): Promise<string> => {
+  const ruleRepository = new NotificationRuleRepository(db, organizationId);
+  const { id: ruleId } = await ruleRepository.create({
+    ruleType: 'stock_below_reorder',
+    severity: 'HIGH',
+    threshold: {},
+    recipientRoles: ['MANAGER'],
+    channels: ['EMAIL'],
+  });
+  const notificationRepository = new NotificationRepository(db, organizationId);
+  const { id } = await notificationRepository.create({
+    ruleId,
+    severity: 'HIGH',
+    title: 'Cross-tenant probe notification',
+    body: 'Cross-tenant probe body.',
+    dedupKey: `cross-tenant-probe:${generateId()}`,
+  });
   return id;
 };
 
@@ -1546,5 +1568,36 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     type: 'query',
     seedResource: seedStore,
     buildInput: (resourceId) => ({ storeId: resourceId }),
+  },
+  {
+    // the notification centre's real list — tenant B must not be able to read tenant A's
+    // notifications (which carry real cited money figures via dollarImpact/body) by supplying
+    // tenant A's storeId. Same two-layer store check as assistant.briefing.
+    path: 'notifications.list',
+    type: 'query',
+    seedResource: seedStore,
+    buildInput: (resourceId) => ({ storeId: resourceId }),
+  },
+  {
+    path: 'notifications.unreadCount',
+    type: 'query',
+    seedResource: seedStore,
+    buildInput: (resourceId) => ({ storeId: resourceId }),
+  },
+  {
+    // tenant B marking tenant A's real notification read by guessed/observed id — a leak-adjacent
+    // tamper: it would silently clear tenant A's own unread badge without tenant A ever seeing it.
+    path: 'notifications.markRead',
+    type: 'mutation',
+    seedResource: seedNotification,
+    buildInput: (resourceId) => ({ id: resourceId }),
+  },
+  {
+    // tenant B marking tenant A's real notification "acted on" by guessed/observed id — would
+    // corrupt future action-rate tracking with a fabricated action tenant A never took.
+    path: 'notifications.markActed',
+    type: 'mutation',
+    seedResource: seedNotification,
+    buildInput: (resourceId) => ({ id: resourceId }),
   },
 ];

@@ -223,7 +223,12 @@ report HIGH I3 "Mutation of an append-only table" \
 # `.passed`/`.byCategory[...].total`/`.passed` are plain COUNTS of eval CASES (how many golden-set
 # questions ran/passed), never a money or quantity value - the regex matches "total" as a substring
 # regardless of what it's counting. No arithmetic on money or quantity flows through this type at all.
-r=$(search '[A-Za-z_]*([Pp]rice|[Cc]ost|[Aa]mount|[Tt]otal|[Rr]evenue|[Mm]argin|[Qq]uantity|[Qq]ty)[A-Za-z_]*[[:space:]]*:[[:space:]]*number\b' 'apps/api/src/integrations/csv-import\.ts|packages/db/src/repositories/csv-import-repository\.ts|packages/metrics/src/margin/margin\.ts|packages/metrics/src/inventory/inventory\.ts|packages/metrics/src/purchasing/purchasing\.ts|packages/assistant/src/action-draft\.ts|packages/assistant/src/eval/types\.ts|packages/assistant/src/citations\.ts' '*.ts')
+# relay-poll-processor.ts/start.ts excluded for the identical reason: `{ relayed, total }` is a plain
+# COUNT of outbox events processed in one poll tick (how many rows were relayed vs. how many were
+# unpublished), never a monetary value - the regex matches "total" as a substring regardless of what
+# is being counted. No arithmetic on money or quantity flows through this type; it's a log/telemetry
+# summary only.
+r=$(search '[A-Za-z_]*([Pp]rice|[Cc]ost|[Aa]mount|[Tt]otal|[Rr]evenue|[Mm]argin|[Qq]uantity|[Qq]ty)[A-Za-z_]*[[:space:]]*:[[:space:]]*number\b' 'apps/api/src/integrations/csv-import\.ts|packages/db/src/repositories/csv-import-repository\.ts|packages/metrics/src/margin/margin\.ts|packages/metrics/src/inventory/inventory\.ts|packages/metrics/src/purchasing/purchasing\.ts|packages/assistant/src/action-draft\.ts|packages/assistant/src/eval/types\.ts|packages/assistant/src/citations\.ts|apps/worker/src/relay-poll-processor\.ts|apps/worker/src/start\.ts' '*.ts')
 report HIGH I5 "Money or quantity typed as \`number\`" \
   "Float arithmetic on money loses precision silently. Use Money / Quantity<Unit>." "$r"
 

@@ -6,6 +6,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { trpc } from '@/lib/trpc';
 import { ThemeToggle } from './theme-toggle';
 import { CommandPalette } from './command-palette';
+import { NotificationBell } from './notification-bell';
 import { Logo } from './logo';
 import { cx } from './ui';
 
@@ -24,6 +25,7 @@ const NAV_GROUPS: { label: string; items: { href: string; label: string }[] }[] 
       { href: '/dashboard/manager', label: 'Manager view' },
       { href: '/purchase-orders/variance-queue', label: 'Variance queue' },
       { href: '/assistant', label: 'Assistant' },
+      { href: '/notifications', label: 'Notifications' },
     ],
   },
   {
@@ -449,6 +451,7 @@ export const AppShell = ({
                   {isMac ? '⌘K' : 'Ctrl+K'}
                 </kbd>
               </button>
+              <NotificationBell />
               <ThemeToggle />
               <button
                 type="button"

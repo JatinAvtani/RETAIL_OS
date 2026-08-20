@@ -58,3 +58,5 @@ export * from './repositories/document-embedding-repository';
 export * from './repositories/document-chunk-embedding-repository';
 export * from './repositories/conversation-repository';
 export * from './repositories/message-repository';
+export * from './repositories/notification-repository';
+export * from './outbox-relay';

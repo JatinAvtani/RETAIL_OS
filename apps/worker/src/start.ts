@@ -1,4 +1,5 @@
-import { buildExtractionWorker, buildFactAggregationWorker, buildEmbeddingWorker } from './worker';
+import { createQueueRedisConnection, createRelayPollQueue, registerRelayPollJob } from '@retailos/queue';
+import { buildExtractionWorker, buildFactAggregationWorker, buildEmbeddingWorker, buildRelayPollWorker, buildRuleEvaluationWorker } from './worker';
 
 const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
 const databaseUrl = process.env.APP_DATABASE_URL ?? process.env.DATABASE_URL ?? 'postgresql://retailos_app:retailos_app_local_only@localhost:5432/retailos';
@@ -48,3 +49,34 @@ embeddingWorker.on('failed', (job, err) => {
 });
 
 console.log('Document embedding worker started.');
+
+const relayPollWorker = buildRelayPollWorker({ redisUrl, databaseUrl });
+
+relayPollWorker.on('completed', (job, result: { relayed: number; total: number }) => {
+  if (result.total > 0) {
+    console.log(`Outbox relay poll ${job.id}: relayed ${result.relayed}/${result.total} unpublished events.`);
+  }
+});
+
+relayPollWorker.on('failed', (job, err) => {
+  console.error(`Outbox relay poll ${job?.id} failed: ${err.message}`);
+});
+
+const ruleEvaluationWorker = buildRuleEvaluationWorker({ redisUrl, databaseUrl });
+
+ruleEvaluationWorker.on('completed', (job) => {
+  console.log(`Rule evaluation ${job.id} completed for event ${job.data.eventType} (${job.data.outboxEventId}).`);
+});
+
+ruleEvaluationWorker.on('failed', (job, err) => {
+  console.error(`Rule evaluation ${job?.id} failed for event ${job?.data.eventType}: ${err.message}`);
+});
+
+console.log('Outbox relay + rule evaluation workers started.');
+
+// Registers (or re-registers, idempotently) the one system-wide relay-poll schedule — safe to
+// call on every worker startup, matching `registerFactAggregationJob`'s own upsert-based
+// idempotency (packages/queue).
+const relayPollQueue = createRelayPollQueue(createQueueRedisConnection(redisUrl));
+await registerRelayPollJob(relayPollQueue);
+console.log('Outbox relay poll schedule registered (every 15s).');

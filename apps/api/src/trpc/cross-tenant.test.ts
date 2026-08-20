@@ -19,6 +19,9 @@ import {
   memberships,
   menuItems,
   messages,
+  notificationDeliveries,
+  notificationRules,
+  notifications,
   organizations,
   outboxEvents,
   posConnections,
@@ -188,6 +191,11 @@ describe('cross-tenant suite (merge gate)', () => {
     for (const orgId of createdOrgIds) {
       await db.delete(messages).where(eq(messages.organizationId, orgId));
       await db.delete(conversations).where(eq(conversations.organizationId, orgId));
+      // notification_deliveries.userId references users — same reasoning as messages/conversations
+      // above, must be gone before the createdUserIds loop deletes those users. notifications
+      // itself has no direct FK to users, so it's cleaned up in the main org-scoped loop below
+      // alongside notification_rules, not here.
+      await db.delete(notificationDeliveries).where(eq(notificationDeliveries.organizationId, orgId));
     }
 
     for (const userId of createdUserIds) {
@@ -223,6 +231,12 @@ describe('cross-tenant suite (merge gate)', () => {
       // deleted there) — this delete only needs to handle the remaining lots rows.
       await db.delete(lots).where(eq(lots.organizationId, orgId));
       await db.delete(outboxEvents).where(eq(outboxEvents.organizationId, orgId));
+      // notifications.ruleId references notification_rules — child before parent, the same
+      // recurring FK-teardown-order class this shared fixture keeps hitting. notification_deliveries
+      // (which references BOTH notifications and users) is already cleaned up in the earlier
+      // users-scoped loop above, before this loop runs.
+      await db.delete(notifications).where(eq(notifications.organizationId, orgId));
+      await db.delete(notificationRules).where(eq(notificationRules.organizationId, orgId));
 
       const orgRecipes = await db.select({ id: recipes.id }).from(recipes).where(eq(recipes.organizationId, orgId));
       for (const r of orgRecipes) {

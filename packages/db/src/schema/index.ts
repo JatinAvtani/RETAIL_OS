@@ -34,3 +34,4 @@ export * from './invoice-matches';
 export * from './supplier-performance-events';
 export * from './fact-tables';
 export * from './conversations';
+export * from './notifications';

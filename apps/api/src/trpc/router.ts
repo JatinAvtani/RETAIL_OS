@@ -21,6 +21,7 @@ import { settingsRouter } from './routers/settings';
 import { supplierPerformanceRouter } from './routers/supplier-performance';
 import { searchRouter } from './routers/search';
 import { assistantRouter } from './routers/assistant';
+import { notificationsRouter } from './routers/notifications';
 
 export const appRouter = router({
   auth: authRouter,
@@ -45,6 +46,7 @@ export const appRouter = router({
   supplierPerformance: supplierPerformanceRouter,
   search: searchRouter,
   assistant: assistantRouter,
+  notifications: notificationsRouter,
 });
 
 export type AppRouter = typeof appRouter;

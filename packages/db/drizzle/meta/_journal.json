@@ -309,6 +309,20 @@
       "when": 1789400000000,
       "tag": "0044_document_chunk_embeddings",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1789500000000,
+      "tag": "0045_notifications",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1789600000000,
+      "tag": "0046_notifications_read_at",
+      "breakpoints": true
     }
   ]
 }
