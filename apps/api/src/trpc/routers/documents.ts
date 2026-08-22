@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { generateId } from '@retailos/domain';
 import { computeExtractionAutoApprovalRate, computeValidationIssueFrequency } from '@retailos/metrics';
-import { DocumentRepository, InvoiceMatchRepository, PostingService, StoreRepository, SupplierProductRepository, SupplierRepository } from '@retailos/db';
+import { DocumentRepository, DocumentUploadBatchRepository, InvoiceMatchRepository, PostingService, StoreRepository, SupplierProductRepository, SupplierRepository } from '@retailos/db';
 import { canAccessStore } from '@retailos/authz';
 import { classifyDocument } from '@retailos/ai';
 import { enqueueExtractionJob, enqueueEmbeddingJob } from '@retailos/queue';
@@ -20,7 +20,9 @@ import { protectedProcedure, router } from '../trpc';
 import { storageClient, DOCUMENTS_BUCKET, extractionQueue, embeddingQueue } from '../context';
 
 const requestUploadInput = z.object({ storeId: z.string().uuid() });
-const confirmUploadInput = z.object({ storeId: z.string().uuid(), key: z.string() });
+const confirmUploadInput = z.object({ storeId: z.string().uuid(), key: z.string(), uploadBatchId: z.string().uuid().optional() });
+const createUploadBatchInput = z.object({ storeId: z.string().uuid(), expectedCount: z.number().int().min(1).max(500) });
+const getBatchProgressInput = z.object({ batchId: z.string().uuid() });
 const getDocumentInput = z.object({ documentId: z.string().uuid() });
 const listInput = z.object({ storeId: z.string().uuid() });
 const searchInput = z.object({
@@ -91,6 +93,47 @@ const classifyUploadedDocument = async (
  * structure, which this task never does — that belongs to extraction, not upload.
  */
 export const documentsRouter = router({
+  /**
+   * 012-02: the real "bulk upload session" marker — created ONCE, before any file in a batch
+   * starts uploading, with the real client-known file count as `expectedCount`. Every subsequent
+   * `confirmUpload` in the same session passes this id back so `getBatchProgress` can derive real,
+   * scoped counts (I2 — no separate progress counter to keep in sync).
+   */
+  createUploadBatch: protectedProcedure.input(createUploadBatchInput).mutation(async ({ ctx, input }) => {
+    const storeRepository = new StoreRepository(ctx.db, ctx.session.organizationId);
+    const store = await storeRepository.findById(input.storeId);
+    if (!store || !canAccessStore(ctx.session, input.storeId)) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Store not found.' });
+    }
+    const batchRepository = new DocumentUploadBatchRepository(ctx.db, ctx.session.organizationId);
+    const { id } = await batchRepository.create({
+      storeId: input.storeId,
+      expectedCount: input.expectedCount,
+      createdByUserId: ctx.session.userId,
+    });
+    return { id, expectedCount: input.expectedCount };
+  }),
+
+  /**
+   * Real counts, grouped by `documents.status`, derived fresh on every call — never a cached
+   * snapshot, so "47 of 90 processed" is always the true current state, including documents still
+   * mid-extraction. `uploadedCount` can legitimately be LESS than `expectedCount` for a while (a
+   * client still mid-upload, or one that failed and was never confirmed) — that gap IS the honest
+   * signal a caller polls this to see, never papered over.
+   */
+  getBatchProgress: protectedProcedure.input(getBatchProgressInput).query(async ({ ctx, input }) => {
+    const batchRepository = new DocumentUploadBatchRepository(ctx.db, ctx.session.organizationId);
+    const batch = await batchRepository.findById(input.batchId);
+    if (!batch || !canAccessStore(ctx.session, batch.storeId)) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Upload batch not found.' });
+    }
+    const progress = await batchRepository.getProgress(input.batchId);
+    if (!progress) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Upload batch not found.' });
+    }
+    return progress;
+  }),
+
   requestUpload: protectedProcedure.input(requestUploadInput).mutation(async ({ ctx, input }) => {
     const storeRepository = new StoreRepository(ctx.db, ctx.session.organizationId);
     const store = await storeRepository.findById(input.storeId);
@@ -121,6 +164,18 @@ export const documentsRouter = router({
       throw new TRPCError({ code: 'FORBIDDEN', message: 'Upload key does not belong to this organization.' });
     }
 
+    // uploadBatchId is caller-supplied and optional — a cross-org id must not silently attach this
+    // document to another tenant's batch (which would leak this org's real upload activity into
+    // that batch's getBatchProgress count). TenantScopedRepository.findById already can't SEE a
+    // cross-org row (RLS + the app-layer predicate), so a genuine 404 here is the correct signal.
+    if (input.uploadBatchId !== undefined) {
+      const batchRepository = new DocumentUploadBatchRepository(ctx.db, ctx.session.organizationId);
+      const batch = await batchRepository.findById(input.uploadBatchId);
+      if (!batch || batch.storeId !== input.storeId) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Upload batch not found.' });
+      }
+    }
+
     const bytes = await getObjectBytes(storageClient, DOCUMENTS_BUCKET, input.key);
     const validation = validateDocumentUpload(bytes);
     if (!validation.valid) {
@@ -143,6 +198,7 @@ export const documentsRouter = router({
       mimeType,
       sizeBytes: bytes.length,
       uploadedByUserId: ctx.session.userId,
+      ...(input.uploadBatchId !== undefined ? { uploadBatchId: input.uploadBatchId } : {}),
     });
 
     const classification = await classifyUploadedDocument(bytes, mimeType);

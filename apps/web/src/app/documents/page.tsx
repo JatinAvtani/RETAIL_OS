@@ -12,6 +12,8 @@ type DocumentRow = Awaited<ReturnType<typeof trpc.documents.search.query>>[numbe
 
 type UploadState = { fileName: string; status: 'uploading' | 'done' | 'error'; message?: string };
 
+type BatchProgress = Awaited<ReturnType<typeof trpc.documents.getBatchProgress.query>>;
+
 const ACCEPTED_TYPES = ['application/pdf', 'image/jpeg', 'image/png'];
 
 const statusTone = (status: DocumentRow['status']) => {
@@ -32,6 +34,37 @@ const statusLabel: Record<DocumentRow['status'], string> = {
 };
 
 const DOCUMENT_TYPES = ['INVOICE', 'DELIVERY_NOTE', 'CREDIT_NOTE', 'QUOTE', 'CONTRACT', 'CERTIFICATE', 'OTHER'] as const;
+
+/**
+ * 012-02: real, scoped progress for one bulk-upload session — "47 of 90 processed" (plan.md's own
+ * wording), never a fabricated fraction. `uploadedCount` can legitimately sit below `expectedCount`
+ * while files are still mid-upload; a document reaching REVIEW_REQUIRED/AUTO_APPROVED/APPROVED
+ * counts as "processed" (extraction has genuinely run), UPLOADED/PROCESSING do not yet.
+ */
+const PROCESSED_STATUSES = ['REVIEW_REQUIRED', 'AUTO_APPROVED', 'APPROVED', 'REJECTED', 'POSTED'] as const;
+
+const BatchProgressPanel = ({ progress }: { progress: BatchProgress }) => {
+  const processedCount = PROCESSED_STATUSES.reduce((sum, status) => sum + (progress.countsByStatus[status] ?? 0), 0);
+  const percent = progress.expectedCount > 0 ? Math.round((progress.uploadedCount / progress.expectedCount) * 100) : 0;
+
+  return (
+    <Card className="mb-6 p-5">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-content">Bulk upload progress</h2>
+        <span className="font-mono text-sm text-content-muted">
+          {progress.uploadedCount} of {progress.expectedCount} uploaded
+        </span>
+      </div>
+      <div className="mt-3 h-2 overflow-hidden rounded-full bg-surface-sunken">
+        <div className="h-full rounded-full bg-accent transition-[width]" style={{ width: `${percent}%` }} />
+      </div>
+      <p className="mt-2 text-xs text-content-muted">
+        {processedCount} of {progress.uploadedCount} uploaded document{progress.uploadedCount === 1 ? '' : 's'} processed
+        so far — extraction runs in the background, so partial results are usable immediately below.
+      </p>
+    </Card>
+  );
+};
 
 /**
  * extraction accuracy telemetry (the design's `extraction_auto_approval_rate` — "measures
@@ -94,6 +127,8 @@ export default function DocumentsPage() {
   const [uploads, setUploads] = useState<UploadState[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [batchId, setBatchId] = useState<string | null>(null);
+  const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
 
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
@@ -132,7 +167,7 @@ export default function DocumentsPage() {
     load();
   }, [load]);
 
-  const uploadOne = async (file: File) => {
+  const uploadOne = async (file: File, uploadBatchId?: string) => {
     if (!selectedStoreId) return;
     setUploads((current) => [...current, { fileName: file.name, status: 'uploading' }]);
 
@@ -148,7 +183,11 @@ export default function DocumentsPage() {
         throw new Error('Upload to storage failed.');
       }
 
-      await trpc.documents.confirmUpload.mutate({ storeId: selectedStoreId, key });
+      await trpc.documents.confirmUpload.mutate({
+        storeId: selectedStoreId,
+        key,
+        ...(uploadBatchId ? { uploadBatchId } : {}),
+      });
 
       setUploads((current) =>
         current.map((u) => (u.fileName === file.name && u.status === 'uploading' ? { ...u, status: 'done' } : u))
@@ -162,19 +201,54 @@ export default function DocumentsPage() {
     }
   };
 
-  const uploadFiles = (fileList: FileList | File[]) => {
+  /**
+   * 012-02: a real `document_upload_batches` row is created FIRST, with the real client-known
+   * file count — but only when there's actually more than one file. A single ad-hoc drop stays
+   * exactly as before (no batch, no progress panel) — the batch/progress UI exists for the case
+   * plan.md actually names ("upload 90 days of invoices"), not every single upload.
+   */
+  const uploadFiles = async (fileList: FileList | File[]) => {
     const files = Array.from(fileList);
     setUploads([]);
-    for (const file of files) {
-      void uploadOne(file);
+    if (!selectedStoreId || files.length === 0) return;
+
+    if (files.length > 1) {
+      const created = await trpc.documents.createUploadBatch.mutate({
+        storeId: selectedStoreId,
+        expectedCount: files.length,
+      });
+      setBatchId(created.id);
+      setBatchProgress({ batchId: created.id, expectedCount: created.expectedCount, uploadedCount: 0, countsByStatus: {} });
+      for (const file of files) {
+        void uploadOne(file, created.id);
+      }
+    } else {
+      setBatchId(null);
+      setBatchProgress(null);
+      for (const file of files) {
+        void uploadOne(file);
+      }
     }
   };
+
+  // Polls the real batch progress every 2s while a batch is active — stops once every expected
+  // document has a real row (uploadedCount can never exceed expectedCount from THIS client's own
+  // uploads, but polling continues regardless in case of a slow/failed individual file).
+  useEffect(() => {
+    if (!batchId) return;
+    const poll = () => {
+      trpc.documents.getBatchProgress.query({ batchId }).then(setBatchProgress).catch(() => undefined);
+    };
+    poll();
+    const interval = setInterval(poll, 2000);
+    return () => clearInterval(interval);
+  }, [batchId]);
 
   const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setIsDragging(false);
     if (event.dataTransfer.files.length > 0) {
-      uploadFiles(event.dataTransfer.files);
+      void uploadFiles(event.dataTransfer.files);
     }
   };
 
@@ -239,7 +313,7 @@ export default function DocumentsPage() {
               accept={ACCEPTED_TYPES.join(',')}
               className="hidden"
               onChange={(e) => {
-                if (e.target.files && e.target.files.length > 0) uploadFiles(e.target.files);
+                if (e.target.files && e.target.files.length > 0) void uploadFiles(e.target.files);
                 e.target.value = '';
               }}
             />
@@ -259,6 +333,8 @@ export default function DocumentsPage() {
           )}
         </Card>
       )}
+
+      {batchProgress && <BatchProgressPanel progress={batchProgress} />}
 
       {!storesLoading && stores.length > 0 && (
         <Card className="mb-6">

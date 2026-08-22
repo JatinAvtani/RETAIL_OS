@@ -22,6 +22,10 @@ import { supplierPerformanceRouter } from './routers/supplier-performance';
 import { searchRouter } from './routers/search';
 import { assistantRouter } from './routers/assistant';
 import { notificationsRouter } from './routers/notifications';
+import { onboardingRouter } from './routers/onboarding';
+import { parLevelsRouter } from './routers/par-levels';
+import { productDetectionRouter } from './routers/product-detection';
+import { firstFindingReportRouter } from './routers/first-finding-report';
 
 export const appRouter = router({
   auth: authRouter,
@@ -47,6 +51,10 @@ export const appRouter = router({
   search: searchRouter,
   assistant: assistantRouter,
   notifications: notificationsRouter,
+  onboarding: onboardingRouter,
+  parLevels: parLevelsRouter,
+  productDetection: productDetectionRouter,
+  firstFindingReport: firstFindingReportRouter,
 });
 
 export type AppRouter = typeof appRouter;

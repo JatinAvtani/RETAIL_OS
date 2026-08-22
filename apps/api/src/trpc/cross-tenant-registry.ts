@@ -29,6 +29,7 @@ import {
   ConversationRepository,
   NotificationRepository,
   NotificationRuleRepository,
+  DocumentUploadBatchRepository,
 } from '@retailos/db';
 import { eq } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
@@ -690,6 +691,14 @@ const seedNotificationRule = async (db: Db, organizationId: string): Promise<str
   return id;
 };
 
+/** Seeds a real document_upload_batches row — 012-02's own new table, what `documents.getBatchProgress`'s own-resource case needs. */
+const seedUploadBatch = async (db: Db, organizationId: string): Promise<string> => {
+  const storeId = await seedStore(db, organizationId);
+  const batchRepository = new DocumentUploadBatchRepository(db, organizationId);
+  const { id } = await batchRepository.create({ storeId, expectedCount: 3 });
+  return id;
+};
+
 const seedNotification = async (db: Db, organizationId: string): Promise<string> => {
   const ruleRepository = new NotificationRuleRepository(db, organizationId);
   const { id: ruleId } = await ruleRepository.create({
@@ -782,6 +791,14 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     type: 'mutation',
     seedResource: seedProduct,
     buildInput: (resourceId) => ({ id: resourceId, name: 'Cross-tenant update attempt' }),
+  },
+  {
+    // the onboarding wizard's own new read path (012-01) — tenant B reading tenant A's real
+    // product's variant list (which can reveal a real SKU/barcode) by guessed/observed productId.
+    path: 'products.getVariants',
+    type: 'query',
+    seedResource: seedProduct,
+    buildInput: (resourceId) => ({ id: resourceId }),
   },
   {
     // Same shape as products.create's entry: not a fetch-by-id, but a create REFERENCING another
@@ -1201,6 +1218,22 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     type: 'mutation',
     seedResource: seedStore,
     buildInput: (resourceId) => ({ storeId: resourceId }),
+  },
+  {
+    // 012-02: store-scoped, same shape as documents.requestUpload — no batch row exists yet at
+    // this point in the flow.
+    path: 'documents.createUploadBatch',
+    type: 'mutation',
+    seedResource: seedStore,
+    buildInput: (resourceId) => ({ storeId: resourceId, expectedCount: 5 }),
+  },
+  {
+    // 012-02: tenant B reading tenant A's real upload-batch progress (which reveals real document
+    // counts/statuses for an in-progress bulk backfill) by guessed/observed batchId.
+    path: 'documents.getBatchProgress',
+    type: 'query',
+    seedResource: seedUploadBatch,
+    buildInput: (resourceId) => ({ batchId: resourceId }),
   },
   {
     // Store-scoped confirmUpload attack, same shape as csvImport.confirmUpload — the FIRST check
@@ -1626,5 +1659,84 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
       recipientRoles: ['MANAGER'],
       channels: ['EMAIL'],
     }),
+  },
+  {
+    // the onboarding wizard's own new write path (012-01) — tenant B silently setting a par
+    // level/reorder point against tenant A's real store, corrupting a real reorder threshold
+    // tenant A depends on. Same two-layer store check every other store-scoped mutation uses.
+    path: 'parLevels.set',
+    type: 'mutation',
+    seedResource: async (db, organizationId) => {
+      const { storeId } = await seedStoreAndProduct(db, organizationId);
+      return storeId;
+    },
+    buildInput: async (resourceId, organizationId, db) => {
+      const [product] = await db.select({ id: products.id }).from(products).where(eq(products.organizationId, organizationId));
+      const [variant] = product
+        ? await db.select({ id: productVariants.id }).from(productVariants).where(eq(productVariants.productId, product.id))
+        : [undefined];
+      return {
+        storeId: resourceId,
+        productId: product?.id ?? generateId(),
+        variantId: variant?.id ?? generateId(),
+        parLevel: '10.000000',
+        reorderPoint: '5.000000',
+      };
+    },
+  },
+  {
+    path: 'parLevels.listForStore',
+    type: 'query',
+    seedResource: seedStore,
+    buildInput: (resourceId) => ({ storeId: resourceId }),
+  },
+  {
+    // 012-03: tenant B reading tenant A's real detected-product candidates (which reveal real
+    // invoice line text, supplier names, and prices) by guessed/observed storeId.
+    path: 'productDetection.detectProducts',
+    type: 'query',
+    seedResource: seedStore,
+    buildInput: (resourceId) => ({ storeId: resourceId }),
+  },
+  {
+    // 012-04: same risk shape as detectProducts — tenant B reading tenant A's real detected-supplier
+    // candidates (which reveal real supplier names from tenant A's own invoices) by guessed storeId.
+    path: 'productDetection.detectSuppliers',
+    type: 'query',
+    seedResource: seedStore,
+    buildInput: (resourceId) => ({ storeId: resourceId }),
+  },
+  {
+    // 012-05: tenant B creating a real supplier row inside tenant A's org by guessing tenant A's
+    // storeId — the FIRST check this mutation runs is store ownership.
+    path: 'productDetection.confirmSupplier',
+    type: 'mutation',
+    seedResource: seedStore,
+    buildInput: (resourceId) => ({ storeId: resourceId, name: 'Cross-tenant probe confirm supplier' }),
+  },
+  {
+    // 012-05: tenant B creating a real product + confirmed supplier_products mapping inside tenant
+    // A's org by guessing tenant A's storeId — a genuinely dangerous write (I4), not just a read
+    // leak. The own-resource case has no real evidence lines to resolve, so it exercises the
+    // store-ownership check succeeding and the product still being created with 0 confirmed
+    // mappings + a real skippedLines explanation — a legitimate, honest outcome, not a failure.
+    path: 'productDetection.confirmProduct',
+    type: 'mutation',
+    seedResource: seedStore,
+    buildInput: (resourceId) => ({
+      storeId: resourceId,
+      sku: `cross-tenant-probe-confirm-${generateId()}`,
+      name: 'Cross-tenant probe confirm product',
+      baseUnitCode: 'each',
+      evidenceLines: [{ documentId: generateId(), lineIndex: 0 }],
+    }),
+  },
+  {
+    // 012-10: tenant B reading tenant A's real first-finding report (real supplier names, real
+    // dollar impacts, real invoice totals) by guessed/observed storeId.
+    path: 'firstFindingReport.generate',
+    type: 'query',
+    seedResource: seedStore,
+    buildInput: (resourceId) => ({ storeId: resourceId, days: 90 }),
   },
 ];

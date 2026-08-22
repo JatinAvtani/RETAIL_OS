@@ -95,6 +95,26 @@ export const productsRouter = router({
     return product;
   }),
 
+  /**
+   * Every product has a default variant from creation (`ProductRepository.create`'s own
+   * invariant) — no caller needed to resolve one to an id before the onboarding wizard's par-levels
+   * step (012-01), the first UI needing a real `variantId` for a product picked by name alone.
+   *
+   * `findVariants` itself already returns `[]`, not a throw, for a cross-org productId — a real,
+   * genuine 200 that the cross-tenant registry's own completeness check correctly caught (a `200`
+   * with an empty result for a cross-org id lookup is still a convention violation this codebase
+   * doesn't allow, matching `invoiceMatches.getByDocument`'s own documented precedent). Checking
+   * ownership explicitly here, the same shape as `get` above, turns that into a real 404.
+   */
+  getVariants: protectedProcedure.input(getInput).query(async ({ ctx, input }) => {
+    const productRepository = new ProductRepository(ctx.db, ctx.session.organizationId);
+    const product = await productRepository.findById(input.id);
+    if (!product) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Product not found.' });
+    }
+    return productRepository.findVariants(input.id);
+  }),
+
   create: protectedProcedure.input(createInput).mutation(async ({ ctx, input }) => {
     // baseUnitId/categoryId are real FKs, but neither failure mode should surface as a raw
     // Postgres constraint error — verifying both up front, the same shape as

@@ -2,6 +2,7 @@ import { bigint, integer, jsonb, numeric, pgEnum, pgTable, text, timestamp, uniq
 import { organizations } from './organizations';
 import { stores } from './stores';
 import { users } from './users';
+import { documentUploadBatches } from './document-upload-batches';
 import { idColumn, softDelete, timestamps, vector } from './columns';
 
 /**
@@ -73,6 +74,9 @@ export const documents = pgTable(
     version: integer('version').notNull().default(1),
     supersedesId: uuid('supersedes_id').references((): AnyPgColumn => documents.id),
     uploadedByUserId: uuid('uploaded_by_user_id').references(() => users.id),
+    // Nullable: a single ad-hoc upload (the pre-existing /documents drop-zone, still fully
+    // supported) has no batch at all — this column is purely additive, 012-02's own scope.
+    uploadBatchId: uuid('upload_batch_id').references(() => documentUploadBatches.id),
     ...timestamps,
     ...softDelete,
   }

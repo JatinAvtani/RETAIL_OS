@@ -42,6 +42,9 @@ export class DocumentRepository extends TenantScopedRepository<typeof documents>
     sizeBytes: number;
     supersedesId?: string;
     uploadedByUserId?: string;
+    // 012-02: optionally attaches this document to a bulk-upload batch (document_upload_batches),
+    // so DocumentUploadBatchRepository.getProgress can count it. Absent for a plain ad-hoc upload.
+    uploadBatchId?: string;
   }): Promise<{ id: string }> {
     return this.runScoped(async (db) => {
       const id = generateId();
@@ -57,6 +60,7 @@ export class DocumentRepository extends TenantScopedRepository<typeof documents>
         sizeBytes: input.sizeBytes,
         ...(input.supersedesId !== undefined ? { supersedesId: input.supersedesId } : {}),
         ...(input.uploadedByUserId !== undefined ? { uploadedByUserId: input.uploadedByUserId } : {}),
+        ...(input.uploadBatchId !== undefined ? { uploadBatchId: input.uploadBatchId } : {}),
       });
       return { id };
     });
@@ -325,6 +329,78 @@ export class DocumentRepository extends TenantScopedRepository<typeof documents>
         .limit(1)
     );
     return rows[0] ?? null;
+  }
+
+  /**
+   * 012-03: real invoice line data for auto-detection — deliberately restricted to documents at
+   * `APPROVED`/`AUTO_APPROVED`/`POSTED`, never `REVIEW_REQUIRED` or earlier. A line a human hasn't
+   * confirmed yet (or the model failed to extract cleanly) is not trustworthy evidence to propose a
+   * new product from (I7) — detection only ever reasons about lines a human has already, at
+   * minimum, implicitly accepted by approving the document. The LATEST extraction per document
+   * (matching `getLatestExtraction`'s own precedent), via a lateral join so re-extracted documents
+   * don't contribute duplicate stale rows.
+   */
+  async findApprovedExtractionsForStore(storeId: string) {
+    return this.runScoped((db, scopedWhere) =>
+      db
+        .select({
+          documentId: documents.id,
+          lines: documentExtractions.lines,
+          fields: documentExtractions.fields,
+        })
+        .from(documents)
+        .innerJoin(
+          documentExtractions,
+          sql`${documentExtractions.documentId} = ${documents.id} AND ${documentExtractions.extractedAt} = (
+            SELECT max(de2.extracted_at) FROM ${documentExtractions} de2 WHERE de2.document_id = ${documents.id}
+          )`
+        )
+        .where(
+          scopedWhere(
+            and(
+              eq(documents.storeId, storeId),
+              sql`${documents.status} IN ('APPROVED', 'AUTO_APPROVED', 'POSTED')`
+            )
+          )
+        )
+    );
+  }
+
+  /**
+   * 012-10: real approved-invoice headers for one store since a given date — the first-finding
+   * report's duplicate-detection input. Same `APPROVED`/`AUTO_APPROVED`/`POSTED`-only restriction
+   * as `findApprovedExtractionsForStore` (I7: an unreviewed document's own extracted total isn't
+   * trustworthy evidence yet), but returns `contentHash` (from `documents`, not the extraction) and
+   * the extracted `total`/`documentNumber`/`supplier` fields the report actually needs — a
+   * deliberately separate method from `findApprovedExtractionsForStore` rather than widening that
+   * one, since 012-03/012-04 (its only other callers) have no use for `contentHash`.
+   */
+  async findApprovedInvoiceHeadersForStoreSince(storeId: string, since: Date) {
+    return this.runScoped((db, scopedWhere) =>
+      db
+        .select({
+          documentId: documents.id,
+          contentHash: documents.contentHash,
+          createdAt: documents.createdAt,
+          fields: documentExtractions.fields,
+        })
+        .from(documents)
+        .innerJoin(
+          documentExtractions,
+          sql`${documentExtractions.documentId} = ${documents.id} AND ${documentExtractions.extractedAt} = (
+            SELECT max(de2.extracted_at) FROM ${documentExtractions} de2 WHERE de2.document_id = ${documents.id}
+          )`
+        )
+        .where(
+          scopedWhere(
+            and(
+              eq(documents.storeId, storeId),
+              gte(documents.createdAt, since),
+              sql`${documents.status} IN ('APPROVED', 'AUTO_APPROVED', 'POSTED')`
+            )
+          )
+        )
+    );
   }
 
   /**

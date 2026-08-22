@@ -22,6 +22,7 @@ const NAV_GROUPS: { label: string; items: { href: string; label: string }[] }[] 
     label: 'Watch',
     items: [
       { href: '/dashboard', label: 'Overview' },
+      { href: '/first-finding-report', label: 'First finding' },
       { href: '/dashboard/manager', label: 'Manager view' },
       { href: '/purchase-orders/variance-queue', label: 'Variance queue' },
       { href: '/assistant', label: 'Assistant' },
@@ -136,6 +137,10 @@ const SEGMENT_LABELS: Record<string, string> = {
   'sales-import': 'Sales import',
   edit: 'Edit',
   settings: 'Settings',
+  notifications: 'Notifications',
+  onboarding: 'Get set up',
+  'confirm-detected': 'Confirm detected',
+  'first-finding-report': 'First finding',
 };
 
 /**

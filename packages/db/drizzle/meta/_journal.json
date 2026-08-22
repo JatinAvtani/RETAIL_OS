@@ -330,6 +330,20 @@
       "when": 1789700000000,
       "tag": "0047_notification_preferences",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1789800000000,
+      "tag": "0048_onboarding_progress",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1789900000000,
+      "tag": "0049_document_upload_batches",
+      "breakpoints": true
     }
   ]
 }

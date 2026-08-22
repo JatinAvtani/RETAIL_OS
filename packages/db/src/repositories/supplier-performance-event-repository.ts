@@ -136,6 +136,31 @@ export class SupplierPerformanceEventRepository {
     );
   }
 
+  /**
+   * 012-10: every real `PRICE_CHANGE` event across the WHOLE org since a given date — the
+   * first-finding report's real backbone data source. Deliberately org-wide, not per-supplier
+   * (unlike every other read method on this class) — the report scans a business's entire recent
+   * invoice history in one call, matching `documents.accuracyTelemetry`'s own precedent for a
+   * genuinely org-wide, not per-resource, real read.
+   */
+  async findPriceChangesForOrgSince(since: Date) {
+    return this.db.transaction((tx) =>
+      withTenantContext(tx, this.organizationId, () =>
+        tx
+          .select()
+          .from(supplierPerformanceEvents)
+          .where(
+            and(
+              eq(supplierPerformanceEvents.organizationId, this.organizationId),
+              eq(supplierPerformanceEvents.eventType, 'PRICE_CHANGE'),
+              gte(supplierPerformanceEvents.occurredAt, since)
+            )
+          )
+          .orderBy(supplierPerformanceEvents.occurredAt)
+      )
+    );
+  }
+
   async countForSupplier(supplierId: string): Promise<number> {
     return this.db.transaction((tx) =>
       withTenantContext(tx, this.organizationId, async () => {

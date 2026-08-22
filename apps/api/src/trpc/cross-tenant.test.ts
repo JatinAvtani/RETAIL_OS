@@ -7,6 +7,7 @@ import {
   conversations,
   documentExtractions,
   documents,
+  documentUploadBatches,
   extractionCorrections,
   goodsReceiptLines,
   goodsReceipts,
@@ -38,6 +39,7 @@ import {
   stockCounts,
   stockLevels,
   stockMovements,
+  stockParLevels,
   purchaseOrderLines,
   purchaseOrders,
   storageLocations,
@@ -151,6 +153,11 @@ describe('cross-tenant suite (merge gate)', () => {
       await db.delete(invoiceMatchLines).where(eq(invoiceMatchLines.organizationId, orgId));
       await db.delete(invoiceMatches).where(eq(invoiceMatches.organizationId, orgId));
       await db.delete(documents).where(eq(documents.organizationId, orgId));
+      // documents.createUploadBatch/.getBatchProgress's registry entries (012-02) now seed real
+      // document_upload_batches rows that documents.upload_batch_id can reference — must be gone
+      // AFTER documents (just deleted above) but BEFORE stores (deleted later in this same
+      // function), the same recurring FK-teardown-order class this shared fixture keeps hitting.
+      await db.delete(documentUploadBatches).where(eq(documentUploadBatches.organizationId, orgId));
       // goodsReceipts.confirmReceipt/.get's registry entries seed real
       // goods_receipts/goods_receipt_lines rows referencing purchase_order_lines — must be gone
       // BEFORE purchase_order_lines is deleted below, not just before lots further down (this is
@@ -248,6 +255,10 @@ describe('cross-tenant suite (merge gate)', () => {
       // rows (references both products AND suppliers) — must be gone before either parent table's
       // rows are deleted below.
       await db.delete(supplierProducts).where(eq(supplierProducts.organizationId, orgId));
+      // parLevels.set/.listForStore's registry entries now seed real stock_par_levels rows
+      // (references product_variants) — must be gone before the productVariants delete just below,
+      // the same recurring FK-teardown-order class this shared fixture keeps hitting.
+      await db.delete(stockParLevels).where(eq(stockParLevels.organizationId, orgId));
       const orgProducts = await db.select({ id: products.id }).from(products).where(eq(products.organizationId, orgId));
       for (const p of orgProducts) {
         await db.delete(productVariants).where(eq(productVariants.productId, p.id));
