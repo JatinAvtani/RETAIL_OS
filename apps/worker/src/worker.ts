@@ -6,16 +6,25 @@ import {
   EMBEDDING_QUEUE_NAME,
   RELAY_QUEUE_NAME,
   RELAY_POLL_QUEUE_NAME,
+  NOTIFICATION_DELIVERY_QUEUE_NAME,
+  BRIEFING_QUEUE_NAME,
+  BRIEFING_SCHEDULE_POLL_QUEUE_NAME,
   type ExtractionJobData,
   type FactAggregationJobData,
   type EmbeddingJobData,
   type RelayJobData,
+  type NotificationDeliveryJobData,
+  type BriefingJobData,
 } from '@retailos/queue';
+import { createMockNotificationEmailSender } from '@retailos/email';
 import { createExtractionProcessor } from './extraction-processor';
 import { createFactAggregationProcessor } from './fact-aggregation-processor';
 import { createEmbeddingProcessor } from './embedding-processor';
 import { createRelayPollProcessor } from './relay-poll-processor';
 import { createRuleEvaluationProcessor } from './rule-evaluation-processor';
+import { createNotificationDeliveryProcessor } from './notification-delivery-processor';
+import { createBriefingSchedulePollProcessor } from './briefing-schedule-poll-processor';
+import { createBriefingProcessor } from './briefing-processor';
 
 /**
  * Factory, not a side-effecting module — mirrors `apps/api`'s `server.ts`/`start.ts` split so this
@@ -93,7 +102,53 @@ export const buildRelayPollWorker = (config: { redisUrl: string; databaseUrl: st
  */
 export const buildRuleEvaluationWorker = (config: { redisUrl: string; databaseUrl: string }): Worker<RelayJobData> => {
   const connection = createQueueRedisConnection(config.redisUrl);
-  const processor = createRuleEvaluationProcessor({ databaseUrl: config.databaseUrl });
+  const processor = createRuleEvaluationProcessor({ databaseUrl: config.databaseUrl, redisUrl: config.redisUrl });
 
   return new Worker<RelayJobData>(RELAY_QUEUE_NAME, processor, { connection, concurrency: 4 });
+};
+
+/**
+ * The sixth real `Worker` in this process, consuming individual notification-delivery jobs
+ * ("email delivery with retry + DLQ") — the real first caller of
+ * `NotificationDeliveryRepository.findPending`/`markDelivered`/`markFailed`/`markDeadLettered`,
+ * which existed with no consumer beforehand. Its own connection/concurrency, matching every other
+ * queue in this file's "split by resource profile" convention — an email send has an unrelated
+ * failure/backoff profile from either the extraction/embedding external calls or the relay's own
+ * lightweight DB sweep. `emailSender` defaults to the real mock transport (`@retailos/email`,
+ * matching `PoEmailSender`'s established no-card/no-cost precedent) — a real provider can be
+ * injected later via this same config without touching the processor itself.
+ */
+export const buildNotificationDeliveryWorker = (config: { redisUrl: string; databaseUrl: string }): Worker<NotificationDeliveryJobData> => {
+  const connection = createQueueRedisConnection(config.redisUrl);
+  const processor = createNotificationDeliveryProcessor({ databaseUrl: config.databaseUrl, emailSender: createMockNotificationEmailSender() });
+
+  return new Worker<NotificationDeliveryJobData>(NOTIFICATION_DELIVERY_QUEUE_NAME, processor, { connection, concurrency: 4 });
+};
+
+/**
+ * The seventh real `Worker` in this process, consuming the repeatable briefing-schedule-poll job
+ * (genuine per-store-timezone scheduling — see `briefing-queue.ts`'s own header for why
+ * this re-derives every store's cron on a recurring tick rather than registering once). A pure
+ * "tick" job like `buildRelayPollWorker`'s own poll worker — carries no meaningful per-invocation
+ * `job.data` of its own, since it always sweeps every active store's current schedule.
+ */
+export const buildBriefingSchedulePollWorker = (config: { redisUrl: string; databaseUrl: string }): Worker => {
+  const connection = createQueueRedisConnection(config.redisUrl);
+  const processor = createBriefingSchedulePollProcessor({ databaseUrl: config.databaseUrl, redisUrl: config.redisUrl });
+
+  return new Worker(BRIEFING_SCHEDULE_POLL_QUEUE_NAME, processor, { connection, concurrency: 1 });
+};
+
+/**
+ * The eighth real `Worker` in this process, consuming individual per-store daily-briefing
+ * generation jobs — the real scheduled-delivery half of the briefing feature, reusing the exact
+ * `rankExceptions`/`toBriefingBundle`/`narrateAndValidate` machinery the `assistant.briefing`
+ * query already built (I2), delivering through the SAME real notification pipeline already
+ * built rather than a separate bespoke path (confirmed with the user).
+ */
+export const buildBriefingWorker = (config: { redisUrl: string; databaseUrl: string; geminiApiKey: string | undefined }): Worker<BriefingJobData> => {
+  const connection = createQueueRedisConnection(config.redisUrl);
+  const processor = createBriefingProcessor({ databaseUrl: config.databaseUrl, redisUrl: config.redisUrl, geminiApiKey: config.geminiApiKey });
+
+  return new Worker<BriefingJobData>(BRIEFING_QUEUE_NAME, processor, { connection, concurrency: 2 });
 };

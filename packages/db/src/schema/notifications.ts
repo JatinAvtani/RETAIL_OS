@@ -1,4 +1,4 @@
-import { boolean, integer, jsonb, numeric, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, integer, jsonb, numeric, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { organizations } from './organizations';
 import { stores } from './stores';
 import { users } from './users';
@@ -125,3 +125,47 @@ export const notificationDeliveries = pgTable('notification_deliveries', {
   openedAt: timestamp('opened_at', { withTimezone: true }),
   error: text('error'),
 });
+
+/**
+ * PER-USER preferences — genuinely different scope from `notification_rules.quietHours`
+ * (per-tenant/per-rule, unused, still available as a future org-wide override; this
+ * table doesn't replace it). Confirmed with the user: build real per-user preferences,
+ * not just the spec's rule-level entity model.
+ *
+ * `mutedChannels` — channels this user never wants, regardless of what a rule configures (an empty
+ * array, the default, means no channel is muted). `quietHoursStartHour`/`quietHoursEndHour` are
+ * local WALL-CLOCK hours (0-23), nullable as a PAIR (both set or both null — enforced in
+ * application code, not a CHECK constraint, matching this schema's existing convention of trusting
+ * the write path for cross-column invariants). A window can wrap midnight (e.g. 22-7) — the
+ * evaluation logic (`packages/domain`), not this table, owns that arithmetic, matching
+ * `rule-engine.ts`'s "schema provides the columns, a pure function is the real authority on
+ * behavior" pattern throughout.
+ *
+ * Confirmed with the user which timezone anchors a store-less (org-wide) notification's quiet-hours
+ * check: the user's own first/primary accessible store — resolved at evaluation time from their
+ * real membership, not stored redundantly here.
+ *
+ * `criticalOverridesQuietHours` defaults `true` — the acceptance criteria's own "critical alerts
+ * configurably override" made a real, per-user toggle rather than a hardcoded assumption either way.
+ *
+ * One row per (organization, user) — `unique` on that pair makes "does this user already have a
+ * preferences row" a real upsert target rather than an application-level race.
+ */
+export const notificationPreferences = pgTable(
+  'notification_preferences',
+  {
+    id: idColumn(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id),
+    mutedChannels: text('muted_channels').array().notNull().default([]),
+    quietHoursStartHour: integer('quiet_hours_start_hour'),
+    quietHoursEndHour: integer('quiet_hours_end_hour'),
+    criticalOverridesQuietHours: boolean('critical_overrides_quiet_hours').notNull().default(true),
+    ...timestamps,
+  },
+  (table) => [uniqueIndex('notification_preferences_org_user_idx').on(table.organizationId, table.userId)]
+);

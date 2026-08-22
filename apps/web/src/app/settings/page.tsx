@@ -4,11 +4,13 @@ import { useCallback, useEffect, useState } from 'react';
 import { TRPCClientError } from '@trpc/client';
 import { trpc } from '@/lib/trpc';
 import { shiftDecimalPoint } from '@/lib/format';
-import { Badge, Button, Card, CardHeader, ErrorNotice, Field, Input, LoadingState, PageHeader, Select, Table, Th, Td, Tr } from '@/components/ui';
+import { Badge, Button, Card, CardHeader, EmptyState, ErrorNotice, Field, Input, LoadingState, PageHeader, Select, Table, Th, Td, Tr, type BadgeTone } from '@/components/ui';
 
 type Tolerances = Awaited<ReturnType<typeof trpc.settings.getMatchTolerances.query>>;
 type Member = Awaited<ReturnType<typeof trpc.invitations.listMembers.query>>[number];
 type PendingInvitation = Awaited<ReturnType<typeof trpc.invitations.listPending.query>>[number];
+type NotificationPreferences = Awaited<ReturnType<typeof trpc.notifications.getPreferences.query>>;
+type TuningCandidate = Awaited<ReturnType<typeof trpc.notifications.listTuningCandidates.query>>[number];
 
 const DEFAULT_PRICE_PERCENT_LABEL = '2%';
 // No currency symbol: the tolerance compares against invoice amounts in the org's own currency,
@@ -246,6 +248,398 @@ const TeamPanel = () => {
   );
 };
 
+const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
+const formatHour = (hour: number): string => `${hour.toString().padStart(2, '0')}:00`;
+
+/**
+ * A user's OWN notification preferences — never a target user id, so this panel needs no
+ * store/permission gate (matching the router's own reasoning: it always acts on the caller's own
+ * row). EMAIL is the only channel offered to mute, since it's the only real transport currently
+ * built — offering to mute a channel with no real sender would be a fake
+ * control. Quiet hours are entered as plain local hours (0-23); "start === end" is a documented
+ * zero-width no-op (see packages/domain/src/notifications/preferences.ts), so this UI treats an
+ * unset pair as "no quiet hours" rather than exposing that edge case directly.
+ */
+const NotificationPreferencesPanel = () => {
+  const [data, setData] = useState<NotificationPreferences | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  const [muteEmail, setMuteEmail] = useState(false);
+  const [quietHoursEnabled, setQuietHoursEnabled] = useState(false);
+  const [startHour, setStartHour] = useState('22');
+  const [endHour, setEndHour] = useState('7');
+  const [criticalOverrides, setCriticalOverrides] = useState(true);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    trpc.notifications.getPreferences
+      .query()
+      .then((result) => {
+        setData(result);
+        setMuteEmail(result.mutedChannels.includes('EMAIL'));
+        setQuietHoursEnabled(result.quietHoursStartHour !== null && result.quietHoursEndHour !== null);
+        if (result.quietHoursStartHour !== null) setStartHour(String(result.quietHoursStartHour));
+        if (result.quietHoursEndHour !== null) setEndHour(String(result.quietHoursEndHour));
+        setCriticalOverrides(result.criticalOverridesQuietHours);
+      })
+      .catch((err) => {
+        setError(err instanceof TRPCClientError ? err.message : 'Could not load your notification preferences.');
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const save = async () => {
+    setSaving(true);
+    setSaved(false);
+    setError(null);
+    try {
+      const result = await trpc.notifications.updatePreferences.mutate({
+        mutedChannels: muteEmail ? ['EMAIL'] : [],
+        quietHoursStartHour: quietHoursEnabled ? Number(startHour) : null,
+        quietHoursEndHour: quietHoursEnabled ? Number(endHour) : null,
+        criticalOverridesQuietHours: criticalOverrides,
+      });
+      setData(result);
+      setSaved(true);
+    } catch (err) {
+      setError(err instanceof TRPCClientError ? err.message : 'Could not save your notification preferences.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <Card className="mb-6">
+        <CardHeader title="Notification preferences" />
+        <LoadingState />
+      </Card>
+    );
+  }
+
+  if (error && !data) {
+    return (
+      <Card className="mb-6">
+        <CardHeader title="Notification preferences" />
+        <ErrorNotice>{error}</ErrorNotice>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="mb-6 p-6">
+      <h2 className="mb-1 text-sm font-semibold text-content">Notification preferences</h2>
+      <p className="mb-4 text-sm text-content-subtle">
+        How and when you personally get notified — separate from what your organization alerts on.
+      </p>
+
+      {error && (
+        <div className="mb-4">
+          <ErrorNotice>{error}</ErrorNotice>
+        </div>
+      )}
+
+      <div className="flex flex-col gap-4">
+        <label className="flex items-center gap-2 text-sm text-content">
+          <input type="checkbox" checked={muteEmail} onChange={(e) => setMuteEmail(e.target.checked)} className="h-4 w-4" />
+          Mute email notifications
+        </label>
+
+        <label className="flex items-center gap-2 text-sm text-content">
+          <input
+            type="checkbox"
+            checked={quietHoursEnabled}
+            onChange={(e) => setQuietHoursEnabled(e.target.checked)}
+            className="h-4 w-4"
+          />
+          Enable quiet hours
+        </label>
+
+        {quietHoursEnabled && (
+          <div className="grid gap-4 pl-6 sm:grid-cols-2">
+            <Field label="Quiet from" hint="Local time — can wrap past midnight">
+              <Select value={startHour} onChange={(e) => setStartHour(e.target.value)}>
+                {HOURS.map((hour) => (
+                  <option key={hour} value={hour}>
+                    {formatHour(hour)}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Until">
+              <Select value={endHour} onChange={(e) => setEndHour(e.target.value)}>
+                {HOURS.map((hour) => (
+                  <option key={hour} value={hour}>
+                    {formatHour(hour)}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+        )}
+
+        {quietHoursEnabled && (
+          <label className="flex items-center gap-2 pl-6 text-sm text-content">
+            <input
+              type="checkbox"
+              checked={criticalOverrides}
+              onChange={(e) => setCriticalOverrides(e.target.checked)}
+              className="h-4 w-4"
+            />
+            Still notify me for critical alerts during quiet hours
+          </label>
+        )}
+      </div>
+
+      <div className="mt-4 flex items-center gap-3">
+        <Button type="button" variant="primary" disabled={saving} onClick={save}>
+          {saving ? 'Saving…' : 'Save'}
+        </Button>
+        {saved && <span className="text-sm text-positive">Saved.</span>}
+      </div>
+    </Card>
+  );
+};
+
+const SEVERITY_OPTIONS = ['INFO', 'MEDIUM', 'HIGH', 'CRITICAL'] as const;
+
+const SEVERITY_TONE: Record<string, BadgeTone> = {
+  CRITICAL: 'danger',
+  HIGH: 'danger',
+  MEDIUM: 'warning',
+  INFO: 'neutral',
+};
+
+const RULE_TYPE_LABELS: Record<string, string> = {
+  stock_below_reorder: 'Stock below reorder point',
+  lot_expiring: 'Lot expiring soon',
+  supplier_price_increase: 'Supplier price increase',
+  invoice_variance: 'Invoice variance',
+  document_review_required: 'Document requires review',
+  po_awaiting_approval: 'PO awaiting approval',
+  negative_stock: 'Negative stock detected',
+  unmapped_pos_items: 'Unmapped POS items accumulating',
+  sales_anomaly: 'Sales anomaly',
+  margin_drop: 'Margin drop',
+  stocktake_variance: 'Stocktake variance',
+  daily_briefing: 'Daily briefing',
+};
+
+/**
+ * "Alert types with low action rates are surfaced for threshold tuning" (spec 05 §5.7)
+ * made real. Reads `notifications.listTuningCandidates` (built on
+ * `findRuleTypesNeedingTuning`, enriched with each flagged rule type's real configured row or the
+ * catalogue default). Deliberately edits ONLY severity/recipient roles/channels, never a generic
+ * "threshold" field — confirmed with the user: most rule types' real evaluation logic never reads
+ * `notification_rules.threshold` at all (only `lot_expiring` does), so a generic threshold editor
+ * would silently no-op for every other alert type. No auto-tuning and no digest channel either —
+ * a human reviews and decides, matching this project's own "AI/automation drafts, humans decide"
+ * discipline; there is no AI involved here, but the same "don't silently self-modify config"
+ * reasoning applies.
+ */
+const ThresholdTuningPanel = () => {
+  const [candidates, setCandidates] = useState<TuningCandidate[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [savingRuleType, setSavingRuleType] = useState<string | null>(null);
+  const [savedRuleType, setSavedRuleType] = useState<string | null>(null);
+
+  const [drafts, setDrafts] = useState<Record<string, { severity: string; recipientRoles: string[]; emailEnabled: boolean }>>({});
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    trpc.notifications.listTuningCandidates
+      .query({ days: 30 })
+      .then((result) => {
+        setCandidates(result);
+        setDrafts(
+          Object.fromEntries(
+            result.map((c) => [
+              c.ruleType,
+              { severity: c.severity, recipientRoles: c.recipientRoles, emailEnabled: c.channels.includes('EMAIL') },
+            ])
+          )
+        );
+      })
+      .catch((err) => {
+        setError(err instanceof TRPCClientError ? err.message : 'Could not load threshold tuning candidates.');
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const toggleRole = (ruleType: string, role: string) => {
+    setDrafts((prev) => {
+      const current = prev[ruleType];
+      if (!current) return prev;
+      const has = current.recipientRoles.includes(role);
+      const recipientRoles = has ? current.recipientRoles.filter((r) => r !== role) : [...current.recipientRoles, role];
+      return { ...prev, [ruleType]: { ...current, recipientRoles } };
+    });
+  };
+
+  const save = async (candidate: TuningCandidate) => {
+    const draft = drafts[candidate.ruleType];
+    if (!draft || draft.recipientRoles.length === 0) return;
+    setSavingRuleType(candidate.ruleType);
+    setSavedRuleType(null);
+    setError(null);
+    try {
+      const result = await trpc.notifications.updateRuleTuning.mutate({
+        ruleId: candidate.ruleId,
+        ruleType: candidate.ruleType,
+        severity: draft.severity as (typeof SEVERITY_OPTIONS)[number],
+        recipientRoles: draft.recipientRoles as ('OWNER' | 'MANAGER' | 'STAFF' | 'VIEWER_FINANCE')[],
+        channels: draft.emailEnabled ? ['EMAIL'] : [],
+      });
+      setCandidates((prev) => prev?.map((c) => (c.ruleType === candidate.ruleType ? { ...c, ruleId: result.ruleId } : c)) ?? null);
+      setSavedRuleType(candidate.ruleType);
+    } catch (err) {
+      setError(err instanceof TRPCClientError ? err.message : 'Could not save this alert type.');
+    } finally {
+      setSavingRuleType(null);
+    }
+  };
+
+  if (loading) {
+    return (
+      <Card className="mb-6">
+        <CardHeader title="Alert threshold tuning" />
+        <LoadingState />
+      </Card>
+    );
+  }
+
+  if (error && !candidates) {
+    return (
+      <Card className="mb-6">
+        <CardHeader title="Alert threshold tuning" />
+        <ErrorNotice>{error}</ErrorNotice>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="mb-6 p-6">
+      <h2 className="mb-1 text-sm font-semibold text-content">Alert threshold tuning</h2>
+      <p className="mb-4 text-sm text-content-subtle">
+        Alert types nobody acts on train people to ignore the whole channel. These have a low action
+        rate over the last 30 days — narrow who gets them, change the severity, or turn off email so
+        only the in-app centre shows them.
+      </p>
+
+      {error && (
+        <div className="mb-4">
+          <ErrorNotice>{error}</ErrorNotice>
+        </div>
+      )}
+
+      {candidates && candidates.length === 0 && (
+        <EmptyState
+          title="Nothing needs tuning right now"
+          hint="Every alert type either has too little history to judge yet, or a healthy action rate."
+        />
+      )}
+
+      {candidates && candidates.length > 0 && (
+        <div className="flex flex-col gap-6">
+          {candidates.map((candidate) => {
+            const draft = drafts[candidate.ruleType];
+            if (!draft) return null;
+            return (
+              <div key={candidate.ruleType} className="border-b border-border pb-6 last:border-b-0 last:pb-0">
+                <div className="mb-3 flex flex-wrap items-center gap-3">
+                  <span className="text-sm font-medium text-content">
+                    {RULE_TYPE_LABELS[candidate.ruleType] ?? candidate.ruleType}
+                  </span>
+                  <Badge tone={SEVERITY_TONE[draft.severity] ?? 'neutral'}>{draft.severity}</Badge>
+                  <span className="text-xs text-content-subtle">
+                    {candidate.actedCount} acted of {candidate.notificationCount} sent (
+                    {Math.round(candidate.actionRate * 100)}%)
+                  </span>
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field label="Severity">
+                    <Select
+                      value={draft.severity}
+                      onChange={(e) =>
+                        setDrafts((prev) => ({ ...prev, [candidate.ruleType]: { ...draft, severity: e.target.value } }))
+                      }
+                    >
+                      {SEVERITY_OPTIONS.map((severity) => (
+                        <option key={severity} value={severity}>
+                          {severity}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+
+                  <Field label="Who receives it">
+                    <div className="flex flex-wrap gap-3 pt-2">
+                      {ROLES.map((role) => (
+                        <label key={role} className="flex items-center gap-1.5 text-sm text-content">
+                          <input
+                            type="checkbox"
+                            checked={draft.recipientRoles.includes(role)}
+                            onChange={() => toggleRole(candidate.ruleType, role)}
+                            className="h-4 w-4"
+                          />
+                          {ROLE_LABELS[role]}
+                        </label>
+                      ))}
+                    </div>
+                  </Field>
+                </div>
+
+                <label className="mt-3 flex items-center gap-2 text-sm text-content">
+                  <input
+                    type="checkbox"
+                    checked={draft.emailEnabled}
+                    onChange={(e) =>
+                      setDrafts((prev) => ({ ...prev, [candidate.ruleType]: { ...draft, emailEnabled: e.target.checked } }))
+                    }
+                    className="h-4 w-4"
+                  />
+                  Send by email (always shows in the in-app notification centre either way)
+                </label>
+
+                {draft.recipientRoles.length === 0 && (
+                  <p className="mt-2 text-xs text-danger">At least one recipient role is required.</p>
+                )}
+
+                <div className="mt-3 flex items-center gap-3">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={savingRuleType === candidate.ruleType || draft.recipientRoles.length === 0}
+                    onClick={() => save(candidate)}
+                  >
+                    {savingRuleType === candidate.ruleType ? 'Saving…' : 'Save'}
+                  </Button>
+                  {savedRuleType === candidate.ruleType && <span className="text-sm text-positive">Saved.</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+  );
+};
+
 /**
  * "Avoid alert fatigue on cents": the real settings surface for the three-way
  * match's per-org tolerance override — OWNER-only. The percent fields DISPLAY and ACCEPT percent
@@ -315,6 +709,8 @@ export default function SettingsPage() {
       <>
         <PageHeader title="Settings" />
         <TeamPanel />
+        <NotificationPreferencesPanel />
+        <ThresholdTuningPanel />
         <Card>
           <LoadingState />
         </Card>
@@ -327,6 +723,8 @@ export default function SettingsPage() {
       <>
         <PageHeader title="Settings" />
         <TeamPanel />
+        <NotificationPreferencesPanel />
+        <ThresholdTuningPanel />
         <ErrorNotice>{error}</ErrorNotice>
       </>
     );
@@ -334,8 +732,10 @@ export default function SettingsPage() {
 
   return (
     <>
-      <PageHeader title="Settings" description="Your team and how we check invoices." />
+      <PageHeader title="Settings" description="Your team, notifications, and how we check invoices." />
       <TeamPanel />
+      <NotificationPreferencesPanel />
+      <ThresholdTuningPanel />
 
       {error && <ErrorNotice>{error}</ErrorNotice>}
 

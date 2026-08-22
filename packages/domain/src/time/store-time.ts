@@ -92,6 +92,38 @@ const resolveUtcOffsetMinutes = (instant: Date, timezone: StoreTimezone): number
 };
 
 /**
+ * The UTC hour/minute that corresponds to a given LOCAL wall-clock time (e.g. "06:00") for
+ * a store's timezone, evaluated using the real offset in effect AROUND `referenceDate` — the real
+ * need this exists for: "06:00 store-local" scheduling (the daily briefing) needs a genuine
+ * per-store UTC cron time, not fact-aggregation's own fixed-UTC-cron approximation (that job's
+ * 05:00 UTC choice is a documented, accepted limitation for its own less time-sensitive deadline;
+ * the briefing plan explicitly names "briefing at wrong local time" as a real risk to mitigate, a
+ * stricter requirement). Returns hour/minute as the caller's own cron pattern fields
+ * (`${minute} ${hour} * * *`), NOT a `Date` — the caller re-derives this on a repeating tick (see
+ * `packages/queue/src/briefing-queue.ts`) so a store's schedule self-corrects across a DST
+ * transition rather than drifting by an hour twice a year, the same reasoning
+ * `resolveLocalDateRange` already applies to its own `from`/`to` boundary calculation.
+ *
+ * Deliberately re-derives the offset from `referenceDate` (typically "now," passed by the caller,
+ * never read from `Date.now()` internally — this module has no clock of its own) rather than
+ * caching a timezone's offset once: DST means the SAME timezone's UTC offset is a different value
+ * in June than in January, and re-registering with the wrong cached offset would schedule the
+ * briefing an hour early or late for roughly half the year.
+ */
+export const resolveUtcCronForLocalTime = (
+  referenceDate: Date,
+  timezone: StoreTimezone,
+  localHour: number,
+  localMinute: number
+): { hour: number; minute: number } => {
+  const offsetMinutes = resolveUtcOffsetMinutes(referenceDate, timezone);
+  const totalLocalMinutes = localHour * 60 + localMinute;
+  // UTC time-of-day = local time-of-day minus the local offset from UTC, wrapped into [0, 1440).
+  const totalUtcMinutes = ((totalLocalMinutes - offsetMinutes) % 1440 + 1440) % 1440;
+  return { hour: Math.floor(totalUtcMinutes / 60), minute: totalUtcMinutes % 60 };
+};
+
+/**
  * The `[from, to)` UTC instant range one store-local calendar date covers — earlier work's real need:
  * an incremental aggregation job resolves "yesterday" per store's own timezone (this project's
  * standing example: "a three-store group across two timezones has three different yesterdays,"

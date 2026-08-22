@@ -1,4 +1,4 @@
-import { and, desc, eq, isNotNull, isNull } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import * as schema from '../schema/index';
 import { memberships, users } from '../schema/index';
@@ -61,6 +61,37 @@ export class MembershipListRepository extends TenantScopedRepository<typeof memb
         .returning()
     );
     return rows[0] ?? null;
+  }
+
+  /**
+   * The real recipient-resolution query notification delivery needs: every ACCEPTED member
+   * holding one of `roles`, scoped to `storeId` the same way `notification_rules.storeId`/
+   * `notifications.storeId` already are — a membership with `storeIds: null` means "every store
+   * in the org" (matches `findUnresolvedForStore`'s own store-or-org-wide semantics), a non-empty
+   * array means the member only sees the stores it lists. A store-scoped alert must not be
+   * delivered to a member restricted to a DIFFERENT store, even if their role matches.
+   */
+  async findAcceptedByRoles(storeId: string | null, roles: string[]) {
+    const conditions = [
+      isNull(memberships.deletedAt),
+      isNotNull(memberships.acceptedAt),
+      inArray(memberships.role, roles as ('OWNER' | 'MANAGER' | 'STAFF' | 'VIEWER_FINANCE')[]),
+    ];
+    if (storeId !== null) {
+      conditions.push(or(isNull(memberships.storeIds), sql`${storeId}::uuid = ANY(${memberships.storeIds})`)!);
+    }
+    return this.runScoped((db, scopedWhere) =>
+      db
+        .select({
+          userId: memberships.userId,
+          email: users.email,
+          role: memberships.role,
+          storeIds: memberships.storeIds,
+        })
+        .from(memberships)
+        .innerJoin(users, eq(memberships.userId, users.id))
+        .where(scopedWhere(and(...conditions)))
+    );
   }
 
   /** How many ACCEPTED OWNER memberships exist — used by the router to refuse demoting/removing the org's last owner, which would strand the organization with no one able to manage it. */

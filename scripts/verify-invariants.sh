@@ -228,7 +228,10 @@ report HIGH I3 "Mutation of an append-only table" \
 # unpublished), never a monetary value - the regex matches "total" as a substring regardless of what
 # is being counted. No arithmetic on money or quantity flows through this type; it's a log/telemetry
 # summary only.
-r=$(search '[A-Za-z_]*([Pp]rice|[Cc]ost|[Aa]mount|[Tt]otal|[Rr]evenue|[Mm]argin|[Qq]uantity|[Qq]ty)[A-Za-z_]*[[:space:]]*:[[:space:]]*number\b' 'apps/api/src/integrations/csv-import\.ts|packages/db/src/repositories/csv-import-repository\.ts|packages/metrics/src/margin/margin\.ts|packages/metrics/src/inventory/inventory\.ts|packages/metrics/src/purchasing/purchasing\.ts|packages/assistant/src/action-draft\.ts|packages/assistant/src/eval/types\.ts|packages/assistant/src/citations\.ts|apps/worker/src/relay-poll-processor\.ts|apps/worker/src/start\.ts' '*.ts')
+# briefing-schedule-poll-processor.ts excluded for the identical reason: `{ registered, total }` is a
+# plain COUNT of active stores processed in one schedule-poll tick (how many stores' cron schedules
+# were successfully re-registered vs. how many active stores exist), never a monetary value.
+r=$(search '[A-Za-z_]*([Pp]rice|[Cc]ost|[Aa]mount|[Tt]otal|[Rr]evenue|[Mm]argin|[Qq]uantity|[Qq]ty)[A-Za-z_]*[[:space:]]*:[[:space:]]*number\b' 'apps/api/src/integrations/csv-import\.ts|packages/db/src/repositories/csv-import-repository\.ts|packages/metrics/src/margin/margin\.ts|packages/metrics/src/inventory/inventory\.ts|packages/metrics/src/purchasing/purchasing\.ts|packages/assistant/src/action-draft\.ts|packages/assistant/src/eval/types\.ts|packages/assistant/src/citations\.ts|apps/worker/src/relay-poll-processor\.ts|apps/worker/src/start\.ts|apps/worker/src/briefing-schedule-poll-processor\.ts' '*.ts')
 report HIGH I5 "Money or quantity typed as \`number\`" \
   "Float arithmetic on money loses precision silently. Use Money / Quantity<Unit>." "$r"
 

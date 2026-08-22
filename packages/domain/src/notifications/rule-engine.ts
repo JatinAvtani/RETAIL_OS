@@ -24,7 +24,8 @@ export type AlertRuleType =
   | 'unmapped_pos_items'
   | 'sales_anomaly'
   | 'margin_drop'
-  | 'stocktake_variance';
+  | 'stocktake_variance'
+  | 'daily_briefing';
 
 export type AlertSeverity = 'INFO' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
@@ -46,6 +47,7 @@ export const DEFAULT_SEVERITY_BY_RULE_TYPE: Record<AlertRuleType, AlertSeverity>
   sales_anomaly: 'MEDIUM',
   margin_drop: 'HIGH',
   stocktake_variance: 'HIGH',
+  daily_briefing: 'INFO',
 };
 
 /**
@@ -63,6 +65,17 @@ export const buildPriceChangeDedupKey = (supplierId: string, productId: string):
 /** One dedup key per (store, product, variant) below reorder — repeated evaluations while still below point update the same open notification, never re-fire as a new one. */
 export const buildStockBelowReorderDedupKey = (storeId: string, productId: string, variantId: string): string =>
   `stock_below_reorder:${storeId}:${productId}:${variantId}`;
+
+/**
+ * One dedup key per (store, store-LOCAL date) — a retried/re-run briefing generation for the SAME
+ * day updates the same notification row rather than creating a duplicate, while the NEXT real
+ * calendar day always gets a genuinely fresh key (never re-opened, since `resolveDedupAction`
+ * would UPDATE an existing open row sharing this key — the briefing scheduler always calls
+ * `markResolved` on the prior day's notification before generating a new one, so "yesterday's
+ * briefing" and "today's briefing" are always two distinct rows, not one that mutates forever).
+ */
+export const buildDailyBriefingDedupKey = (storeId: string, localDate: string): string =>
+  `daily_briefing:${storeId}:${localDate}`;
 
 export interface StockBelowReorderCandidate {
   quantityOnHand: Decimal;

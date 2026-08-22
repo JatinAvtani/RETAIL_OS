@@ -1,8 +1,8 @@
-import { and, desc, eq, isNull, or } from 'drizzle-orm';
+import { and, desc, eq, gte, isNull, or, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { generateId } from '@retailos/domain';
 import * as schema from '../schema/index';
-import { notificationRules, notifications, notificationDeliveries, type NotificationDeliveryStatus } from '../schema/index';
+import { notificationRules, notifications, notificationDeliveries, notificationPreferences, type NotificationDeliveryStatus } from '../schema/index';
 import { TenantScopedRepository } from '../tenant-repository';
 
 /**
@@ -66,6 +66,34 @@ export class NotificationRuleRepository extends TenantScopedRepository<typeof no
         .from(notificationRules)
         .where(scopedWhere(and(eq(notificationRules.ruleType, ruleType), eq(notificationRules.enabled, true))))
     );
+  }
+
+  /**
+   * Every real configured rule for this org, regardless of type/enabled state — the
+   * tuning panel's real read path. A rule type with no row here is genuinely unconfigured
+   * (running on the catalogue default), not a row this method failed to find.
+   */
+  async findAll() {
+    return this.runScoped((db, scopedWhere) => db.select().from(notificationRules).where(scopedWhere()));
+  }
+
+  /**
+   * The tuning panel's real write path — deliberately narrow to the THREE fields this
+   * codebase's own evaluation logic actually reads for every rule type today (`severity` via
+   * `resolveEffectiveSeverity`, `recipientRoles`/`channels` via `notifyRecipients`). `threshold`
+   * is excluded on purpose: only `lot_expiring`'s evaluation logic ever reads it
+   * (`evaluateLotExpiring`'s `threshold.withinDays`) — every other rule type currently wired to a
+   * real event consumer (`stock_below_reorder`) never touches it, so exposing a
+   * generic "edit threshold" control would silently no-op for most rule types. Confirmed with the
+   * user: surface only the fields that demonstrably change real behavior.
+   */
+  async updateTuning(id: string, input: { severity: string; recipientRoles: string[]; channels: string[] }): Promise<void> {
+    await this.runScoped(async (db, scopedWhere) => {
+      await db
+        .update(notificationRules)
+        .set({ severity: input.severity, recipientRoles: input.recipientRoles, channels: input.channels, updatedAt: new Date() })
+        .where(scopedWhere(eq(notificationRules.id, id)));
+    });
   }
 }
 
@@ -268,6 +296,42 @@ export class NotificationRepository extends TenantScopedRepository<typeof notifi
         .where(scopedWhere(eq(notifications.id, id)));
     });
   }
+
+  /**
+   * The flat, per-(notification, delivery) row shape `computeActionRatesByRuleType`
+   * (`@retailos/metrics`) groups by `ruleType` — a `LEFT JOIN` to `notification_deliveries` so a
+   * notification with zero deliveries (in-app-only, no email fan-out) still contributes exactly one
+   * row with `deliveryId: null`, rather than disappearing from the action-rate denominator
+   * entirely. `scopedWhere` is bound to THIS repository's own table (`notifications`) per
+   * `TenantScopedRepository`'s own documented constraint, so the joined `notification_rules`/
+   * `notification_deliveries` tables each get an explicit `organization_id` predicate by hand —
+   * defense-in-depth (I4) on top of their own FORCE RLS, matching every other cross-table join this
+   * codebase has needed since `SalesTransactionRepository.findLines()` first established the
+   * pattern.
+   */
+  async findActionTrackingRowsSince(since: Date) {
+    return this.runScoped((db, scopedWhere) =>
+      db
+        .select({
+          notificationId: notifications.id,
+          ruleType: notificationRules.ruleType,
+          actedAt: notifications.actedAt,
+          deliveryId: notificationDeliveries.id,
+          deliveredAt: notificationDeliveries.deliveredAt,
+          openedAt: notificationDeliveries.openedAt,
+        })
+        .from(notifications)
+        .innerJoin(
+          notificationRules,
+          and(eq(notificationRules.id, notifications.ruleId), eq(notificationRules.organizationId, this.organizationId))
+        )
+        .leftJoin(
+          notificationDeliveries,
+          and(eq(notificationDeliveries.notificationId, notifications.id), eq(notificationDeliveries.organizationId, this.organizationId))
+        )
+        .where(scopedWhere(gte(notifications.createdAt, since)))
+    );
+  }
 }
 
 export class NotificationDeliveryRepository extends TenantScopedRepository<typeof notificationDeliveries> {
@@ -313,6 +377,16 @@ export class NotificationDeliveryRepository extends TenantScopedRepository<typeo
     );
   }
 
+  async findById(id: string) {
+    const rows = await this.runScoped((db, scopedWhere) =>
+      db
+        .select()
+        .from(notificationDeliveries)
+        .where(scopedWhere(eq(notificationDeliveries.id, id)))
+    );
+    return rows[0] ?? null;
+  }
+
   async markDelivered(id: string): Promise<void> {
     await this.runScoped(async (db, scopedWhere) => {
       await db
@@ -329,5 +403,141 @@ export class NotificationDeliveryRepository extends TenantScopedRepository<typeo
         .set({ openedAt: new Date() })
         .where(scopedWhere(eq(notificationDeliveries.id, id)));
     });
+  }
+
+  /**
+   * Records one failed send attempt — `attempts` increments every time, `error` always holds the
+   * MOST RECENT real failure reason (never accumulated/concatenated, so a later successful retry
+   * after several failures doesn't leave a misleading trail once `markDelivered` overwrites
+   * `status`). Status stays `FAILED` here, not `DEAD_LETTERED` — that terminal state is a distinct
+   * decision the processor makes only once BullMQ's own `attempts` budget (queue-level retry
+   * config, exponential backoff) is genuinely exhausted, not on every individual failed attempt.
+   */
+  async markFailed(id: string, error: string): Promise<void> {
+    await this.runScoped(async (db, scopedWhere) => {
+      await db
+        .update(notificationDeliveries)
+        .set({ status: 'FAILED', attempts: sql`${notificationDeliveries.attempts} + 1`, error })
+        .where(scopedWhere(eq(notificationDeliveries.id, id)));
+    });
+  }
+
+  /**
+   * The real DLQ ("email delivery with retry + DLQ") — not a separate
+   * dead-letter queue/table, which would duplicate what `notification_deliveries.status` already
+   * models (the enum value `DEAD_LETTERED` existed before this method's consumer did, schema built
+   * ahead of its consumer, matching the pattern used throughout). A delivery lands here once BullMQ's real
+   * retry budget for its job is exhausted — queryable directly by anyone auditing failed sends,
+   * with the real final error preserved, never silently dropped.
+   */
+  async markDeadLettered(id: string, error: string): Promise<void> {
+    await this.runScoped(async (db, scopedWhere) => {
+      await db
+        .update(notificationDeliveries)
+        .set({ status: 'DEAD_LETTERED', attempts: sql`${notificationDeliveries.attempts} + 1`, error })
+        .where(scopedWhere(eq(notificationDeliveries.id, id)));
+    });
+  }
+}
+
+/**
+ * Per-USER channel/quiet-hours preferences — a genuinely separate table and concern from
+ * `notification_rules.quietHours` (org/rule-level, unused). One row per (org, user);
+ * `findOrDefaultForUser` is the real read path fan-out consults on every delivery decision, and it
+ * NEVER returns `null` for a user with no configured row — a missing row means "no preference set,"
+ * which is a real, meaningful default (no muted channels, no quiet hours), not an unknown to guess
+ * at (I7). `upsertForUser` is the write path a settings UI will call — ON CONFLICT on the real
+ * (organization_id, user_id) unique index, proved directly via raw psql before this method was
+ * written, matching `NotificationRepository.upsertByDedupKey`'s own established precedent.
+ */
+export const DEFAULT_NOTIFICATION_PREFERENCE = {
+  mutedChannels: [] as string[],
+  quietHoursStartHour: null as number | null,
+  quietHoursEndHour: null as number | null,
+  criticalOverridesQuietHours: true,
+};
+
+export class NotificationPreferenceRepository extends TenantScopedRepository<typeof notificationPreferences> {
+  constructor(db: ReturnType<typeof drizzle<typeof schema>>, organizationId: string) {
+    super(db, notificationPreferences, organizationId);
+  }
+
+  async findForUser(userId: string) {
+    const rows = await this.runScoped((db, scopedWhere) =>
+      db
+        .select()
+        .from(notificationPreferences)
+        .where(scopedWhere(eq(notificationPreferences.userId, userId)))
+    );
+    return rows[0] ?? null;
+  }
+
+  /**
+   * Never null — a user with no configured row gets the real, documented default rather than an
+   * unknown fan-out has to special-case. Always returns exactly the four preference fields,
+   * whether or not a real row exists — the row-exists case is explicitly PROJECTED down from the
+   * full DB row (id/organizationId/createdAt/updatedAt), not returned as-is, so a caller (the API
+   * router, fan-out) gets one consistent shape regardless of which path produced it, rather than a
+   * declared return type that only matches the no-row default.
+   */
+  async findOrDefaultForUser(userId: string): Promise<{
+    mutedChannels: string[];
+    quietHoursStartHour: number | null;
+    quietHoursEndHour: number | null;
+    criticalOverridesQuietHours: boolean;
+  }> {
+    const row = await this.findForUser(userId);
+    if (!row) return DEFAULT_NOTIFICATION_PREFERENCE;
+    return {
+      mutedChannels: row.mutedChannels,
+      quietHoursStartHour: row.quietHoursStartHour,
+      quietHoursEndHour: row.quietHoursEndHour,
+      criticalOverridesQuietHours: row.criticalOverridesQuietHours,
+    };
+  }
+
+  /**
+   * One atomic UPSERT against the real (organization_id, user_id) unique index — never a separate
+   * check-then-insert-or-update pair, which would race under a double-submit from the settings UI.
+   */
+  async upsertForUser(
+    userId: string,
+    input: {
+      mutedChannels: string[];
+      quietHoursStartHour: number | null;
+      quietHoursEndHour: number | null;
+      criticalOverridesQuietHours: boolean;
+    }
+  ): Promise<{ id: string }> {
+    const id = generateId();
+    const rows = await this.runScoped((db) =>
+      db
+        .insert(notificationPreferences)
+        .values({
+          id,
+          organizationId: this.organizationId,
+          userId,
+          mutedChannels: input.mutedChannels,
+          quietHoursStartHour: input.quietHoursStartHour,
+          quietHoursEndHour: input.quietHoursEndHour,
+          criticalOverridesQuietHours: input.criticalOverridesQuietHours,
+        })
+        .onConflictDoUpdate({
+          target: [notificationPreferences.organizationId, notificationPreferences.userId],
+          set: {
+            mutedChannels: input.mutedChannels,
+            quietHoursStartHour: input.quietHoursStartHour,
+            quietHoursEndHour: input.quietHoursEndHour,
+            criticalOverridesQuietHours: input.criticalOverridesQuietHours,
+            updatedAt: new Date(),
+          },
+        })
+        .returning({ id: notificationPreferences.id })
+    );
+    const row = rows[0];
+    if (!row) {
+      throw new Error('Notification preference upsert returned no row.');
+    }
+    return { id: row.id };
   }
 }

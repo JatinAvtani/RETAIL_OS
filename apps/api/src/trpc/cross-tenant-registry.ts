@@ -678,6 +678,18 @@ const seedConversation = async (db: Db, organizationId: string): Promise<string>
   return id;
 };
 
+const seedNotificationRule = async (db: Db, organizationId: string): Promise<string> => {
+  const ruleRepository = new NotificationRuleRepository(db, organizationId);
+  const { id } = await ruleRepository.create({
+    ruleType: 'stock_below_reorder',
+    severity: 'HIGH',
+    threshold: {},
+    recipientRoles: ['MANAGER'],
+    channels: ['EMAIL'],
+  });
+  return id;
+};
+
 const seedNotification = async (db: Db, organizationId: string): Promise<string> => {
   const ruleRepository = new NotificationRuleRepository(db, organizationId);
   const { id: ruleId } = await ruleRepository.create({
@@ -1599,5 +1611,20 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     type: 'mutation',
     seedResource: seedNotification,
     buildInput: (resourceId) => ({ id: resourceId }),
+  },
+  {
+    // Tenant B silently reconfiguring tenant A's real alert rule (severity/recipients/
+    // channels) by guessed/observed ruleId — would corrupt which of tenant A's own staff actually
+    // gets notified about a real business condition, a genuinely dangerous tamper, not just a leak.
+    path: 'notifications.updateRuleTuning',
+    type: 'mutation',
+    seedResource: seedNotificationRule,
+    buildInput: (resourceId) => ({
+      ruleId: resourceId,
+      ruleType: 'stock_below_reorder',
+      severity: 'HIGH',
+      recipientRoles: ['MANAGER'],
+      channels: ['EMAIL'],
+    }),
   },
 ];

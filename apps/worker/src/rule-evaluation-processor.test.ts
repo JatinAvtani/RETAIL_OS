@@ -16,16 +16,23 @@ import {
   stockParLevels,
   notifications,
   notificationRules,
+  notificationDeliveries,
+  notificationPreferences,
+  memberships,
+  users,
   ParLevelRepository,
   StockLevelRepository,
   NotificationRepository,
   NotificationRuleRepository,
+  NotificationDeliveryRepository,
+  NotificationPreferenceRepository,
 } from '@retailos/db';
 import { createRuleEvaluationProcessor } from './rule-evaluation-processor';
 import type { RelayJobData } from '@retailos/queue';
 
 const APP_CONNECTION_STRING = process.env.TEST_DATABASE_URL ?? 'postgresql://retailos_app:retailos_app_local_only@localhost:5432/retailos';
 const ADMIN_CONNECTION_STRING = process.env.TEST_DATABASE_URL_ADMIN ?? 'postgresql://postgres:postgres@localhost:5432/retailos';
+const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://localhost:6379';
 
 const asJob = (data: RelayJobData): Job<RelayJobData> => ({ data }) as Job<RelayJobData>;
 
@@ -45,8 +52,15 @@ describe('rule evaluation processor: stock.moved -> stock_below_reorder', () => 
 
   afterEach(async () => {
     for (const orgId of createdOrgIds) {
+      await adminDb.delete(notificationDeliveries).where(eq(notificationDeliveries.organizationId, orgId));
       await adminDb.delete(notifications).where(eq(notifications.organizationId, orgId));
       await adminDb.delete(notificationRules).where(eq(notificationRules.organizationId, orgId));
+      await adminDb.delete(notificationPreferences).where(eq(notificationPreferences.organizationId, orgId));
+      const orgMemberships = await adminDb.select({ userId: memberships.userId }).from(memberships).where(eq(memberships.organizationId, orgId));
+      await adminDb.delete(memberships).where(eq(memberships.organizationId, orgId));
+      for (const m of orgMemberships) {
+        await adminDb.delete(users).where(eq(users.id, m.userId));
+      }
       await adminDb.delete(outboxEvents).where(eq(outboxEvents.organizationId, orgId));
       await adminDb.delete(stockMovements).where(eq(stockMovements.organizationId, orgId));
       await adminDb.delete(stockLevels).where(eq(stockLevels.organizationId, orgId));
@@ -104,7 +118,7 @@ describe('rule evaluation processor: stock.moved -> stock_below_reorder', () => 
       sourceType: 'test',
     });
 
-    const processor = createRuleEvaluationProcessor({ databaseUrl: ADMIN_CONNECTION_STRING });
+    const processor = createRuleEvaluationProcessor({ databaseUrl: ADMIN_CONNECTION_STRING, redisUrl: REDIS_URL });
     const event: RelayJobData = {
       outboxEventId: generateId(),
       organizationId,
@@ -178,7 +192,7 @@ describe('rule evaluation processor: stock.moved -> stock_below_reorder', () => 
       sourceType: 'test',
     });
 
-    const processor = createRuleEvaluationProcessor({ databaseUrl: ADMIN_CONNECTION_STRING });
+    const processor = createRuleEvaluationProcessor({ databaseUrl: ADMIN_CONNECTION_STRING, redisUrl: REDIS_URL });
     const event: RelayJobData = {
       outboxEventId: generateId(),
       organizationId,
@@ -203,7 +217,7 @@ describe('rule evaluation processor: stock.moved -> stock_below_reorder', () => 
     await parLevelRepo.setParLevel({ storeId, productId, variantId, reorderPoint: '10' });
 
     const stockLevelRepo = new StockLevelRepository(db, organizationId);
-    const processor = createRuleEvaluationProcessor({ databaseUrl: ADMIN_CONNECTION_STRING });
+    const processor = createRuleEvaluationProcessor({ databaseUrl: ADMIN_CONNECTION_STRING, redisUrl: REDIS_URL });
     const dedupKey = buildStockBelowReorderDedupKey(storeId, productId, variantId);
     const notificationRepo = new NotificationRepository(db, organizationId);
 
@@ -236,7 +250,7 @@ describe('rule evaluation processor: stock.moved -> stock_below_reorder', () => 
 
   it('an event type with no rule-evaluation mapping is a real no-op, not an error', async () => {
     const { organizationId } = await setUpOrgStoreProduct();
-    const processor = createRuleEvaluationProcessor({ databaseUrl: ADMIN_CONNECTION_STRING });
+    const processor = createRuleEvaluationProcessor({ databaseUrl: ADMIN_CONNECTION_STRING, redisUrl: REDIS_URL });
     await expect(
       processor(asJob({
         outboxEventId: generateId(), organizationId, aggregateType: 'purchase_order', aggregateId: generateId(), eventType: 'po.created', payload: {},
@@ -251,7 +265,7 @@ describe('rule evaluation processor: stock.moved -> stock_below_reorder', () => 
       id: generateId(), storeId, productId, variantId, movementType: 'RECEIPT', quantity: '1', unitCost: '2.00', currency: 'USD', occurredAt: new Date(), sourceType: 'test',
     });
 
-    const processor = createRuleEvaluationProcessor({ databaseUrl: ADMIN_CONNECTION_STRING });
+    const processor = createRuleEvaluationProcessor({ databaseUrl: ADMIN_CONNECTION_STRING, redisUrl: REDIS_URL });
     await processor(asJob({
       outboxEventId: generateId(), organizationId, aggregateType: 'stock_movement', aggregateId: generateId(), eventType: 'stock.moved',
       payload: { storeId, productId, variantId },
@@ -282,7 +296,7 @@ describe('rule evaluation processor: stock.moved -> stock_below_reorder', () => 
       id: generateId(), storeId, productId, variantId, movementType: 'RECEIPT', quantity: '2', unitCost: '2.00', currency: 'USD', occurredAt: new Date(), sourceType: 'test',
     });
 
-    const processor = createRuleEvaluationProcessor({ databaseUrl: ADMIN_CONNECTION_STRING });
+    const processor = createRuleEvaluationProcessor({ databaseUrl: ADMIN_CONNECTION_STRING, redisUrl: REDIS_URL });
     await processor(asJob({
       outboxEventId: generateId(), organizationId, aggregateType: 'stock_movement', aggregateId: generateId(), eventType: 'stock.moved',
       payload: { storeId, productId, variantId },
@@ -292,5 +306,161 @@ describe('rule evaluation processor: stock.moved -> stock_below_reorder', () => 
     const dedupKey = buildStockBelowReorderDedupKey(storeId, productId, variantId);
     const notification = await notificationRepo.findOpenByDedupKey(dedupKey);
     expect(notification?.severity).toBe('CRITICAL');
+  });
+
+  it('a genuinely NEW notification fans out to a real accepted MANAGER — a notification_deliveries row is created and a real job is enqueued', async () => {
+    const { organizationId, storeId, productId, variantId } = await setUpOrgStoreProduct();
+
+    // memberships is FORCE RLS — insert via the admin connection, not the app-role `db`, matching
+    // this project's own "plain query outside a repository needs its own tenant context" rule.
+    const managerUserId = generateId();
+    await adminDb.insert(users).values({ id: managerUserId, email: `manager-${managerUserId}@example.test` });
+    await adminDb.insert(memberships).values({
+      id: generateId(), organizationId, userId: managerUserId, role: 'MANAGER', storeIds: null, acceptedAt: new Date(),
+    });
+
+    const ruleRepo = new NotificationRuleRepository(db, organizationId);
+    await ruleRepo.create({
+      ruleType: 'stock_below_reorder',
+      severity: 'HIGH',
+      threshold: {},
+      recipientRoles: ['MANAGER'],
+      channels: ['EMAIL'],
+    });
+
+    const parLevelRepo = new ParLevelRepository(db, organizationId);
+    await parLevelRepo.setParLevel({ storeId, productId, variantId, reorderPoint: '10' });
+    const stockLevelRepo = new StockLevelRepository(db, organizationId);
+    await stockLevelRepo.recordAndProject({
+      id: generateId(), storeId, productId, variantId, movementType: 'RECEIPT', quantity: '3', unitCost: '2.00', currency: 'USD', occurredAt: new Date(), sourceType: 'test',
+    });
+
+    const processor = createRuleEvaluationProcessor({ databaseUrl: ADMIN_CONNECTION_STRING, redisUrl: REDIS_URL });
+    await processor(asJob({
+      outboxEventId: generateId(), organizationId, aggregateType: 'stock_movement', aggregateId: generateId(), eventType: 'stock.moved',
+      payload: { storeId, productId, variantId },
+    }));
+
+    const notificationRepo = new NotificationRepository(db, organizationId);
+    const dedupKey = buildStockBelowReorderDedupKey(storeId, productId, variantId);
+    const notification = await notificationRepo.findOpenByDedupKey(dedupKey);
+    expect(notification).not.toBeNull();
+
+    const deliveryRepo = new NotificationDeliveryRepository(db, organizationId);
+    const deliveries = await deliveryRepo.findForUser(managerUserId);
+    const delivery = deliveries.find((d) => d.notificationId === notification!.id);
+    expect(delivery).toBeTruthy();
+    expect(delivery?.channel).toBe('EMAIL');
+    expect(delivery?.status).toBe('PENDING');
+
+    // A SECOND fire of the SAME still-open condition (UPDATE, not CREATE) must NOT re-deliver —
+    // the plan's own "notification fatigue is the failure mode" rule, proven directly: exactly one
+    // delivery row exists for this user/notification after two fires of the same condition.
+    await processor(asJob({
+      outboxEventId: generateId(), organizationId, aggregateType: 'stock_movement', aggregateId: generateId(), eventType: 'stock.moved',
+      payload: { storeId, productId, variantId },
+    }));
+    const deliveriesAfterSecondFire = (await deliveryRepo.findForUser(managerUserId)).filter((d) => d.notificationId === notification!.id);
+    expect(deliveriesAfterSecondFire).toHaveLength(1);
+  });
+
+  it('a recipient who muted EMAIL gets NO delivery row at all for that channel', async () => {
+    const { organizationId, storeId, productId, variantId } = await setUpOrgStoreProduct();
+
+    const managerUserId = generateId();
+    await adminDb.insert(users).values({ id: managerUserId, email: `manager-${managerUserId}@example.test` });
+    await adminDb.insert(memberships).values({
+      id: generateId(), organizationId, userId: managerUserId, role: 'MANAGER', storeIds: null, acceptedAt: new Date(),
+    });
+
+    const preferenceRepo = new NotificationPreferenceRepository(db, organizationId);
+    await preferenceRepo.upsertForUser(managerUserId, {
+      mutedChannels: ['EMAIL'],
+      quietHoursStartHour: null,
+      quietHoursEndHour: null,
+      criticalOverridesQuietHours: true,
+    });
+
+    const ruleRepo = new NotificationRuleRepository(db, organizationId);
+    await ruleRepo.create({
+      ruleType: 'stock_below_reorder', severity: 'HIGH', threshold: {}, recipientRoles: ['MANAGER'], channels: ['EMAIL'],
+    });
+
+    const parLevelRepo = new ParLevelRepository(db, organizationId);
+    await parLevelRepo.setParLevel({ storeId, productId, variantId, reorderPoint: '10' });
+    const stockLevelRepo = new StockLevelRepository(db, organizationId);
+    await stockLevelRepo.recordAndProject({
+      id: generateId(), storeId, productId, variantId, movementType: 'RECEIPT', quantity: '3', unitCost: '2.00', currency: 'USD', occurredAt: new Date(), sourceType: 'test',
+    });
+
+    const processor = createRuleEvaluationProcessor({ databaseUrl: ADMIN_CONNECTION_STRING, redisUrl: REDIS_URL });
+    await processor(asJob({
+      outboxEventId: generateId(), organizationId, aggregateType: 'stock_movement', aggregateId: generateId(), eventType: 'stock.moved',
+      payload: { storeId, productId, variantId },
+    }));
+
+    // The notification itself is still created — muting a CHANNEL suppresses DELIVERY, not the
+    // underlying alert (the in-app centre, unaffected by delivery-channel muting, still shows it).
+    const notificationRepo = new NotificationRepository(db, organizationId);
+    const dedupKey = buildStockBelowReorderDedupKey(storeId, productId, variantId);
+    const notification = await notificationRepo.findOpenByDedupKey(dedupKey);
+    expect(notification).not.toBeNull();
+
+    const deliveryRepo = new NotificationDeliveryRepository(db, organizationId);
+    const deliveries = (await deliveryRepo.findForUser(managerUserId)).filter((d) => d.notificationId === notification!.id);
+    expect(deliveries).toHaveLength(0);
+  });
+
+  it('a recipient inside their configured quiet hours gets NO delivery row for a non-CRITICAL alert', async () => {
+    const { organizationId, storeId, productId, variantId } = await setUpOrgStoreProduct(); // store timezone is UTC
+
+    const managerUserId = generateId();
+    await adminDb.insert(users).values({ id: managerUserId, email: `manager-${managerUserId}@example.test` });
+    await adminDb.insert(memberships).values({
+      id: generateId(), organizationId, userId: managerUserId, role: 'MANAGER', storeIds: null, acceptedAt: new Date(),
+    });
+
+    // The store's timezone is UTC, so the current real UTC hour IS the recipient's local hour.
+    // A window from the CURRENT hour to the next one always contains "right now" regardless of
+    // what real wall-clock time this test runs at, without needing to fake the clock — a
+    // zero-width window (start === end) would be a deterministic no-op instead, per
+    // isWithinQuietHours' own documented rule, which is why a full-hour-wide window is used here.
+    const nowUtcHour = new Date().getUTCHours();
+    const preferenceRepo = new NotificationPreferenceRepository(db, organizationId);
+    await preferenceRepo.upsertForUser(managerUserId, {
+      mutedChannels: [],
+      quietHoursStartHour: nowUtcHour,
+      quietHoursEndHour: (nowUtcHour + 1) % 24,
+      criticalOverridesQuietHours: true,
+    });
+
+    const ruleRepo = new NotificationRuleRepository(db, organizationId);
+    await ruleRepo.create({
+      // HIGH, not CRITICAL — the catalogue default for stock_below_reorder — so the
+      // critical-override path does NOT apply, proving plain quiet-hours suppression on its own.
+      ruleType: 'stock_below_reorder', severity: 'HIGH', threshold: {}, recipientRoles: ['MANAGER'], channels: ['EMAIL'],
+    });
+
+    const parLevelRepo = new ParLevelRepository(db, organizationId);
+    await parLevelRepo.setParLevel({ storeId, productId, variantId, reorderPoint: '10' });
+    const stockLevelRepo = new StockLevelRepository(db, organizationId);
+    await stockLevelRepo.recordAndProject({
+      id: generateId(), storeId, productId, variantId, movementType: 'RECEIPT', quantity: '3', unitCost: '2.00', currency: 'USD', occurredAt: new Date(), sourceType: 'test',
+    });
+
+    const processor = createRuleEvaluationProcessor({ databaseUrl: ADMIN_CONNECTION_STRING, redisUrl: REDIS_URL });
+    await processor(asJob({
+      outboxEventId: generateId(), organizationId, aggregateType: 'stock_movement', aggregateId: generateId(), eventType: 'stock.moved',
+      payload: { storeId, productId, variantId },
+    }));
+
+    const notificationRepo = new NotificationRepository(db, organizationId);
+    const dedupKey = buildStockBelowReorderDedupKey(storeId, productId, variantId);
+    const notification = await notificationRepo.findOpenByDedupKey(dedupKey);
+    expect(notification).not.toBeNull();
+
+    const deliveryRepo = new NotificationDeliveryRepository(db, organizationId);
+    const deliveries = (await deliveryRepo.findForUser(managerUserId)).filter((d) => d.notificationId === notification!.id);
+    expect(deliveries).toHaveLength(0);
   });
 });

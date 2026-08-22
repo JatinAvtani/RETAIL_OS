@@ -16,6 +16,7 @@ import {
   type CandidateRule,
 } from '@retailos/domain';
 import type { RelayJobData } from '@retailos/queue';
+import { notifyRecipients } from './notification-fanout';
 
 /**
  * The real first consumer of the outbox relay — turns a relayed domain event into a real rule
@@ -31,7 +32,7 @@ import type { RelayJobData } from '@retailos/queue';
  * than bolted on here). `stock.moved` is the one real event this codebase emits today that a
  * `stock_below_reorder` re-check can act on directly.
  */
-export const createRuleEvaluationProcessor = (config: { databaseUrl: string }) => {
+export const createRuleEvaluationProcessor = (config: { databaseUrl: string; redisUrl: string }) => {
   const { db } = createDb(config.databaseUrl);
 
   const evaluateStockBelowReorderFromEvent = async (event: RelayJobData): Promise<void> => {
@@ -89,15 +90,18 @@ export const createRuleEvaluationProcessor = (config: { databaseUrl: string }) =
         // the pure function's own tests. Every later fire of the same (org, ruleType) reuses this
         // now-real row via `findEnabledByType`/`resolveApplicableRule`, same as any other
         // tenant-configured rule; a tenant can see/edit it once the notification centre exists.
-        const ruleId = applicableRule?.id ?? (await ruleRepo.create({
+        const rule = applicableRule ?? (await ruleRepo.create({
           ruleType: 'stock_below_reorder',
           severity: DEFAULT_SEVERITY_BY_RULE_TYPE.stock_below_reorder,
           threshold: {},
           recipientRoles: ['MANAGER'],
           channels: ['EMAIL'],
-        })).id;
+        })) as { id: string };
+        const ruleId = rule.id;
+        const recipientRoles = applicableRule?.recipientRoles ?? ['MANAGER'];
+        const channels = applicableRule?.channels ?? ['EMAIL'];
 
-        await notificationRepo.upsertByDedupKey({
+        const { id: notificationId } = await notificationRepo.upsertByDedupKey({
           storeId,
           ruleId,
           severity: evaluation.severity,
@@ -107,6 +111,12 @@ export const createRuleEvaluationProcessor = (config: { databaseUrl: string }) =
           entityType: 'product',
           entityId: productId,
         });
+
+        // Fan-out only on a genuinely NEW notification — an UPDATE means the same open alert is
+        // still firing and must not re-deliver (the plan's own fatigue-prevention rule).
+        if (action.kind === 'CREATE') {
+          await notifyRecipients(db, config.redisUrl, event.organizationId, notificationId, storeId, evaluation.severity, recipientRoles, channels);
+        }
         break;
       }
       case 'RESOLVE':

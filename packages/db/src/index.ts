@@ -60,3 +60,4 @@ export * from './repositories/conversation-repository';
 export * from './repositories/message-repository';
 export * from './repositories/notification-repository';
 export * from './outbox-relay';
+export * from './briefing-schedule';

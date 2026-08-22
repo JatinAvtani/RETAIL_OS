@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Decimal } from 'decimal.js';
 import {
+  buildDailyBriefingDedupKey,
   buildExpiryDedupKey,
   buildPriceChangeDedupKey,
   buildStockBelowReorderDedupKey,
@@ -133,6 +134,16 @@ describe('dedup key builders', () => {
     const a = buildStockBelowReorderDedupKey('store-1', 'product-1', 'variant-1');
     const b = buildStockBelowReorderDedupKey('store-1', 'product-1', 'variant-2');
     expect(a).not.toBe(b);
+  });
+
+  it('buildDailyBriefingDedupKey is unique per (store, local date), stable within the same day', () => {
+    const today = buildDailyBriefingDedupKey('store-1', '2026-08-22');
+    const sameDayRetry = buildDailyBriefingDedupKey('store-1', '2026-08-22');
+    const tomorrow = buildDailyBriefingDedupKey('store-1', '2026-08-23');
+    const otherStore = buildDailyBriefingDedupKey('store-2', '2026-08-22');
+    expect(today).toBe(sameDayRetry);
+    expect(today).not.toBe(tomorrow);
+    expect(today).not.toBe(otherStore);
   });
 });
 

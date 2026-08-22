@@ -1,5 +1,5 @@
-import { createQueueRedisConnection, createRelayPollQueue, registerRelayPollJob } from '@retailos/queue';
-import { buildExtractionWorker, buildFactAggregationWorker, buildEmbeddingWorker, buildRelayPollWorker, buildRuleEvaluationWorker } from './worker';
+import { createQueueRedisConnection, createRelayPollQueue, registerRelayPollJob, createBriefingSchedulePollQueue, registerBriefingSchedulePollJob } from '@retailos/queue';
+import { buildExtractionWorker, buildFactAggregationWorker, buildEmbeddingWorker, buildRelayPollWorker, buildRuleEvaluationWorker, buildNotificationDeliveryWorker, buildBriefingSchedulePollWorker, buildBriefingWorker } from './worker';
 
 const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
 const databaseUrl = process.env.APP_DATABASE_URL ?? process.env.DATABASE_URL ?? 'postgresql://retailos_app:retailos_app_local_only@localhost:5432/retailos';
@@ -74,9 +74,47 @@ ruleEvaluationWorker.on('failed', (job, err) => {
 
 console.log('Outbox relay + rule evaluation workers started.');
 
+const notificationDeliveryWorker = buildNotificationDeliveryWorker({ redisUrl, databaseUrl });
+
+notificationDeliveryWorker.on('completed', (job) => {
+  console.log(`Notification delivery ${job.id} completed for delivery ${job.data.deliveryId}.`);
+});
+
+notificationDeliveryWorker.on('failed', (job, err) => {
+  console.error(`Notification delivery ${job?.id} failed for delivery ${job?.data.deliveryId}: ${err.message}`);
+});
+
+console.log('Notification delivery worker started.');
+
+const briefingSchedulePollWorker = buildBriefingSchedulePollWorker({ redisUrl, databaseUrl });
+
+briefingSchedulePollWorker.on('completed', (job, result: { registered: number; total: number }) => {
+  console.log(`Briefing schedule poll ${job.id}: registered ${result.registered}/${result.total} active stores.`);
+});
+
+briefingSchedulePollWorker.on('failed', (job, err) => {
+  console.error(`Briefing schedule poll ${job?.id} failed: ${err.message}`);
+});
+
+const briefingWorker = buildBriefingWorker({ redisUrl, databaseUrl, geminiApiKey: process.env.GEMINI_API_KEY });
+
+briefingWorker.on('completed', (job) => {
+  console.log(`Daily briefing ${job.id} completed for store ${job.data.storeId}.`);
+});
+
+briefingWorker.on('failed', (job, err) => {
+  console.error(`Daily briefing ${job?.id} failed for store ${job?.data.storeId}: ${err.message}`);
+});
+
+console.log('Daily briefing schedule-poll + generation workers started.');
+
 // Registers (or re-registers, idempotently) the one system-wide relay-poll schedule — safe to
 // call on every worker startup, matching `registerFactAggregationJob`'s own upsert-based
 // idempotency (packages/queue).
 const relayPollQueue = createRelayPollQueue(createQueueRedisConnection(redisUrl));
 await registerRelayPollJob(relayPollQueue);
 console.log('Outbox relay poll schedule registered (every 15s).');
+
+const briefingSchedulePollQueue = createBriefingSchedulePollQueue(createQueueRedisConnection(redisUrl));
+await registerBriefingSchedulePollJob(briefingSchedulePollQueue);
+console.log('Daily briefing schedule-poll registered (every 1h).');

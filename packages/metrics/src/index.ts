@@ -9,3 +9,4 @@ export * from './purchasing/index.js';
 export * from './inventory/index.js';
 export * from './waste/index.js';
 export * from './anomaly/index.js';
+export * from './notifications/index.js';

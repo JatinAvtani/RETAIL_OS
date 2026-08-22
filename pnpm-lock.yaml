@@ -160,12 +160,21 @@ importers:
       '@retailos/ai':
         specifier: workspace:*
         version: link:../../packages/ai
+      '@retailos/assistant':
+        specifier: workspace:*
+        version: link:../../packages/assistant
+      '@retailos/authz':
+        specifier: workspace:*
+        version: link:../../packages/authz
       '@retailos/db':
         specifier: workspace:*
         version: link:../../packages/db
       '@retailos/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@retailos/email':
+        specifier: workspace:*
+        version: link:../../packages/email
       '@retailos/metrics':
         specifier: workspace:*
         version: link:../../packages/metrics

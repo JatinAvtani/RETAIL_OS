@@ -12,6 +12,9 @@
     { "path": "../../packages/ai" },
     { "path": "../../packages/metrics" },
     { "path": "../../packages/queue" },
-    { "path": "../../packages/storage" }
+    { "path": "../../packages/storage" },
+    { "path": "../../packages/email" },
+    { "path": "../../packages/authz" },
+    { "path": "../../packages/assistant" }
   ]
 }

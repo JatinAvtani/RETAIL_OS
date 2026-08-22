@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
-import { resolveDaypart, resolveLocalDate, resolveLocalDateRange, resolveLocalDaypart, resolveLocalHour } from './store-time.js';
+import { resolveDaypart, resolveLocalDate, resolveLocalDateRange, resolveLocalDaypart, resolveLocalHour, resolveUtcCronForLocalTime } from './store-time.js';
 
 describe('resolveLocalDate', () => {
   it('resolves the correct LOCAL date even when the UTC date differs', () => {
@@ -141,6 +141,54 @@ describe('resolveLocalDateRange', () => {
           const hours = (to.getTime() - from.getTime()) / (60 * 60 * 1000);
           expect(hours).toBeGreaterThanOrEqual(23);
           expect(hours).toBeLessThanOrEqual(25);
+        }
+      )
+    );
+  });
+});
+
+describe('resolveUtcCronForLocalTime', () => {
+  it('America/New_York in August (EDT, UTC-4): 06:00 local -> 10:00 UTC', () => {
+    // Independently confirmed via Intl.DateTimeFormat longOffset before writing this expectation:
+    // GMT-04:00 for a mid-August instant.
+    const reference = new Date('2026-08-15T12:00:00Z');
+    expect(resolveUtcCronForLocalTime(reference, 'America/New_York', 6, 0)).toEqual({ hour: 10, minute: 0 });
+  });
+
+  it('America/New_York in January (EST, UTC-5): 06:00 local -> 11:00 UTC -- the DST case fact-aggregation\'s own fixed-cron precedent cannot handle', () => {
+    // Independently confirmed: GMT-05:00 for a mid-January instant -- the SAME timezone, a
+    // DIFFERENT real offset, which is the whole reason this function re-derives per call rather
+    // than caching a timezone's offset once.
+    const reference = new Date('2026-01-15T12:00:00Z');
+    expect(resolveUtcCronForLocalTime(reference, 'America/New_York', 6, 0)).toEqual({ hour: 11, minute: 0 });
+  });
+
+  it('a timezone AHEAD of UTC wraps into the PREVIOUS UTC day (Asia/Tokyo, UTC+9): 06:00 local -> 21:00 UTC', () => {
+    // Independently confirmed: GMT+09:00. 06:00 - 09:00 = -03:00, which wraps to 21:00 the
+    // previous UTC day -- the modulo-wrap arithmetic's own real edge case.
+    const reference = new Date('2026-08-15T12:00:00Z');
+    expect(resolveUtcCronForLocalTime(reference, 'Asia/Tokyo', 6, 0)).toEqual({ hour: 21, minute: 0 });
+  });
+
+  it('a half-hour UTC offset (Asia/Kolkata, UTC+5:30) produces a real non-zero minute', () => {
+    // Independently confirmed: GMT+05:30. 06:00 - 05:30 = 00:30 UTC.
+    const reference = new Date('2026-08-15T12:00:00Z');
+    expect(resolveUtcCronForLocalTime(reference, 'Asia/Kolkata', 6, 0)).toEqual({ hour: 0, minute: 30 });
+  });
+
+  it('is a real property: every result is a valid hour/minute pair, regardless of timezone or reference date', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 1_600_000_000_000, max: 1_800_000_000_000 }),
+        fc.constantFrom('UTC', 'America/New_York', 'Asia/Tokyo', 'Asia/Kolkata', 'Pacific/Chatham', 'Australia/Sydney'),
+        fc.integer({ min: 0, max: 23 }),
+        fc.integer({ min: 0, max: 59 }),
+        (ms, timezone, localHour, localMinute) => {
+          const { hour, minute } = resolveUtcCronForLocalTime(new Date(ms), timezone, localHour, localMinute);
+          expect(hour).toBeGreaterThanOrEqual(0);
+          expect(hour).toBeLessThanOrEqual(23);
+          expect(minute).toBeGreaterThanOrEqual(0);
+          expect(minute).toBeLessThanOrEqual(59);
         }
       )
     );
