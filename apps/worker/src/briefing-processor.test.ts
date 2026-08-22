@@ -119,7 +119,7 @@ describe('briefing processor', () => {
     await adminDb.insert(users).values({ id: ownerUserId, email: `owner-${ownerUserId}@example.test` });
     await adminDb.insert(memberships).values({ id: generateId(), organizationId, userId: ownerUserId, role: 'OWNER', storeIds: null, acceptedAt: new Date() });
 
-    const processor = createBriefingProcessor({ databaseUrl: ADMIN_CONNECTION_STRING, redisUrl: process.env.TEST_REDIS_URL ?? 'redis://localhost:16379', geminiApiKey: undefined });
+    const processor = createBriefingProcessor({ databaseUrl: ADMIN_CONNECTION_STRING, redisUrl: process.env.TEST_REDIS_URL ?? 'redis://localhost:6379', geminiApiKey: undefined });
     await processor(asJob({ organizationId, storeId }));
 
     const notificationRepo = new NotificationRepository(db, organizationId);
@@ -161,7 +161,7 @@ describe('briefing processor', () => {
     await adminDb.insert(users).values({ id: ownerUserId, email: `owner2-${ownerUserId}@example.test` });
     await adminDb.insert(memberships).values({ id: generateId(), organizationId, userId: ownerUserId, role: 'OWNER', storeIds: null, acceptedAt: new Date() });
 
-    const processor = createBriefingProcessor({ databaseUrl: ADMIN_CONNECTION_STRING, redisUrl: process.env.TEST_REDIS_URL ?? 'redis://localhost:16379', geminiApiKey: undefined });
+    const processor = createBriefingProcessor({ databaseUrl: ADMIN_CONNECTION_STRING, redisUrl: process.env.TEST_REDIS_URL ?? 'redis://localhost:6379', geminiApiKey: undefined });
     await processor(asJob({ organizationId, storeId }));
     await processor(asJob({ organizationId, storeId }));
 
