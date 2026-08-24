@@ -9,7 +9,7 @@
  * `salesScale` is a multiplier on the flagship's per-item daily volume. Note it is staggered, not
  * tripled: total ledger volume across three outlets lands near 2.0x a single store, not 3.0x. Every
  * seeded sale line runs the real ingestion pipeline (recipe explosion + FEFO draw + movement
- * posting), so volume is the main driver of both seed time and memory — and this machine has hit
+ * posting), so volume is the main driver of both seed time and memory — and seeding has hit
  * genuine OOM under load before.
  */
 
@@ -101,7 +101,7 @@ export const HISTORY_DAYS = 180;
  * Why split rather than pick one: full receipt fidelity across 180 days generates ~162k receipts /
  * ~344k lines (107 MB). Every one of those lines must run through the real ingestion pipeline
  * (recipe explosion -> FEFO draw -> movement posting) because this project forbids raw inserts —
- * which is hours of seeding and a genuine OOM risk on the dev machine. Aggregates for older history
+ * which is hours of seeding and a genuine OOM risk on a typical dev machine. Aggregates for older history
  * keep trend lines, margin and cost variance completely intact, since those read summed values
  * anyway; nothing that reads a 90- or 180-day window loses information.
  *

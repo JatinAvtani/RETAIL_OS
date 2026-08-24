@@ -1,5 +1,8 @@
 # Vyapaar
 
+[![CI](https://github.com/JatinAvtani/RETAIL_OS/actions/workflows/ci.yml/badge.svg)](https://github.com/JatinAvtani/RETAIL_OS/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Operations intelligence for food-service retail — cafés, bakeries, and restaurants.
 
 Vyapaar reads POS sales and supplier prices, reconciles them against recipes and an append-only
@@ -146,6 +149,9 @@ remembers rather than a gap it keeps prompting about.
 
 ## Architecture
 
+Full walkthrough: **[ARCHITECTURE.md](ARCHITECTURE.md)** — the invariants, the tenancy model, the
+deterministic/probabilistic boundary, and how the assistant is kept from inventing numbers.
+
 A modular monolith across three processes, chosen over microservices because receiving goods
 atomically touches lots, movements, the stock projection, and the event outbox — as separate
 services that becomes a distributed saga with compensating actions, for a workload with no
@@ -158,7 +164,7 @@ apps/worker      Background consumers
 
 packages/domain  Pure business logic, no I/O — costing, FEFO, recipe explosion
 packages/db      Schema, migrations, repositories, tenant guards
-packages/metrics The metric catalog — the only place a business number is computed, ~60 functions
+packages/metrics The metric catalog — the only place a business number is computed, 67 functions
 packages/ai      All model calls — extraction, classification, embeddings, prompt safety
 packages/assistant The grounded answering pipeline — classify, plan, retrieve, narrate, validate
 packages/pos     POS vendor adapters and the canonical sales model
@@ -230,15 +236,31 @@ about code, and only a real run turns it into a measurement.
 
 ```bash
 cp .env.local.example .env.local   # fill in GEMINI_API_KEY to exercise the invoice pipeline
-
-docker compose up -d          # Postgres, Redis, MinIO
+docker compose up -d               # Postgres, Redis, MinIO
 pnpm install
-pnpm --filter @retailos/db db:migrate
-pnpm --filter @retailos/db db:migrate:concurrent
 
-pnpm --filter @retailos/api dev    # :3001
-pnpm --filter @retailos/web dev    # :3000
+pnpm demo                          # migrate, generate the corpus, seed a full demo tenant
 ```
+
+`pnpm demo` is the one-command path: it runs both migrations, regenerates the deterministic corpus,
+and seeds catalog, sales, invoices, purchasing, and engagement data. The sales seed replays ~50k
+transactions through the real repositories, so a full run takes a few hours — everything after
+`seed-demo.mts` can be run separately if you only need part of it.
+
+Then, in three terminals:
+
+```bash
+pnpm --filter @retailos/api dev       # :3001
+pnpm --filter @retailos/web dev       # :3000
+pnpm --filter @retailos/worker dev    # extraction, embeddings, notifications
+```
+
+The worker is not optional for the full experience — document extraction, embeddings, and
+notification delivery are all driven by it.
+
+Scripts load `.env.local` themselves (`packages/db/src/load-env.ts`), so no manual `export` step is
+needed. Real environment variables always take precedence, which is why CI — which sets them
+explicitly and ships no `.env.local` — is unaffected.
 
 ```bash
 pnpm typecheck && pnpm lint && pnpm boundaries && pnpm test
@@ -249,6 +271,8 @@ pnpm typecheck && pnpm lint && pnpm boundaries && pnpm test
 The repository contains a **generator**, not a dataset. `mock-data/generate/` is committed; the
 corpus it produces is gitignored, so a fresh clone reproduces it rather than downloading it:
 
+`pnpm demo` runs all of it. The individual steps, if you need them separately:
+
 ```bash
 pnpm --filter @retailos/api exec tsx ../../mock-data/generate/generate.mts   # write the corpus
 pnpm --filter @retailos/api exec tsx src/scripts/seed-demo.mts               # catalog + sales
@@ -256,6 +280,9 @@ pnpm --filter @retailos/api exec tsx src/scripts/seed-demo-invoices.mts      # G
 pnpm --filter @retailos/api exec tsx src/scripts/seed-demo-operations.mts    # POs, receipts, waste
 pnpm --filter @retailos/api exec tsx src/scripts/seed-demo-engagement.mts    # alerts, history
 ```
+
+Stop the worker before `seed-demo-invoices.mts` — it will otherwise pick up the extraction jobs and
+re-extract over the seeded rows.
 
 A three-outlet Bengaluru café chain: 180 days of history, ~50k sales transactions, ~455k stock
 movements, 75 GST tax invoices with real GSTIN/HSN/CGST-SGST across four distinct supplier layouts.

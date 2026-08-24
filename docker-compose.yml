@@ -22,10 +22,11 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    # Host port 6379 was moved to 16379 — Windows reserves TCP 6373-6472 for its own dynamic
-    # port allocation (Hyper-V/WSL, confirmed via `netsh interface ipv4 show excludedportrange`),
-    # so nothing can ever bind 6379 on the host on this machine regardless of Docker's own state.
-    # Container-internal port is untouched (still 6379), so the healthcheck below needs no change.
+    # Published on 16379 rather than the default 6379: on Windows hosts, TCP 6373-6472 can fall
+    # inside the OS's reserved dynamic-port range (Hyper-V/WSL), leaving 6379 permanently unbindable
+    # regardless of Docker's own state. 16379 avoids that range on every platform.
+    # The container-internal port is unchanged (still 6379), so the healthcheck below is unaffected.
+    # `.env.local.example` sets REDIS_URL to match — the two must stay in sync.
     ports:
       - "16379:6379"
     volumes:

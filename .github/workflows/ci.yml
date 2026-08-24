@@ -103,9 +103,9 @@ jobs:
             sleep 1
           done
 
-      # ubuntu-latest ships postgresql-client preinstalled; verified locally via `docker exec
-      # postgres psql ...` against an isolated container since this Windows dev machine has no
-      # local psql client to test the exact `psql -h localhost` invocation directly.
+      # ubuntu-latest ships postgresql-client preinstalled, so `psql` is available without an
+      # install step. Both scripts are idempotent (CREATE EXTENSION / CREATE ROLE ... IF NOT
+      # EXISTS), so re-running them on a warm database is safe.
       - name: Enable required Postgres extensions
         run: |
           PGPASSWORD=postgres psql -h localhost -U postgres -d retailos -f docker/postgres/init/01-extensions.sql

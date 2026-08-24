@@ -71,7 +71,7 @@ const MODEL = 'gemini-flash-lite-latest';
  * underlying HTTP call takes — defeating the breaker's whole purpose of a fast, bounded fallback.
  * Confirmed as a real gap, not a hypothetical: a genuinely invalid API key (a 401, not one of the
  * SDK's own retryable status codes) still took ~60s+ to resolve on GitHub Actions' network path to
- * Gemini's API, well beyond what it took on this dev machine's network — an unbounded `await` on
+ * Gemini's API, well beyond typical local network latency — an unbounded `await` on
  * that call is exactly the failure mode a circuit breaker exists to prevent.
  */
 const REQUEST_TIMEOUT_MS = 15_000;
