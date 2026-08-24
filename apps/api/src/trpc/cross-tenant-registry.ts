@@ -555,6 +555,17 @@ const seedDocumentAwaitingReview = async (db: Db, organizationId: string): Promi
   return seeded;
 };
 
+/** Same as `seedDocumentAwaitingReview`, but left at `APPROVED` — `documents.retryPosting`'s
+ * own-resource case needs a document stranded in exactly that state to reach a genuine 2xx rather
+ * than the 400 ("only an approved document that never posted can be retried") that a
+ * REVIEW_REQUIRED document would produce, which would mask a real cross-tenant bug behind an
+ * unrelated status code. */
+const seedDocumentApprovedNotPosted = async (db: Db, organizationId: string): Promise<{ storeId: string; documentId: string }> => {
+  const seeded = await seedDocumentAwaitingReview(db, organizationId);
+  await db.update(documents).set({ status: 'APPROVED' }).where(eq(documents.id, seeded.documentId));
+  return seeded;
+};
+
 /**
  * a real `InvoiceMatch` — `invoiceMatches.get`/`.getByDocument`'s own-resource starting
  * state. Reuses `seedStoreSupplierAndSupplierProduct`'s real confirmed mapping and calls
@@ -1367,6 +1378,15 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     type: 'mutation',
     seedResource: async (db, organizationId) => {
       const { documentId } = await seedDocumentAwaitingReview(db, organizationId);
+      return documentId;
+    },
+    buildInput: (resourceId) => ({ documentId: resourceId }),
+  },
+  {
+    path: 'documents.retryPosting',
+    type: 'mutation',
+    seedResource: async (db, organizationId) => {
+      const { documentId } = await seedDocumentApprovedNotPosted(db, organizationId);
       return documentId;
     },
     buildInput: (resourceId) => ({ documentId: resourceId }),

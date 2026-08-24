@@ -92,6 +92,62 @@ const classifyUploadedDocument = async (
  * real mitigations here. XXE/PDF-bomb hardening applies to PARSING a PDF's internal
  * structure, which this task never does — that belongs to extraction, not upload.
  */
+/**
+ * Everything that must happen AFTER a document's approve transition commits: posting, the
+ * three-way match for invoices, and the embedding enqueue.
+ *
+ * Extracted so `approve` and `retryPosting` drive the IDENTICAL flow. Duplicating it would let the
+ * recovery path silently drift from the real one — a retried document posting differently from a
+ * normally-approved one is exactly the divergence this codebase's I2 discipline exists to prevent.
+ */
+const runPostApproval = async (
+  ctx: { db: ConstructorParameters<typeof PostingService>[0]; session: { organizationId: string; userId: string } },
+  documentRepository: DocumentRepository,
+  document: { storeId: string; type: string },
+  documentId: string
+) => {
+  const extraction = await documentRepository.getLatestExtraction(documentId);
+  if (extraction) {
+    const postingService = new PostingService(ctx.db, ctx.session.organizationId);
+    await postingService.postDocument({
+      documentId,
+      storeId: document.storeId,
+      // `documentDate` is passed through so posting books on BUSINESS time (the invoice's own
+      // date), not the upload moment — otherwise a three-month backfill lands entirely on today.
+      fields: extraction.fields as { supplier: { value: string | null }; documentDate?: { value: string | null } },
+      lines: extraction.lines as { sku: { value: string | null }; quantity: { value: string | null }; unitPrice: { value: string | null }; lineTotal: { value: string | null } }[],
+      actorUserId: ctx.session.userId,
+    });
+
+    if (document.type === 'INVOICE') {
+      const invoiceMatchRepository = new InvoiceMatchRepository(ctx.db, ctx.session.organizationId);
+      const rawFields = extraction.fields as { supplier: { value: string | null } };
+      try {
+        await invoiceMatchRepository.runMatch({
+          documentId,
+          storeId: document.storeId,
+          supplierName: rawFields.supplier.value,
+          lines: extraction.lines as { sku: { value: string | null }; quantity: { value: string | null }; unitPrice: { value: string | null } }[],
+        });
+      } catch (err) {
+        // A real, already-matched document (the unique document_id constraint) or an
+        // unresolvable-supplier edge case must not roll back an approve/posting that already
+        // genuinely committed — matching this endpoint's own established two-step gap reasoning.
+        console.warn(`Three-way match failed for document ${documentId}:`, err);
+      }
+    }
+  }
+
+  // Enqueued AFTER approve/posting genuinely succeeded, never inside the same transaction as
+  // either (a failed embedding job must not roll back a real approval). Best-effort: a Redis
+  // hiccup here must not fail an approval that already committed.
+  try {
+    await enqueueEmbeddingJob(embeddingQueue, { documentId, organizationId: ctx.session.organizationId });
+  } catch (err) {
+    console.warn(`Failed to enqueue embedding job for document ${documentId}:`, err);
+  }
+};
+
 export const documentsRouter = router({
   /**
    * 012-02: the real "bulk upload session" marker — created ONCE, before any file in a batch
@@ -322,47 +378,51 @@ export const documentsRouter = router({
       throw new TRPCError({ code: 'BAD_REQUEST', message: 'This document is not awaiting review.' });
     }
 
-    const extraction = await documentRepository.getLatestExtraction(input.documentId);
-    if (extraction) {
-      const postingService = new PostingService(ctx.db, ctx.session.organizationId);
-      await postingService.postDocument({
-        documentId: input.documentId,
-        storeId: updated.storeId,
-        fields: extraction.fields as { supplier: { value: string | null } },
-        lines: extraction.lines as { sku: { value: string | null }; quantity: { value: string | null }; unitPrice: { value: string | null }; lineTotal: { value: string | null } }[],
-        actorUserId: ctx.session.userId,
-      });
-
-      if (updated.type === 'INVOICE') {
-        const invoiceMatchRepository = new InvoiceMatchRepository(ctx.db, ctx.session.organizationId);
-        const rawFields = extraction.fields as { supplier: { value: string | null } };
-        try {
-          await invoiceMatchRepository.runMatch({
-            documentId: input.documentId,
-            storeId: updated.storeId,
-            supplierName: rawFields.supplier.value,
-            lines: extraction.lines as { sku: { value: string | null }; quantity: { value: string | null }; unitPrice: { value: string | null } }[],
-          });
-        } catch (err) {
-          // A real, already-matched document (the unique document_id constraint) or an
-          // unresolvable-supplier edge case must not roll back an approve/posting that already
-          // genuinely committed — matching this endpoint's own established two-step gap reasoning.
-          console.warn(`Three-way match failed for document ${input.documentId}:`, err);
-        }
-      }
-    }
-
-    // enqueued AFTER approve/posting genuinely succeeded, never inside the same
-    // transaction as either (a failed embedding job must not roll back a real approval). A
-    // best-effort enqueue: a Redis hiccup here must not fail an approval that already committed.
-    try {
-      await enqueueEmbeddingJob(embeddingQueue, { documentId: input.documentId, organizationId: ctx.session.organizationId });
-    } catch (err) {
-      console.warn(`Failed to enqueue embedding job for document ${input.documentId}:`, err);
-    }
+    await runPostApproval(ctx, documentRepository, updated, input.documentId);
 
     const posted = await documentRepository.findById(input.documentId);
     return posted ?? updated;
+  }),
+
+  /**
+   * Documents that were approved but never posted — the recoverable half of the deliberate
+   * two-step gap `approve` documents above. Approve commits first, then `PostingService` runs in
+   * its own transaction; a crash or posting failure in between strands the document at `APPROVED`
+   * with, until now, no way to recover it.
+   *
+   * `PostingService.postDocument` always advances a document to `POSTED` (skipped lines included),
+   * so `APPROVED` is an exact signal here, not a heuristic.
+   */
+  listApprovedNotPosted: protectedProcedure.query(async ({ ctx }) => {
+    requirePermission(ctx.session.permissions, 'documents:approve');
+    const documentRepository = new DocumentRepository(ctx.db, ctx.session.organizationId);
+    const stuck = await documentRepository.findApprovedNotPosted();
+    return stuck.filter((doc) => canAccessStore(ctx.session, doc.storeId));
+  }),
+
+  /**
+   * Re-drives posting for one stranded document, through the SAME `runPostApproval` path a normal
+   * approval uses — never a parallel implementation that could drift.
+   *
+   * Safe to call repeatedly: posting moves the document to `POSTED`, which this endpoint refuses,
+   * so a double-click cannot double-post. This is only sound because `approve` is now
+   * status-guarded and idempotent.
+   */
+  retryPosting: protectedProcedure.input(z.object({ documentId: z.string().uuid() })).mutation(async ({ ctx, input }) => {
+    requirePermission(ctx.session.permissions, 'documents:approve');
+    const documentRepository = new DocumentRepository(ctx.db, ctx.session.organizationId);
+    const existing = await documentRepository.findById(input.documentId);
+    if (!existing || !canAccessStore(ctx.session, existing.storeId)) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Document not found.' });
+    }
+    if (existing.status !== 'APPROVED') {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'Only an approved document that never posted can be retried.' });
+    }
+
+    await runPostApproval(ctx, documentRepository, existing, input.documentId);
+
+    const posted = await documentRepository.findById(input.documentId);
+    return posted ?? existing;
   }),
 
   reject: protectedProcedure.input(rejectInput).mutation(async ({ ctx, input }) => {

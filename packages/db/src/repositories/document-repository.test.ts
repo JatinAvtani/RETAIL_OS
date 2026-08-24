@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { generateId } from '@retailos/domain';
 import * as schema from '../schema/index';
 import { auditLogs, documentExtractions, documentLinks, documents, extractionCorrections, organizations, outboxEvents, stores, users } from '../schema/index';
@@ -200,6 +200,50 @@ describe('DocumentRepository', () => {
 
     const [inReview] = await repo.listByStatus('REVIEW_REQUIRED');
     expect(inReview?.id).toBe(created.id);
+  });
+
+  it('two concurrent approvals of the same document produce exactly ONE approval and ONE outbox event (I8)', async () => {
+    const repo = new DocumentRepository(createScopedDb(client), organizationId);
+    const created = await repo.create({
+      storeId,
+      type: 'INVOICE',
+      source: 'UPLOAD',
+      storageKey: `${organizationId}/concurrent-approve.pdf`,
+      contentHash: 'hash-concurrent-approve',
+      mimeType: 'application/pdf',
+      sizeBytes: 1,
+    });
+    // `create` does not leave a document reviewable — the same step every other approve test does.
+    await repo.updateStatus(created.id, 'REVIEW_REQUIRED');
+
+    // Two SEPARATE connections — a single pooled client would serialise these itself and prove
+    // nothing about the status guard.
+    const clientA = postgres(APP_CONNECTION_STRING);
+    const clientB = postgres(APP_CONNECTION_STRING);
+    try {
+      const [a, b] = await Promise.all([
+        new DocumentRepository(createScopedDb(clientA), organizationId).approve(created.id, userId),
+        new DocumentRepository(createScopedDb(clientB), organizationId).approve(created.id, userId),
+      ]);
+
+      // Before the status-guarded UPDATE, both callers read REVIEW_REQUIRED, both passed the
+      // check, and both proceeded — two document.approved events from one invoice, which posting
+      // would turn into two lots, two movements, and two price-history rows.
+      const winners = [a, b].filter((r) => r !== null);
+      expect(winners).toHaveLength(1);
+      expect(winners[0]?.status).toBe('APPROVED');
+
+      const adminDb = drizzle(adminClient, { schema });
+      const events = await adminDb
+        .select()
+        .from(outboxEvents)
+        .where(and(eq(outboxEvents.organizationId, organizationId), eq(outboxEvents.aggregateId, created.id)));
+      expect(events).toHaveLength(1);
+      expect(events[0]?.payload).toMatchObject({ previousStatus: 'REVIEW_REQUIRED' });
+    } finally {
+      await clientA.end();
+      await clientB.end();
+    }
   });
 
   it('approve moves a REVIEW_REQUIRED document to APPROVED and writes a real outbox event + audit log entry, both inside the same write', async () => {

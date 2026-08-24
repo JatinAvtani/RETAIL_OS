@@ -216,6 +216,31 @@ export class DocumentRepository extends TenantScopedRepository<typeof documents>
     return this.reviewDecision(id, reviewedByUserId, 'APPROVED', 'document.approved');
   }
 
+  /**
+   * Documents that were approved but never posted.
+   *
+   * `PostingService.postDocument` always moves a document to `POSTED` — including the
+   * skipped-line cases — so a document still sitting at `APPROVED` is one where approval committed
+   * and posting did not. That gap is real and deliberate (see `documents.ts`'s `approve`): approve
+   * commits first, then posting runs in its own transaction, so a crash or a posting failure in
+   * between leaves the document stranded with no automated recovery.
+   *
+   * Now that `approve` is status-guarded and idempotent, re-driving posting for these is safe:
+   * a document already `POSTED` is not returned here, and re-approving one cannot double-post.
+   *
+   * Ordered oldest-first — a document stuck longest is the one whose costs are most stale.
+   */
+  async findApprovedNotPosted(limit = 50) {
+    return this.runScoped((db, scopedWhere) =>
+      db
+        .select()
+        .from(documents)
+        .where(scopedWhere(eq(documents.status, 'APPROVED')))
+        .orderBy(documents.updatedAt)
+        .limit(limit)
+    );
+  }
+
   /** Same shape as `approve` — a rejected document never posts. */
   async reject(id: string, reviewedByUserId: string, reason?: string) {
     return this.reviewDecision(id, reviewedByUserId, 'REJECTED', 'document.rejected', reason);
@@ -229,18 +254,46 @@ export class DocumentRepository extends TenantScopedRepository<typeof documents>
     reason?: string
   ) {
     return this.runScoped(async (db, scopedWhere) => {
-      const existingRows = await db.select().from(documents).where(scopedWhere(eq(documents.id, id)));
-      const existing = existingRows[0];
-      if (!existing || (existing.status !== 'REVIEW_REQUIRED' && existing.status !== 'AUTO_APPROVED')) {
-        return null;
-      }
+      // The status check and the write are ONE atomic operation (I8). Reading the status, then
+      // issuing an unguarded UPDATE, let two concurrent approvals of the same document both pass
+      // the check and both proceed — emitting two `document.approved` events, and (once posting
+      // consumes them) two lots, two movements, and two price-history rows from a single invoice.
+      //
+      // Carrying the reviewable-status predicate into the UPDATE's own WHERE makes the loser match
+      // ZERO rows and return null, exactly as it would for a document that was never reviewable.
+      // Same shape proven against real Postgres for the FEFO lot guard: the second writer's
+      // guarded UPDATE reports `UPDATE 0` rather than overwriting.
+      //
+      // `previousStatus` must be the value this statement actually replaced, so it comes from the
+      // same atomic UPDATE via a self-join against the pre-update snapshot — not from a separate
+      // earlier SELECT, which a concurrent writer could have invalidated. (`RETURNING old.status`
+      // would express this directly but is Postgres 18+; this database is 16.15, where it fails
+      // with "missing FROM-clause entry for table old". Verified on the real server, both that the
+      // 18-only form errors and that this form returns the correct previous status.)
+      // Every interpolated value is CAST explicitly: `id`/`organization_id` are `uuid` and `status`
+      // is the `document_status` enum, but postgres-js binds these parameters as text. Without the
+      // casts `t.id = $1` compares uuid to text and matches zero rows — the statement succeeds and
+      // silently approves nothing, which is exactly how this first failed.
+      const rows = await db.execute<{ id: string; previous_status: string }>(sql`
+        UPDATE ${documents} AS t
+        SET status = ${status}::document_status, updated_at = now()
+        FROM (
+          SELECT id, status FROM ${documents}
+          WHERE id = ${id}::uuid AND organization_id = ${this.organizationId}::uuid
+        ) AS prev
+        WHERE t.id = prev.id
+          AND t.organization_id = ${this.organizationId}::uuid
+          AND t.status IN ('REVIEW_REQUIRED', 'AUTO_APPROVED')
+        RETURNING t.id, prev.status AS previous_status
+      `);
+      const changed = rows[0];
+      // Not found, not in this org, already decided, or lost a concurrent race — deliberately
+      // indistinguishable to the caller, matching this class's existing `rows[0] ?? null` contract.
+      if (!changed) return null;
+      const previousStatus = changed.previous_status;
 
-      const updatedRows = await db
-        .update(documents)
-        .set({ status, updatedAt: new Date() })
-        .where(scopedWhere(eq(documents.id, id)))
-        .returning();
-      const updated = updatedRows[0];
+      const refreshed = await db.select().from(documents).where(scopedWhere(eq(documents.id, id)));
+      const updated = refreshed[0];
       if (!updated) return null;
 
       await db.insert(outboxEvents).values({
@@ -249,7 +302,7 @@ export class DocumentRepository extends TenantScopedRepository<typeof documents>
         aggregateType: 'document',
         aggregateId: id,
         eventType,
-        payload: { documentId: id, previousStatus: existing.status, ...(reason !== undefined ? { reason } : {}) },
+        payload: { documentId: id, previousStatus, ...(reason !== undefined ? { reason } : {}) },
       });
 
       await db.insert(auditLogs).values({
@@ -260,7 +313,7 @@ export class DocumentRepository extends TenantScopedRepository<typeof documents>
         action: status === 'APPROVED' ? 'document.approved' : 'document.rejected',
         entityType: 'document',
         entityId: id,
-        metadata: { previousStatus: existing.status, ...(reason !== undefined ? { reason } : {}) },
+        metadata: { previousStatus, ...(reason !== undefined ? { reason } : {}) },
       });
 
       return updated;
