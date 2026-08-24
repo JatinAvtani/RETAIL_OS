@@ -39,6 +39,10 @@ export type FailedSelection = {
 export type ExecutionResult = {
   /** Real `MetricResult`s — the only things a future grounding bundle may ever include. */
   results: MetricResult[];
+  /** Same length and order as `results`: the store name each was computed for, when the selection
+   * carried a `storeId`. `MetricResult` has no scope of its own, so without this a question that
+   * fans out across several stores produces indistinguishable figures. */
+  resultScopes: (string | undefined)[];
   /** A real, designed refusal (`MetricPermissionDeniedError`) — the caller lacks the metric's required permission. Never silently dropped; a future narration/refusal path explains this to the user by name. */
   denied: DeniedSelection[];
   /** An unexpected catalog error — e.g. `UnknownMetricError`, which should be unreachable in practice since planning already validates every selection's metricId against the same catalog, but `executeMetric` re-checks independently and this function does not assume that check can never fail differently in the future. */
@@ -48,9 +52,12 @@ export type ExecutionResult = {
 export const executeSelections = async (
   selections: ValidatedSelection[],
   auth: AuthContext,
-  ctx: MetricContext
+  ctx: MetricContext,
+  /** Real store names by id, for labelling. Absent for callers that do not resolve stores. */
+  storeNamesById?: Map<string, string>
 ): Promise<ExecutionResult> => {
   const results: MetricResult[] = [];
+  const resultScopes: (string | undefined)[] = [];
   const denied: DeniedSelection[] = [];
   const failed: FailedSelection[] = [];
 
@@ -58,6 +65,9 @@ export const executeSelections = async (
     try {
       const result = await executeMetric(metricId, params, auth, ctx);
       results.push(result);
+      // Pushed in the SAME step as the result, so the two arrays cannot drift apart.
+      const storeId = params.storeId;
+      resultScopes.push(typeof storeId === 'string' ? storeNamesById?.get(storeId) : undefined);
     } catch (e) {
       if (e instanceof MetricPermissionDeniedError) {
         denied.push({ metricId, reason: e.message });
@@ -69,5 +79,5 @@ export const executeSelections = async (
     }
   }
 
-  return { results, denied, failed };
+  return { results, resultScopes, denied, failed };
 };

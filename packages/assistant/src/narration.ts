@@ -61,12 +61,15 @@ const formatUnit = (value: string, unit: GroundingBundle['metrics'][number]['uni
   }
 };
 
-const formatMetric = (m: GroundingBundle['metrics'][number]): string => {
+const formatMetric = (m: GroundingBundle['metrics'][number], storeName?: string): string => {
   const period = `${m.period.from.toISOString().slice(0, 10)} to ${m.period.to.toISOString().slice(0, 10)}`;
+  // The store is part of what identifies a figure. Without it, one question fanning out across
+  // several stores yields several identical metric ids and the answer can only list bare numbers.
+  const scope = storeName !== undefined ? ` at ${storeName}` : '';
   if (m.value === 'unknown') {
-    return `- ${m.metricId}: unknown (${m.unknownReason ?? 'no reason given'}), period ${period}`;
+    return `- ${m.metricId}${scope}: unknown (${m.unknownReason ?? 'no reason given'}), period ${period}`;
   }
-  return `- ${m.metricId}: ${formatUnit(m.value, m.unit)}, period ${period}, as of ${m.freshness.toISOString()}`;
+  return `- ${m.metricId}${scope}: ${formatUnit(m.value, m.unit)}, period ${period}, as of ${m.freshness.toISOString()}`;
 };
 
 const formatGaps = (denied: DeniedSelection[], failed: FailedSelection[], rejected: RejectedSelection[]): string => {
@@ -97,7 +100,10 @@ const formatPassage = (p: GroundingBundle['passages'][number], index: number): s
   delimitUntrustedText(`document excerpt ${index + 1}, source ${p.sourceId}`, p.text);
 
 const buildPrompt = (bundle: GroundingBundle, denied: DeniedSelection[], failed: FailedSelection[], rejected: RejectedSelection[], strict: boolean): string => {
-  const metricsBlock = bundle.metrics.length > 0 ? bundle.metrics.map(formatMetric).join('\n') : 'None.';
+  const metricsBlock =
+    bundle.metrics.length > 0
+      ? bundle.metrics.map((m, i) => formatMetric(m, bundle.metricScopes?.[i])).join('\n')
+      : 'None.';
   const gapsBlock = formatGaps(denied, failed, rejected);
   const hasPassages = bundle.passages.length > 0;
   const passagesSection = hasPassages

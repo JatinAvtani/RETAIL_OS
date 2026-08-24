@@ -65,7 +65,7 @@ describe('executeSelections', () => {
   it('an empty selections list produces an empty, real result — never fabricates a placeholder entry', async () => {
     const result = await executeSelections([], auth(['financial:read']), { db: {} as never, organizationId: ORG_ID, storeIds: 'ALL' });
 
-    expect(result).toEqual({ results: [], denied: [], failed: [] });
+    expect(result).toEqual({ results: [], resultScopes: [], denied: [], failed: [] });
   });
 
   describe('a real success case against real Postgres', () => {

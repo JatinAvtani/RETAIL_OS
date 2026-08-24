@@ -75,7 +75,7 @@ describe('runPipeline', () => {
     expect(outcome).toEqual({
       kind: 'bundle',
       intent: 'METRIC',
-      bundle: { metrics: [], passages: [], entities: [] },
+      bundle: { metrics: [], metricScopes: [], passages: [], entities: [] },
       denied: [],
       failed: [],
       rejected: [],

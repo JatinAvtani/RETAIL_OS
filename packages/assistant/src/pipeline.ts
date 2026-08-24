@@ -79,6 +79,7 @@ export const runPipeline = async (
   }
 
   let metrics: GroundingBundle['metrics'] = [];
+  let metricScopes: (string | undefined)[] = [];
   let denied: DeniedSelection[] = [];
   let failed: FailedSelection[] = [];
   let rejected: RejectedSelection[] = [];
@@ -95,8 +96,14 @@ export const runPipeline = async (
     // business number — an I7 violation the grounding validator cannot catch, because a metric
     // value is exactly what its allowlist permits.
     const storeCheck = resolveStoreParams(plan.selections, accessibleStores);
-    const execution = await executeSelections(storeCheck.resolved, auth, ctx);
+    const execution = await executeSelections(
+      storeCheck.resolved,
+      auth,
+      ctx,
+      new Map(accessibleStores.map((s) => [s.id, s.name]))
+    );
     metrics = execution.results;
+    metricScopes = execution.resultScopes;
     denied = execution.denied;
     failed = execution.failed;
     rejected = [...plan.rejected, ...storeCheck.rejected];
@@ -107,7 +114,7 @@ export const runPipeline = async (
     passages = await retrievePassages(question, { searchRepository: ctx.searchRepository!, geminiApiKey: ctx.geminiApiKey });
   }
 
-  const bundle: GroundingBundle = { metrics, passages, entities: [] };
+  const bundle: GroundingBundle = { metrics, metricScopes, passages, entities: [] };
 
   return { kind: 'bundle', intent, bundle, denied, failed, rejected };
 };

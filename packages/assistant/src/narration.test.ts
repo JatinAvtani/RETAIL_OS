@@ -30,6 +30,37 @@ const realMetric: GroundingBundle['metrics'][number] = {
 };
 
 describe('narrate', () => {
+  it('names the store behind each figure when one question fans out across several stores', async () => {
+    const generate = vi.fn().mockResolvedValue(ok('Koramangala led at 1,234.56.'));
+    const provider: ChatProvider = { name: 'fake', generate, generateStructured: vi.fn() };
+    const bundle: GroundingBundle = {
+      metrics: [realMetric, { ...realMetric, value: '999.0000' }],
+      metricScopes: ['Koramangala', 'Indiranagar'],
+      passages: [],
+      entities: [],
+    };
+
+    await narrate(provider, bundle, [], [], [], 'fake-model');
+
+    const [prompt] = generate.mock.calls[0] as [string, string];
+    // Before this, the same metric id appeared twice with no scope, and a live answer could only
+    // say "we have three different figures recorded for gross revenue: ..., ..., and ...".
+    expect(prompt).toContain('net_revenue at Koramangala');
+    expect(prompt).toContain('net_revenue at Indiranagar');
+  });
+
+  it('omits the scope entirely for an org-wide metric — never invents a store label', async () => {
+    const generate = vi.fn().mockResolvedValue(ok('1,234.56.'));
+    const provider: ChatProvider = { name: 'fake', generate, generateStructured: vi.fn() };
+    const bundle: GroundingBundle = { metrics: [realMetric], metricScopes: [undefined], passages: [], entities: [] };
+
+    await narrate(provider, bundle, [], [], [], 'fake-model');
+
+    const [prompt] = generate.mock.calls[0] as [string, string];
+    expect(prompt).toContain('- net_revenue: ');
+    expect(prompt).not.toContain('net_revenue at');
+  });
+
   it('returns the real generated text on success', async () => {
     const provider = fakeProvider(ok('Your net revenue for August was $1,234.56.'));
     const bundle: GroundingBundle = { metrics: [realMetric], passages: [], entities: [] };
