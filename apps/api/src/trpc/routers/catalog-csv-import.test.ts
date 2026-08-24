@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import {
   createDb,
   hashPassword,
@@ -243,18 +243,43 @@ describe('catalogCsvImport router', () => {
     const { confirmResponse } = await uploadCsv('PRODUCT', sessionCookie, PRODUCT_CSV);
     const { importId } = asSuccess(confirmResponse.json()) as { importId: string };
 
-    await app.inject({
+    /**
+     * Both responses are asserted, not discarded. Without this the test reads its own precondition
+     * failures as its subject: if mapping or commit fails for any reason, the category query
+     * returns nothing and the assertion reports `expected undefined to be 'Dry goods'` — which
+     * names the symptom and hides the cause. That is exactly how this failed in CI while passing
+     * locally, with no indication of which step actually broke.
+     */
+    const mappingResponse = await app.inject({
       method: 'POST',
       url: '/trpc/catalogCsvImport.submitColumnMapping',
       payload: { importId, columnMapping: PRODUCT_MAPPING },
       cookies: { '__Host-session': sessionCookie },
     });
-    await app.inject({ method: 'POST', url: '/trpc/catalogCsvImport.commit', payload: { importId }, cookies: { '__Host-session': sessionCookie } });
+    expect(mappingResponse.statusCode).toBe(200);
+
+    const commitResponse = await app.inject({
+      method: 'POST',
+      url: '/trpc/catalogCsvImport.commit',
+      payload: { importId },
+      cookies: { '__Host-session': sessionCookie },
+    });
+    expect(commitResponse.statusCode).toBe(200);
 
     const [category] = await db.select().from(categories).where(eq(categories.organizationId, organizationId));
     expect(category?.name).toBe('Dry goods');
 
-    const [flour] = await db.select().from(products).where(eq(products.sku, 'SKU-1'));
+    /**
+     * Scoped to THIS test's organization. Querying by SKU alone matched whichever `SKU-1` the
+     * database happened to return first — and several tests in this file create their own `SKU-1`
+     * under different orgs, so the row came back from another test's tenant depending on execution
+     * order and leftover rows. A tenant-scoped query is what the application layer enforces
+     * everywhere (I4); a test that reaches around it can assert against another tenant's data.
+     */
+    const [flour] = await db
+      .select()
+      .from(products)
+      .where(and(eq(products.organizationId, organizationId), eq(products.sku, 'SKU-1')));
     expect(flour?.categoryId).toBe(category?.id);
   });
 
