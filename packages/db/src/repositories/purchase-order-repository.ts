@@ -1,4 +1,5 @@
 import { and, desc, eq, gte, inArray, isNotNull, lt, sql } from 'drizzle-orm';
+import { Decimal } from 'decimal.js';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { generateId } from '@retailos/domain';
 import {
@@ -225,8 +226,13 @@ export class PurchaseOrderRepository extends TenantScopedRepository<typeof purch
       if (!po) return { ok: false, reason: 'NOT_FOUND' };
       if (po.status !== 'DRAFT') return { ok: false, reason: 'NOT_EDITABLE' };
 
-      const quantityBaseUnits = (Number(input.quantityOrderUnits) * Number(input.conversionToBase)).toString();
-      const lineTotal = (Number(input.quantityOrderUnits) * Number(input.unitPrice)).toFixed(4);
+      // Decimal, not float (I5). These are a quantity and a money value written straight into
+      // NUMERIC columns: `lineTotal` is what the three-way match reconciles an invoice against, and
+      // `quantityBaseUnits` was not even rounded — a raw float string like
+      // `0.30000000000000004` went directly into NUMERIC(19,6). Scales match the columns'
+      // own precision (quantity 6, money 4).
+      const quantityBaseUnits = new Decimal(input.quantityOrderUnits).times(new Decimal(input.conversionToBase)).toFixed(6);
+      const lineTotal = new Decimal(input.quantityOrderUnits).times(new Decimal(input.unitPrice)).toFixed(4);
 
       const id = generateId();
       await db.insert(purchaseOrderLines).values({

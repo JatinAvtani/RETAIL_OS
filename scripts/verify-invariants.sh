@@ -244,6 +244,29 @@ r=$(search '[A-Za-z_]*([Pp]rice|[Cc]ost|[Aa]mount|[Tt]otal|[Rr]evenue|[Mm]argin|
 report HIGH I5 "Money or quantity typed as \`number\`" \
   "Float arithmetic on money loses precision silently. Use Money / Quantity<Unit>." "$r"
 
+# A runtime `Number(...)` coercion on a money/quantity COLUMN is the same I5 violation as declaring
+# the field `number`, but the check above cannot see it - it matches type annotations, not casts.
+# Added after a real defect: stock-count-service.ts computed shrinkage as
+# `Number(counted) - Number(theoretical)` and `variance * unitCost`, writing the float result back
+# through `toFixed`. It passed every existing check while silently accumulating representation
+# error in ledger values.
+#
+# The pattern deliberately matches only a coercion FOLLOWED BY ARITHMETIC (an operator, or a
+# `.toFixed`/`.toPrecision` that writes the float back out). A bare SIGN TEST — `Number(x) > 0`,
+# `Number(x) < 0` — is not matched, and that is a real distinction rather than a convenience:
+# binary rounding cannot change whether a stored NUMERIC is greater or less than zero, and every
+# such site in this repo (FEFO candidate filtering in movement-service/transfer-service, negative-
+# stock and active-lot styling in the web app) discards the coerced value immediately, rendering or
+# computing from the original string. Narrowing the pattern is honest here; a path allowlist would
+# have grown with every new sign test while hiding the next real arithmetic bug in the same file.
+#
+# mock-data/generate/findings.mts excluded by path: it is the corpus GENERATOR's own reporting
+# pass, not product code — it summarises a generated corpus into `mock-data/findings/` for
+# documentation. The corpus itself does all money arithmetic in scaled BigInt
+# (mock-data/generate/money.mts), and nothing here reaches the database or a user-facing figure.
+r=$(search 'Number\([a-z][A-Za-z_]*\.[A-Za-z_]*([Pp]rice|[Cc]ost|[Aa]mount|[Tt]otal|[Rr]evenue|[Mm]argin|[Qq]uantity|[Qq]ty)[A-Za-z_]*\)[[:space:]]*([-+*/]|\.to[FP]|[)]?[[:space:]]*[-+*/])' 'mock-data/generate/findings\.mts' '*.ts')
+report HIGH I5 "Runtime \`Number()\` coercion of a money or quantity value"   "Coercing a NUMERIC column to float loses precision. Use Decimal / Money / Quantity<Unit>." "$r"
+
 r=$(search '(price|cost|amount|total|revenue|quantity)[a-z_]*\s+(float|double|real)' '' '*.sql')
 report HIGH I5 "Float column in a monetary/quantity path" \
   "Money is NUMERIC(19,4); quantity NUMERIC(19,6)." "$r"

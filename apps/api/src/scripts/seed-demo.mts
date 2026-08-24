@@ -1,3 +1,5 @@
+// Loads .env.local so this script runs straight from a fresh clone (see load-env.ts).
+import '@retailos/config/auto';
 /**
  * Seeds the demo tenant by READING the generated Indian corpus in `mock-data/`.
  *
@@ -27,6 +29,7 @@
  *   --skip-wipe    add to the existing org instead of rebuilding (debugging only)
  */
 import { readFileSync } from 'node:fs';
+import { Decimal } from 'decimal.js';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -534,10 +537,12 @@ for (const item of posItemsSpec.fromMenu) {
   const spec = menuItemSpecs.find((m) => m.name === item.menuItemName)!;
   // Recipe quantities are per BATCH, and the batch yields `yieldQuantity` units — dividing here is
   // what keeps a 12-portion batch from being charged as 12 full batches.
-  const yieldQty = Number(spec.yieldQuantity);
+  // Decimal (I5): this per-portion quantity drives real recipe explosion and consumption
+  // posting, so float division here propagates into every movement the seed writes.
+  const yieldQty = new Decimal(spec.yieldQuantity);
   componentsByPosExternal.set(
     item.externalId,
-    spec.components.map((c) => ({ sku: c.sku, quantity: Number(c.quantity) / yieldQty }))
+    spec.components.map((c) => ({ sku: c.sku, quantity: new Decimal(c.quantity).dividedBy(yieldQty).toNumber() }))
   );
 }
 
@@ -664,7 +669,9 @@ for (const day of aggregates) {
   const storeId = storeIdByCode.get(day.storeCode)!;
   const occurredAt = new Date(`${day.date}T12:00:00.000Z`);
   for (const item of day.items) {
-    const lineTotal = (Number(item.unitPrice) * item.units).toFixed(4);
+    // Decimal (I5): this is real money written into sales_transaction_lines, which every
+    // revenue and margin metric then reads.
+    const lineTotal = new Decimal(item.unitPrice).times(item.units).toFixed(4);
     const recordedAgg = await salesRepo.recordIfNew({
       storeId,
       source: 'square',

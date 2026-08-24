@@ -29,6 +29,7 @@ import {
   StockCountService,
 } from './stock-count-service';
 import { UnknownCostSurplusError } from './movement-service';
+import { UnknownVarianceError } from './stock-count-service';
 import { MovementService } from './movement-service';
 import { LotRepository } from './lot-repository';
 import { ProductRepository } from './product-repository';
@@ -462,6 +463,47 @@ describe('StockCountService', () => {
 
   it('constructor throws without an organizationId', () => {
     expect(() => new StockCountService(createScopedDb(client), '')).toThrow();
+  });
+
+  it('a line whose theoretical quantity was never snapshotted keeps a NULL variance instead of a fabricated one measured against zero', async () => {
+    const service = new StockCountService(createScopedDb(client), organizationId);
+    const count = await service.createCount({ storeId, scope: 'full', productVariantPairs: [{ productId, variantId }] });
+
+    // Deliberately NOT calling startCount — that is the only writer of theoreticalQuantityT0, so
+    // the line's theoretical quantity stays null. Move straight to IN_PROGRESS so a count can be
+    // entered against a line that was never snapshotted.
+    // Admin connection for this raw update: a plain query outside a repository carries no tenant
+    // context, so as the RLS-scoped app role it would match zero rows.
+    const adminDb = drizzle(adminClient, { schema });
+    await adminDb.update(stockCounts).set({ status: 'IN_PROGRESS' }).where(eq(stockCounts.id, count.id));
+    const lineId = (await service.findLines(count.id))[0]!.id;
+    await service.enterCount(lineId, '97.000000', userId);
+
+    await service.submitCount(count.id, userId);
+
+    const line = (await service.findLines(count.id))[0]!;
+    // The old `?? '0'` produced varianceQuantity = 97 here — a real-looking shrinkage figure
+    // measured against a theoretical quantity that was never established (I7).
+    expect(line.theoreticalQuantityT0).toBeNull();
+    expect(line.varianceQuantity).toBeNull();
+    expect(line.varianceValue).toBeNull();
+  });
+
+  it('approving a count with an unestablished variance is refused rather than silently skipped as clean', async () => {
+    const service = new StockCountService(createScopedDb(client), organizationId);
+    const count = await service.createCount({ storeId, scope: 'full', productVariantPairs: [{ productId, variantId }] });
+
+    // Admin connection for this raw update: a plain query outside a repository carries no tenant
+    // context, so as the RLS-scoped app role it would match zero rows.
+    const adminDb = drizzle(adminClient, { schema });
+    await adminDb.update(stockCounts).set({ status: 'IN_PROGRESS' }).where(eq(stockCounts.id, count.id));
+    const lineId = (await service.findLines(count.id))[0]!.id;
+    await service.enterCount(lineId, '97.000000', userId);
+    await service.submitCount(count.id, userId);
+
+    // The old `?? '0'` read this null as "zero variance" and `continue`d — approving the count as
+    // though the line had been reconciled and found clean.
+    await expect(service.approveCount(count.id, userId)).rejects.toThrow(UnknownVarianceError);
   });
 
   describe('scoped count creation', () => {

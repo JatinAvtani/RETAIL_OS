@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { quantity, subtractQuantity } from '@retailos/domain';
 import { useParams, useRouter } from 'next/navigation';
 import { TRPCClientError } from '@trpc/client';
 import Link from 'next/link';
@@ -330,8 +331,17 @@ export default function ReceivePurchaseOrderPage() {
 
 /** `quantityBaseUnits` (ordered) minus `receivedQuantityBaseUnits` (received so far, null meaning zero — I7 at the schema layer, not this UI's own invention). A line already fully received returns `'0'`, filtered out of the outstanding list. */
 function remainingBaseUnits(line: PoLine): string {
-  const ordered = Number(line.quantityBaseUnits);
-  const received = line.receivedQuantityBaseUnits !== null ? Number(line.receivedQuantityBaseUnits) : 0;
-  const remaining = ordered - received;
-  return remaining > 0 ? remaining.toString() : '0';
+  // Decimal arithmetic, not float (I5): this value is submitted as the receipt quantity, so binary
+  // rounding here writes a wrong number into the ledger. Uses the domain's own `Quantity`
+  // primitives rather than importing `decimal.js` into the web bundle — `apps/web` deliberately
+  // keeps a lean dependency list, and `@retailos/domain` is already a dependency.
+  //
+  // Both operands are ALREADY in the product's base unit (the column name says so), so the unit
+  // tag carries no information here and the subtraction is unit-safe by construction — the same
+  // tag is used for both sides purely to satisfy `subtractQuantity`'s unit-matching signature.
+  // Scale matches the NUMERIC(19,6) column.
+  const ordered = quantity(line.quantityBaseUnits, 'each');
+  const received = quantity(line.receivedQuantityBaseUnits ?? '0', 'each');
+  const remaining = subtractQuantity(ordered, received);
+  return remaining.amount.greaterThan(0) ? remaining.amount.toFixed(6) : '0';
 }

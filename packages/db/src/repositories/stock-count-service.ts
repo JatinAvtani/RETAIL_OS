@@ -1,4 +1,5 @@
 import { and, asc, eq, isNull, sql } from 'drizzle-orm';
+import { Decimal } from 'decimal.js';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import * as schema from '../schema/index';
 import { organizations, productVariants, products, stockCountLines, stockCounts, stockLevels, storageLocations, units } from '../schema/index';
@@ -22,6 +23,13 @@ export class InvalidStockCountTransitionError extends Error {
   constructor(from: string, to: string) {
     super(`Cannot transition a stock count from '${from}' to '${to}'.`);
     this.name = 'InvalidStockCountTransitionError';
+  }
+}
+
+export class UnknownVarianceError extends Error {
+  constructor(public readonly lineId: string) {
+    super(`Stock count line '${lineId}' has no established variance — its theoretical quantity was never snapshotted, so the shrinkage is unknown and cannot be reconciled into the ledger.`);
+    this.name = 'UnknownVarianceError';
   }
 }
 
@@ -300,16 +308,26 @@ export class StockCountService {
           if (line.countedQuantity === null) {
             throw new Error(`Stock count line '${line.id}' has not been counted yet — cannot submit an incomplete count.`);
           }
-          const theoretical = Number(line.theoreticalQuantityT0 ?? '0');
-          const counted = Number(line.countedQuantity);
-          const varianceQuantity = counted - theoretical;
-          const unitCost = line.t0UnitCost !== null ? Number(line.t0UnitCost) : null;
-          const varianceValue = unitCost !== null ? varianceQuantity * unitCost : null;
+          // Decimal, not `Number`: these are money and quantity (I5). Binary floating point cannot
+          // represent most decimal fractions exactly, so `counted - theoretical` and
+          // `varianceQuantity * unitCost` accumulated real representation error before being
+          // written back through `toFixed` — silently wrong shrinkage values in the ledger, and
+          // invisible to the invariant scanner, which cannot see a raw `Number()` coercion.
+          //
+          // `theoreticalQuantityT0` is a NULLABLE column, and the previous `?? '0'` turned a
+          // genuinely unknown theoretical quantity into a fabricated variance measured against
+          // zero — an I7 violation that reads as a real, actionable shrinkage figure. A line whose
+          // theoretical quantity was never established has an unknown variance, so both variance
+          // columns (also nullable) stay null rather than carrying an invented number.
+          const counted = new Decimal(line.countedQuantity);
+          const varianceQuantity = line.theoreticalQuantityT0 !== null ? counted.minus(new Decimal(line.theoreticalQuantityT0)) : null;
+          const unitCost = line.t0UnitCost !== null ? new Decimal(line.t0UnitCost) : null;
+          const varianceValue = varianceQuantity !== null && unitCost !== null ? varianceQuantity.times(unitCost) : null;
 
           await tx
             .update(stockCountLines)
             .set({
-              varianceQuantity: varianceQuantity.toFixed(6),
+              varianceQuantity: varianceQuantity !== null ? varianceQuantity.toFixed(6) : null,
               varianceValue: varianceValue !== null ? varianceValue.toFixed(4) : null,
               updatedAt: new Date(),
             })
@@ -363,19 +381,32 @@ export class StockCountService {
           .where(eq(stockCountLines.stockCountId, stockCountId));
 
         for (const line of lineRows) {
-          const theoretical = Number(line.theoreticalQuantityT0 ?? '0');
-          const varianceQuantity = Number(line.varianceQuantity ?? '0');
-          if (varianceQuantity === 0) continue;
+          // A NULL variance means "not established" — `submitCount` leaves it null when the line's
+          // theoretical quantity was never snapshotted. The previous `?? '0'` collapsed that
+          // unknown into "zero variance, nothing to reconcile" and skipped the line silently, so a
+          // line with genuinely unknown shrinkage was approved as if it had been checked and found
+          // clean (I7). Refuse instead: an unknown variance cannot be reconciled into the ledger.
+          if (line.varianceQuantity === null) {
+            throw new UnknownVarianceError(line.id);
+          }
+          const varianceQuantity = new Decimal(line.varianceQuantity);
+          if (varianceQuantity.isZero()) continue;
 
-          const magnitude = theoretical !== 0 ? Math.abs(varianceQuantity) / Math.abs(theoretical) : 1;
-          if (magnitude >= LARGE_VARIANCE_THRESHOLD && !line.reasonCode) {
+          // Decimal throughout (I5) — this magnitude gates whether a reason code is required, so
+          // float error here can flip a line across the threshold in either direction.
+          const theoretical = line.theoreticalQuantityT0 !== null ? new Decimal(line.theoreticalQuantityT0) : null;
+          const magnitude =
+            theoretical !== null && !theoretical.isZero()
+              ? varianceQuantity.abs().dividedBy(theoretical.abs())
+              : new Decimal(1);
+          if (magnitude.greaterThanOrEqualTo(LARGE_VARIANCE_THRESHOLD) && !line.reasonCode) {
             throw new MissingVarianceReasonError(line.id);
           }
 
           // A surplus (positive variance) with no known cost basis blocks approval entirely
           // (I7) — checked before any writes, not discovered mid-loop after other lines' movements
           // have already posted.
-          if (varianceQuantity > 0 && line.t0UnitCost === null) {
+          if (varianceQuantity.greaterThan(0) && line.t0UnitCost === null) {
             throw new UnknownCostSurplusError(line.productId);
           }
         }
@@ -385,8 +416,13 @@ export class StockCountService {
         // instead, this reconciliation calls a dedicated method that accepts an existing Tx.
         const movementService = new MovementService(this.db, this.organizationId);
         for (const line of lineRows) {
-          const varianceQuantity = Number(line.varianceQuantity ?? '0');
-          if (varianceQuantity === 0) continue;
+          // The pre-flight loop above already refused every null variance, so a null here would be
+          // a genuine invariant break rather than ordinary missing data — surfaced, never coerced.
+          if (line.varianceQuantity === null) {
+            throw new UnknownVarianceError(line.id);
+          }
+          const varianceQuantity = new Decimal(line.varianceQuantity);
+          if (varianceQuantity.isZero()) continue;
 
           // The product's real base unit (I6) — stock_levels/lots quantities are already stored
           // in this unit, resolved here rather than assumed.
