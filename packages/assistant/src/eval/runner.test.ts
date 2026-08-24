@@ -31,7 +31,7 @@ const auth: AuthContext = {
   role: 'OWNER',
   permissions: new Set(['financial:read']) as AuthContext['permissions'],
 };
-const deps: EvalRunDeps = { auth, ctx: { db: {} as never, organizationId: 'org-1', storeIds: 'ALL' }, classifyModel: 'classify-model', planModel: 'plan-model', narrateModel: 'narrate-model' };
+const deps: EvalRunDeps = { auth, ctx: { db: {} as never, organizationId: 'org-1', storeIds: 'ALL' }, classifyModel: 'classify-model', planModel: 'plan-model', narrateModel: 'narrate-model', accessibleStores: [{ id: '11111111-1111-4111-8111-111111111111', name: 'Koramangala' }] };
 
 const structuredOk = (data: unknown): StructuredChatResult => ({ provider: 'fake', modelVersion: 'fake-model', latencyMs: 1, error: null, data });
 const generateOk = (text: string): ChatResult => ({ provider: 'fake', modelVersion: 'fake-model', latencyMs: 1, error: null, text });

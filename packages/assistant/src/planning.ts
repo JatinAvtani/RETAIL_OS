@@ -2,6 +2,12 @@ import { z } from 'zod';
 import { getMetric } from '@retailos/metrics';
 import { delimitUntrustedText, UNTRUSTED_DATA_INSTRUCTION, type ChatProvider } from '@retailos/ai';
 import { buildMetricToolSurface, type MetricToolDefinition } from './tool-surface';
+import { applyDefaultStore, type AccessibleStore } from './resolve-store-params';
+import type { RejectedSelection, ValidatedSelection } from './selection';
+
+// Re-exported so existing importers of these types from './planning' keep working; they are
+// DECLARED in './selection' so planning and resolve-store-params do not form an import cycle.
+export type { RejectedSelection, ValidatedSelection };
 
 /**
  * "PLAN (LLM with tool definitions = the metric catalog) → selects metric IDs + parameters →
@@ -61,16 +67,6 @@ const rawPlanSchema = z.object({
   ),
 });
 
-export type ValidatedSelection = {
-  metricId: string;
-  params: Record<string, unknown>;
-};
-
-export type RejectedSelection = {
-  metricId: string;
-  reason: string;
-};
-
 export type PlanResult = {
   /** Selections that passed BOTH checks: the metric id exists in the catalog, AND its own params parsed against the metric's real Zod schema. Only these are safe to hand to execution. */
   selections: ValidatedSelection[];
@@ -83,15 +79,21 @@ export type PlanResult = {
 const describeTool = (tool: MetricToolDefinition): string =>
   `- ${tool.name}: ${tool.description}\n  parameters: ${JSON.stringify(tool.parametersSchema)}`;
 
-const buildPrompt = (question: string, tools: MetricToolDefinition[]): string =>
+const describeStore = (store: AccessibleStore): string => `- ${store.id}: ${store.name}`;
+
+const buildPrompt = (question: string, tools: MetricToolDefinition[], accessibleStores: AccessibleStore[]): string =>
   `You are planning how to answer a business question by selecting metric functions to call. You do NOT compute any number yourself — you only choose which metric(s) to call and with what parameters. A question may need one metric or several.
 
 Available metrics:
 ${tools.map(describeTool).join('\n')}
 
+Stores this user can access (use these EXACT ids for any storeId parameter):
+${accessibleStores.length > 0 ? accessibleStores.map(describeStore).join('\n') : '- (none)'}
+
 Rules:
 - Only select metricId values from the list above. Never invent one.
 - Provide every parameter each selected metric's own schema requires.
+- A storeId MUST be copied exactly from the store list above. Never invent, guess, or construct a storeId — if the question names a store, use that store's id; if it names none and there is exactly one store, use it.
 - If the question genuinely doesn't need any of these metrics, return an empty selections array — do not force a selection that doesn't fit.
 - ${UNTRUSTED_DATA_INSTRUCTION}
 
@@ -109,7 +111,8 @@ ${delimitUntrustedText('question', question)}`;
  * what the model proposed is real.
  */
 const validateSelections = (
-  proposed: { metricId: string; paramsJson: string }[]
+  proposed: { metricId: string; paramsJson: string }[],
+  accessibleStores: AccessibleStore[]
 ): { selections: ValidatedSelection[]; rejected: RejectedSelection[] } => {
   const selections: ValidatedSelection[] = [];
   const rejected: RejectedSelection[] = [];
@@ -129,7 +132,16 @@ const validateSelections = (
       continue;
     }
 
-    const parsed = definition.parameters.safeParse(params);
+    // Fill an omitted storeId ONLY when there is exactly one accessible store, before the metric's
+    // own schema sees the params — `storeId` is required with no default, so defaulting after
+    // `safeParse` would be unreachable. With several stores this is a no-op and the selection is
+    // reported as a real gap, which is how the caller gets asked which store they meant.
+    const withDefaults =
+      params !== null && typeof params === 'object' && !Array.isArray(params)
+        ? applyDefaultStore(params as Record<string, unknown>, accessibleStores)
+        : params;
+
+    const parsed = definition.parameters.safeParse(withDefaults);
     if (!parsed.success) {
       rejected.push({ metricId, reason: `parameters did not match the metric's own schema: ${parsed.error.message}` });
       continue;
@@ -141,9 +153,14 @@ const validateSelections = (
   return { selections, rejected };
 };
 
-export const planMetricSelections = async (provider: ChatProvider, question: string, model: string): Promise<PlanResult> => {
+export const planMetricSelections = async (
+  provider: ChatProvider,
+  question: string,
+  model: string,
+  accessibleStores: AccessibleStore[]
+): Promise<PlanResult> => {
   const tools = buildMetricToolSurface();
-  const result = await provider.generateStructured(buildPrompt(question, tools), model, PLAN_RESPONSE_SCHEMA);
+  const result = await provider.generateStructured(buildPrompt(question, tools, accessibleStores), model, PLAN_RESPONSE_SCHEMA);
 
   if (result.error) {
     return { selections: [], rejected: [], error: result.error };
@@ -154,6 +171,6 @@ export const planMetricSelections = async (provider: ChatProvider, question: str
     return { selections: [], rejected: [], error: `response did not match the expected plan shape: ${parsed.error.message}` };
   }
 
-  const { selections, rejected } = validateSelections(parsed.data.selections);
+  const { selections, rejected } = validateSelections(parsed.data.selections, accessibleStores);
   return { selections, rejected, error: null };
 };

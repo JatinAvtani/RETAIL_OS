@@ -1,4 +1,5 @@
 import type { AuthContext } from '@retailos/authz';
+import type { AccessibleStore } from '../resolve-store-params';
 import type { MetricContext } from '@retailos/metrics';
 import type { IntentType } from '@retailos/ai';
 
@@ -112,4 +113,8 @@ export type EvalRunDeps = {
   classifyModel: string;
   planModel: string;
   narrateModel: string;
+  /** The real stores of the org this suite runs against. The eval must exercise the SAME store
+   * resolution production does — a suite that skipped it would pass while the live assistant
+   * fabricated a storeId, which is exactly the gap this list closes. */
+  accessibleStores: AccessibleStore[];
 };

@@ -5,6 +5,7 @@ import type { MetricContext } from '@retailos/metrics';
 import type { SearchRepository } from '@retailos/db';
 import { planMetricSelections, type RejectedSelection } from './planning';
 import { executeSelections, type DeniedSelection, type FailedSelection } from './execute-selections';
+import { resolveStoreParams, type AccessibleStore } from './resolve-store-params';
 import { retrievePassages } from './retrieval';
 import type { GroundingBundle } from './grounding-bundle';
 
@@ -59,7 +60,8 @@ export const runPipeline = async (
   classifyModel: string,
   planModel: string,
   auth: AuthContext,
-  ctx: MetricContext & { searchRepository?: SearchRepository; geminiApiKey?: string }
+  ctx: MetricContext & { searchRepository?: SearchRepository; geminiApiKey?: string },
+  accessibleStores: AccessibleStore[]
 ): Promise<PipelineOutcome> => {
   const classification = await classifyIntent(provider, question, classifyModel);
   if (classification.error) {
@@ -82,15 +84,22 @@ export const runPipeline = async (
   let rejected: RejectedSelection[] = [];
 
   if (intent === 'METRIC' || intent === 'HYBRID') {
-    const plan = await planMetricSelections(provider, question, planModel);
+    const plan = await planMetricSelections(provider, question, planModel, accessibleStores);
     if (plan.error) {
       return { kind: 'error', reason: plan.error };
     }
-    const execution = await executeSelections(plan.selections, auth, ctx);
+    // The model is now GIVEN the real store list, but is never TRUSTED with it: any storeId it did
+    // not copy from that list is rejected here, before execution. Without this, an invented but
+    // syntactically valid UUID passes the metric's own `z.string().uuid()` schema, matches zero
+    // rows under the org-scoped repositories, and a summing metric reports "0.0000" as a real
+    // business number — an I7 violation the grounding validator cannot catch, because a metric
+    // value is exactly what its allowlist permits.
+    const storeCheck = resolveStoreParams(plan.selections, accessibleStores);
+    const execution = await executeSelections(storeCheck.resolved, auth, ctx);
     metrics = execution.results;
     denied = execution.denied;
     failed = execution.failed;
-    rejected = plan.rejected;
+    rejected = [...plan.rejected, ...storeCheck.rejected];
   }
 
   let passages: GroundingBundle['passages'] = [];

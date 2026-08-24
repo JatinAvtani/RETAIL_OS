@@ -1,3 +1,5 @@
+// Loads .env.local so this script runs straight from a fresh clone (see load-env.ts).
+import '@retailos/config/auto';
 /**
  * Runs the assistant's golden evaluation set against the LIVE model and the demo org's real data.
  * This is the missing button on the eval harness: the runner and cases have unit coverage against
@@ -12,7 +14,7 @@
  * daily quota — a partial run stops with a clear per-case error rather than fabricating results):
  *   pnpm --filter @retailos/api eval
  */
-import { createDb, users, memberships, SearchRepository, MenuItemRepository, RecipeRepository } from '@retailos/db';
+import { createDb, users, memberships, SearchRepository, MenuItemRepository, RecipeRepository, StoreRepository } from '@retailos/db';
 import { createGeminiChatProvider, modelForTask } from '@retailos/ai';
 import { runEvalSuite, GOLDEN_SET, type EvalRunDeps } from '@retailos/assistant';
 import { permissionsForRole, type AuthContext } from '@retailos/authz';
@@ -61,9 +63,17 @@ const ctx: MarginMetricContext & { searchRepository: SearchRepository; geminiApi
   },
 };
 
+// The eval runs against the real seeded org's real stores, so it exercises the same store
+// resolution the live assistant does rather than silently skipping it.
+const accessibleStores = (await new StoreRepository(db, demoUser.organizationId).findAll()).map((store) => ({
+  id: store.id,
+  name: store.name,
+}));
+
 const deps: EvalRunDeps = {
   auth,
   ctx: ctx as unknown as MetricContext,
+  accessibleStores,
   classifyModel: modelForTask('CLASSIFY'),
   planModel: modelForTask('PLAN'),
   narrateModel: modelForTask('NARRATE'),

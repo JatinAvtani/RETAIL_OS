@@ -18,7 +18,7 @@ const runCase = async (evalCase: EvalCase, provider: ChatProvider, deps: EvalRun
   const checks: EvalCaseResult['checks'] = [];
   const auth = evalCase.authOverride ? { ...deps.auth, ...evalCase.authOverride } : deps.auth;
 
-  const outcome = await runPipeline(evalCase.question, provider, deps.classifyModel, deps.planModel, auth, deps.ctx);
+  const outcome = await runPipeline(evalCase.question, provider, deps.classifyModel, deps.planModel, auth, deps.ctx, deps.accessibleStores);
 
   if (outcome.kind === 'error') {
     checks.push(check('pipeline', false, `pipeline itself errored: ${outcome.reason}`));

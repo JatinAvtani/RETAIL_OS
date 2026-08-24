@@ -123,7 +123,18 @@ export const assistantRouter = router({
       geminiApiKey: apiKey,
     };
 
-    const outcome = await runPipeline(input.question, provider, modelForTask('CLASSIFY'), modelForTask('PLAN'), auth, metricCtx);
+    // The planner is given the caller's REAL stores so it never has to invent a storeId, and the
+    // pipeline rejects any storeId not drawn from this list before a metric runs. Both layers are
+    // load-bearing: without the list the model fabricates a UUID, and without the check a
+    // fabricated-but-valid UUID matches zero rows and a summing metric reports "0.0000" as a real
+    // number. `findAll` is org-scoped, so this resolves the tenant boundary the same way
+    // `briefing`'s own repository lookup does — the session's `storeIds` alone would not, since a
+    // `storeIds: 'ALL'` caller's list accepts any org's store id.
+    const accessibleStores = (await new StoreRepository(ctx.db, organizationId).findAll())
+      .filter((store) => canAccessStore(ctx.session, store.id))
+      .map((store) => ({ id: store.id, name: store.name }));
+
+    const outcome = await runPipeline(input.question, provider, modelForTask('CLASSIFY'), modelForTask('PLAN'), auth, metricCtx, accessibleStores);
 
     if (outcome.kind === 'error') {
       // `outcome.reason` is the RAW provider error (a Gemini 429/503 JSON body, etc.) — diagnostic,

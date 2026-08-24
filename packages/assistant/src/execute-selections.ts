@@ -6,7 +6,7 @@ import {
   type MetricResult,
 } from '@retailos/metrics';
 import type { AuthContext } from '@retailos/authz';
-import type { ValidatedSelection } from './planning';
+import type { ValidatedSelection } from './selection';
 
 /**
  * "EXECUTE (deterministic — NO model involvement) → metric functions run under tenant context
