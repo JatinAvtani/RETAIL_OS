@@ -63,6 +63,30 @@ export interface PostingResult {
  * PUBLIC for exactly this composition case (an outer transaction posting a movement as part of a
  * larger atomic unit).
  */
+/**
+ * The business time a posting should be booked at.
+ *
+ * `documentDate` is normalised to `YYYY-MM-DD` by the extraction providers. Parsed as UTC midnight
+ * so a date-only value cannot drift a day either way through local-timezone interpretation.
+ *
+ * Returns `null` for anything absent or unparseable — the caller decides what that means, rather
+ * than this function inventing a date.
+ */
+export const parseDocumentDate = (raw: string | null | undefined): Date | null => {
+  if (!raw) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw.trim());
+  if (!match) return null;
+  const [, y, m, d] = match;
+  const parsed = new Date(Date.UTC(Number(y), Number(m) - 1, Number(d)));
+  if (Number.isNaN(parsed.getTime())) return null;
+  // Reject a well-formed but non-existent date (e.g. 2026-02-31, which Date would roll forward).
+  if (parsed.getUTCMonth() !== Number(m) - 1 || parsed.getUTCDate() !== Number(d)) return null;
+  return parsed;
+};
+
+/** Business time for a posting: the invoice's own date when known, otherwise the moment we recorded it. */
+const resolveBusinessTime = (raw: string | null | undefined): Date => parseDocumentDate(raw) ?? new Date();
+
 export class PostingService {
   private readonly db: Db;
   private readonly organizationId: string;
@@ -83,7 +107,7 @@ export class PostingService {
   async postDocument(input: {
     documentId: string;
     storeId: string;
-    fields: { supplier: RawField };
+    fields: { supplier: RawField; documentDate?: RawField };
     lines: RawLine[];
     actorUserId: string;
   }): Promise<PostingResult> {
@@ -97,7 +121,7 @@ export class PostingService {
     input: {
       documentId: string;
       storeId: string;
-      fields: { supplier: RawField };
+      fields: { supplier: RawField; documentDate?: RawField };
       lines: RawLine[];
       actorUserId: string;
     }
@@ -114,6 +138,18 @@ export class PostingService {
       .where(eq(organizations.id, this.organizationId));
     const currency = (orgRow?.baseCurrency ?? 'USD') as CurrencyCode;
 
+    // Business time vs system time. `occurred_at` is when a receipt actually HAPPENED — the date on
+    // the invoice — while `recorded_at` stays the moment we learned of it. Posting previously wrote
+    // `new Date()` into `validFrom`, `receivedAt`, and the movement's `occurredAt`, so uploading
+    // three months of invoices booked every one of them on the upload day and monthly COGS was
+    // wrong. The bi-temporal ledger this codebase is built around was never exercised by its own
+    // main ingestion path.
+    //
+    // An absent or unparseable `documentDate` falls back to now, which is NOT a fabricated value:
+    // it is the honest "we only know when we recorded it" case, and `recorded_at` would carry that
+    // same instant anyway. A malformed date is never silently coerced into a wrong business date.
+    const occurredAt = resolveBusinessTime(input.fields.documentDate?.value);
+
     if (!supplierName) {
       // No supplier resolved at all — every line is unmappable by definition (earlier work's mapping
       // flow always resolves via an exact supplier name match). Still posts as an empty result,
@@ -128,7 +164,7 @@ export class PostingService {
 
     for (let lineIndex = 0; lineIndex < input.lines.length; lineIndex++) {
       const line = input.lines[lineIndex]!;
-      const result = await this.postLineInTx(tx, input.documentId, input.storeId, supplierName, line, lineIndex, input.actorUserId, currency);
+      const result = await this.postLineInTx(tx, input.documentId, input.storeId, supplierName, line, lineIndex, input.actorUserId, currency, occurredAt);
       results.push(result);
     }
 
@@ -154,7 +190,8 @@ export class PostingService {
     line: RawLine,
     lineIndex: number,
     actorUserId: string,
-    currency: CurrencyCode
+    currency: CurrencyCode,
+    occurredAt: Date
   ): Promise<PostingLineResult> {
     const sku = line.sku.value;
     const quantity = parseDecimal(line.quantity.value);
@@ -194,13 +231,12 @@ export class PostingService {
     // 1. Price history — closes the currently-open row and inserts a fresh one, mirroring
     // SupplierPriceRepository.recordNewPrice's own logic exactly (that method can't be called
     // directly: it opens its own transaction).
-    const now = new Date();
     const [currentPrice] = await tx
       .select()
       .from(supplierPrices)
       .where(and(eq(supplierPrices.supplierProductId, mapping.id), isNull(supplierPrices.validTo)));
     if (currentPrice) {
-      await tx.update(supplierPrices).set({ validTo: now }).where(eq(supplierPrices.id, currentPrice.id));
+      await tx.update(supplierPrices).set({ validTo: occurredAt }).where(eq(supplierPrices.id, currentPrice.id));
     }
     const newPriceId = generateId();
     await tx.insert(supplierPrices).values({
@@ -208,7 +244,7 @@ export class PostingService {
       supplierProductId: mapping.id,
       unitPrice: unitPrice.toFixed(4),
       currency,
-      validFrom: now,
+      validFrom: occurredAt,
       sourceDocumentId: documentId,
     });
 
@@ -218,7 +254,7 @@ export class PostingService {
     // regardless of whether the price actually moved). Only runs when a real prior price existed —
     // the FIRST price for a supplier product is a baseline being established, not a "change."
     if (currentPrice) {
-      const trailingSince = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
+      const trailingSince = new Date(occurredAt.getTime() - 365 * 24 * 60 * 60 * 1000);
       const [receiptTotal] = await tx
         .select({ total: sql<string | null>`sum(${stockMovements.quantity})` })
         .from(stockMovements)
@@ -260,7 +296,7 @@ export class PostingService {
           expectedValue: new Decimal(currentPrice.unitPrice).toFixed(6),
           actualValue: unitPrice.toFixed(6),
           ...(priceChange.annualizedImpact !== 'unknown' ? { variance: priceChange.annualizedImpact.toFixed(6) } : {}),
-          occurredAt: now,
+          occurredAt,
         });
 
         await tx.insert(outboxEvents).values({
@@ -297,7 +333,7 @@ export class PostingService {
       storeId,
       productId: mapping.productId,
       variantId: defaultVariant.id,
-      receivedAt: now,
+      receivedAt: occurredAt,
       initialQuantity: baseQuantity.toFixed(6),
       remainingQuantity: baseQuantity.toFixed(6),
       unitCost: baseUnitCost.toFixed(4),
@@ -320,7 +356,7 @@ export class PostingService {
       quantity: baseQuantity.toFixed(6),
       unitCost: baseUnitCost.toFixed(4),
       currency,
-      occurredAt: now,
+      occurredAt,
       sourceType: 'document',
       sourceId: documentId,
       actorUserId,

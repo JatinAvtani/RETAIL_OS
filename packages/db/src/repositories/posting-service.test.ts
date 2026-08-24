@@ -152,6 +152,64 @@ describe('PostingService', () => {
     return { productId, mappingId: mapping.id, documentId: doc.id };
   };
 
+  it('books a BACK-DATED invoice on the invoice date, not the upload day (business time vs system time)', async () => {
+    const { documentId: docId } = await setUpMappedLine();
+    const supplierName = (await new SupplierRepository(createScopedDb(client), organizationId).findById(supplierId))!.name;
+
+    const service = new PostingService(createScopedDb(client), organizationId);
+    await service.postDocument({
+      documentId: docId,
+      storeId,
+      // An invoice uploaded today, but dated three months ago — the "upload three months of
+      // invoices" case the product's own headline claim depends on.
+      fields: { supplier: { value: supplierName }, documentDate: { value: '2026-05-14' } },
+      lines: [{ sku: { value: 'FLR-POST-1' }, quantity: { value: '2' }, unitPrice: { value: '10.00' }, lineTotal: { value: '20.00' } }],
+      actorUserId: userId,
+    });
+
+    const adminDb = drizzle(adminClient, { schema });
+    const expected = new Date(Date.UTC(2026, 4, 14));
+
+    // The movement's business time — what every period-bounded metric reads.
+    const [movement] = await adminDb
+      .select()
+      .from(stockMovements)
+      .where(and(eq(stockMovements.organizationId, organizationId), eq(stockMovements.sourceId, docId)));
+    expect(movement?.occurredAt).toEqual(expected);
+    // recorded_at stays SYSTEM time — the bi-temporal pair, not one value used twice.
+    expect(movement?.recordedAt.getTime()).toBeGreaterThan(expected.getTime());
+
+    const [lot] = await adminDb
+      .select()
+      .from(lots)
+      .where(and(eq(lots.organizationId, organizationId), eq(lots.sourceDocumentId, docId)));
+    expect(lot?.receivedAt).toEqual(expected);
+  });
+
+  it('falls back to now when the invoice carries no usable date — an honest unknown, never a fabricated business date', async () => {
+    const { documentId: docId } = await setUpMappedLine();
+    const supplierName = (await new SupplierRepository(createScopedDb(client), organizationId).findById(supplierId))!.name;
+    const before = new Date();
+
+    const service = new PostingService(createScopedDb(client), organizationId);
+    await service.postDocument({
+      documentId: docId,
+      storeId,
+      // A real extraction that could not read a date, and a malformed one, must both land here
+      // rather than being coerced into some wrong-but-plausible business date.
+      fields: { supplier: { value: supplierName }, documentDate: { value: 'not-a-date' } },
+      lines: [{ sku: { value: 'FLR-POST-1' }, quantity: { value: '2' }, unitPrice: { value: '10.00' }, lineTotal: { value: '20.00' } }],
+      actorUserId: userId,
+    });
+
+    const adminDb = drizzle(adminClient, { schema });
+    const [movement] = await adminDb
+      .select()
+      .from(stockMovements)
+      .where(and(eq(stockMovements.organizationId, organizationId), eq(stockMovements.sourceId, docId)));
+    expect(movement?.occurredAt.getTime()).toBeGreaterThanOrEqual(before.getTime() - 1000);
+  });
+
   it('posts a mapped line: real price history, real lot, real RECEIPT movement, real stock_levels update', async () => {
     const { productId: pid, mappingId, documentId: docId } = await setUpMappedLine();
 
