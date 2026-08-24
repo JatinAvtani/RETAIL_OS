@@ -18,6 +18,7 @@
     "@retailos/ai": "workspace:*",
     "@retailos/assistant": "workspace:*",
     "@retailos/authz": "workspace:*",
+    "@retailos/config": "workspace:*",
     "@retailos/db": "workspace:*",
     "@retailos/domain": "workspace:*",
     "@retailos/email": "workspace:*",

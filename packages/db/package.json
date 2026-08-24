@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@node-rs/argon2": "^2.0.2",
+    "@retailos/config": "workspace:*",
     "@retailos/domain": "workspace:*",
     "decimal.js": "^10.4.3",
     "drizzle-orm": "^0.36.4",

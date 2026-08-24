@@ -1,3 +1,5 @@
+// Loads .env.local so this script runs straight from a fresh clone (see load-env.ts).
+import '@retailos/config/auto';
 /**
  * The last of Part 2: the domains a user ENGAGES with rather than operates —
  * notification rules and the alerts they raise, assistant conversation history, and CSV import

@@ -47,6 +47,9 @@ importers:
       '@retailos/authz':
         specifier: workspace:*
         version: link:../../packages/authz
+      '@retailos/config':
+        specifier: workspace:*
+        version: link:../../packages/config
       '@retailos/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -169,6 +172,9 @@ importers:
       '@retailos/authz':
         specifier: workspace:*
         version: link:../../packages/authz
+      '@retailos/config':
+        specifier: workspace:*
+        version: link:../../packages/config
       '@retailos/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -276,11 +282,26 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.1)(lightningcss@1.32.0)
 
+  packages/config:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.1
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)(lightningcss@1.32.0)
+
   packages/db:
     dependencies:
       '@node-rs/argon2':
         specifier: ^2.0.2
         version: 2.0.2
+      '@retailos/config':
+        specifier: workspace:*
+        version: link:../config
       '@retailos/domain':
         specifier: workspace:*
         version: link:../domain

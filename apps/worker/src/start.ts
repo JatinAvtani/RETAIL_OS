@@ -1,3 +1,8 @@
+// MUST be the first import: this module reads `process.env` at module scope, and ES imports are
+// hoisted — so the env file has to be loaded by a module evaluated BEFORE this one, not by a
+// `loadEnv()` call in this file's body (which would run too late). Import order is preserved, so a
+// side-effect-only import here is what actually works.
+import '@retailos/config/auto';
 import { createQueueRedisConnection, createRelayPollQueue, registerRelayPollJob, createBriefingSchedulePollQueue, registerBriefingSchedulePollJob } from '@retailos/queue';
 import { buildExtractionWorker, buildFactAggregationWorker, buildEmbeddingWorker, buildRelayPollWorker, buildRuleEvaluationWorker, buildNotificationDeliveryWorker, buildBriefingSchedulePollWorker, buildBriefingWorker } from './worker';
 

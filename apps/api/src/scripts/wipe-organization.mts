@@ -1,3 +1,5 @@
+// Loads .env.local so this script runs straight from a fresh clone (see load-env.ts).
+import '@retailos/config/auto';
 /**
  * Deletes one organization and everything under it, in an FK-safe order DERIVED AT RUNTIME from
  * `pg_constraint` rather than hand-written.

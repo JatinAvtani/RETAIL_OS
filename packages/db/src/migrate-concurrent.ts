@@ -1,3 +1,11 @@
+import { loadEnv } from '@retailos/config';
+
+// Makes the README's own migrate step work on a fresh clone instead of throwing
+// `DATABASE_URL is required`. ES imports hoist above this call, which is safe here only because
+// neither `./client` nor the migrator reads `process.env` at module scope — `createDb` takes its
+// connection string as an argument. This file's own `process.env` read happens below, after it.
+loadEnv();
+
 import { readFileSync } from 'node:fs';
 import postgres from 'postgres';
 

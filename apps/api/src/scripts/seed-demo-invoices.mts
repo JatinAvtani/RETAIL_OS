@@ -1,3 +1,5 @@
+// Loads .env.local so this script runs straight from a fresh clone (see load-env.ts).
+import '@retailos/config/auto';
 /**
  * Seeds a realistic invoice corpus for the demo org through the REAL pipeline surface: every
  * document goes through the actual `documents.requestUpload` → PUT to object storage →

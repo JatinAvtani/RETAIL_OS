@@ -1,3 +1,5 @@
+// Loads .env.local so this script runs straight from a fresh clone (see load-env.ts).
+import '@retailos/config/auto';
 /**
  * Part 2 of the demo corpus: the OPERATIONAL domains that sit between "we bought things" and
  * "we sold things" — purchase orders, goods receipts, stocktakes, inter-outlet transfers, par

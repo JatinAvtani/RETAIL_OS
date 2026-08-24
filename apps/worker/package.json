@@ -12,15 +12,16 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@retailos/domain": "workspace:*",
-    "@retailos/db": "workspace:*",
     "@retailos/ai": "workspace:*",
-    "@retailos/authz": "workspace:*",
-    "@retailos/metrics": "workspace:*",
     "@retailos/assistant": "workspace:*",
+    "@retailos/authz": "workspace:*",
+    "@retailos/config": "workspace:*",
+    "@retailos/db": "workspace:*",
+    "@retailos/domain": "workspace:*",
+    "@retailos/email": "workspace:*",
+    "@retailos/metrics": "workspace:*",
     "@retailos/queue": "workspace:*",
     "@retailos/storage": "workspace:*",
-    "@retailos/email": "workspace:*",
     "bullmq": "6.0.8",
     "decimal.js": "^10.4.3"
   },

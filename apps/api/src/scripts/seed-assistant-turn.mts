@@ -1,3 +1,5 @@
+// Loads .env.local so this script runs straight from a fresh clone (see load-env.ts).
+import '@retailos/config/auto';
 /**
  * Seeds one assistant conversation whose ASSISTANT message carries a REAL grounding bundle,
  * computed by the real metric catalog through `executeMetric` — not a hand-written JSON blob.
