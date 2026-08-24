@@ -171,7 +171,18 @@ export const catalogCsvImportRouter = router({
       if (err instanceof CatalogCsvImportWrongStatusError) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: err.message });
       }
-      throw new TRPCError({ code: 'BAD_REQUEST', message: 'Catalog CSV import failed. Check the column mapping and try again.' });
+      /**
+       * The user-facing message stays generic — an internal exception is not something to render
+       * into a UI. But the original error is attached as `cause` and logged, because discarding it
+       * entirely made a real failure undiagnosable: this path fired in CI and the only signal
+       * anywhere was "Check the column mapping", with nothing naming what actually broke.
+       */
+      ctx.req.log.error({ err, importId: input.importId }, 'catalog CSV import commit failed');
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: 'Catalog CSV import failed. Check the column mapping and try again.',
+        cause: err,
+      });
     }
   }),
 

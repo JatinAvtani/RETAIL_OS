@@ -1,5 +1,4 @@
-import { and, eq, isNull, sql } from 'drizzle-orm';
-import { CatalogCsvImportRepository, ProductRepository, RecipeRepository, RecipeCycleError, SupplierRepository, UnitRepository, categories } from '@retailos/db';
+import { CatalogCsvImportRepository, CategoryRepository, ProductRepository, RecipeRepository, RecipeCycleError, SupplierRepository, UnitRepository } from '@retailos/db';
 import {
   detectCsvHeaders,
   generateId,
@@ -55,17 +54,29 @@ export type CatalogCsvImportCommitResult = {
  * A top-level (no parent) category, resolved by case-insensitive exact name — reused if the org
  * already has one by that name, created if not. Never silently drops a category a CSV row named;
  * never guesses a parent category, since a flat CSV has no hierarchy information to guess from.
+ *
+ * Goes through `CategoryRepository`, never a raw query.
+ *
+ * The previous version did its own `db.select` / `db.insert` against `categories`, which has RLS
+ * ENABLED and FORCED. A raw statement carries no tenant context, so Postgres rejected the insert
+ * with `unrecognized configuration parameter "app.current_org_id"` — and it went unnoticed locally
+ * because a superuser connection bypasses RLS entirely, while CI runs as the RLS-scoped
+ * `retailos_app` role. Verified both directions with raw psql: the insert fails as `retailos_app`
+ * without context and succeeds inside a transaction that sets it.
+ *
+ * The repository sets that context per transaction, which is exactly why every tenant-scoped write
+ * in this codebase is supposed to go through one.
  */
 const resolveOrCreateCategoryId = async (db: typeof Db, organizationId: string, name: string): Promise<string> => {
-  const existing = await db
-    .select({ id: categories.id })
-    .from(categories)
-    .where(and(eq(categories.organizationId, organizationId), eq(sql`lower(${categories.name})`, name.trim().toLowerCase()), isNull(categories.deletedAt)));
-  if (existing[0]) return existing[0].id;
+  const repository = new CategoryRepository(db, organizationId);
+  const trimmed = name.trim();
 
-  const id = generateId();
-  await db.insert(categories).values({ id, organizationId, parentId: null, name: name.trim(), path: `/${id}` });
-  return id;
+  const existing = await repository.findAll();
+  const match = existing.find((c) => c.name.trim().toLowerCase() === trimmed.toLowerCase());
+  if (match) return match.id;
+
+  const created = await repository.create({ id: generateId(), name: trimmed });
+  return created.id;
 };
 
 /**
