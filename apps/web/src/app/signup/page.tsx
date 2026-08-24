@@ -55,7 +55,9 @@ export default function SignupPage() {
       // No email-sending infrastructure exists yet (a real, documented project limitation) — the
       // verification token is returned directly to the caller instead. Passed via a query param so
       // /verify-email can auto-submit it, the honest stand-in for "click the link in your email."
-      const devToken = result._devOnlyVerificationToken;
+      // Optional by design: the API omits it entirely in production (see `devOnlyToken`), so this
+      // reads it defensively rather than asserting a field that legitimately will not be there.
+      const devToken = (result as { _devOnlyVerificationToken?: string })._devOnlyVerificationToken;
       router.push(devToken ? `/verify-email?token=${encodeURIComponent(devToken)}` : '/verify-email');
     } catch (err) {
       const message = err instanceof TRPCClientError ? err.message : 'Something went wrong. Try again.';

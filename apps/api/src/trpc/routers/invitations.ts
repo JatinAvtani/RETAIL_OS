@@ -7,6 +7,7 @@ import {
   MembershipListRepository,
   UserRepository,
 } from '@retailos/db';
+import { devOnlyToken } from '../dev-only-token';
 import { protectedProcedure, router } from '../trpc';
 
 const createInput = z.object({
@@ -64,7 +65,7 @@ export const invitationsRouter = router({
       // TEMPORARY, same posture as signup's verification token: there is no email-sending
       // infrastructure anywhere in this project yet, so the raw token is returned directly rather
       // than emailed. Must be removed the moment there is somewhere to send it.
-      _devOnlyInvitationToken: token.raw,
+      _devOnlyInvitationToken: devOnlyToken(token.raw),
     };
   }),
 

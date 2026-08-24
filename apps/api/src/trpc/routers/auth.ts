@@ -15,6 +15,7 @@ import {
   recordSignupAttempt,
   resetAuthRateLimit,
 } from '../../auth/rate-limit';
+import { devOnlyToken } from '../dev-only-token';
 import { protectedProcedure, provisioningProcedure, publicProcedure, router } from '../trpc';
 
 /**
@@ -150,7 +151,7 @@ export const authRouter = router({
       message: 'Check your email to verify your account.',
       // TEMPORARY, until email sending exists: the real verification token, returned directly to
       // the caller instead of emailed. Must be removed the moment there is somewhere to send it.
-      _devOnlyVerificationToken: token.raw,
+      _devOnlyVerificationToken: devOnlyToken(token.raw),
     };
   }),
 
@@ -379,7 +380,7 @@ export const authRouter = router({
       // exists yet, so the raw token is returned directly instead of emailed. Undefined (and thus
       // absent from the response, not null) for a nonexistent/OAuth-only email — never emitted at
       // all for those cases, matching the message's enumeration-safe framing above.
-      _devOnlyPasswordResetToken: token?.raw,
+      _devOnlyPasswordResetToken: devOnlyToken(token?.raw),
     };
   }),
 

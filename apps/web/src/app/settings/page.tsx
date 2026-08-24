@@ -82,7 +82,9 @@ const TeamPanel = () => {
       setInviteEmail('');
       // No email-sending infrastructure exists yet — same real, documented posture as signup's own
       // verification token. Shown directly so the invite flow is exercisable end-to-end.
-      setDevToken(result._devOnlyInvitationToken);
+      // `?? null` because the API omits this entirely in production (see `devOnlyToken`) — the
+      // panel then simply shows no token, which is the honest state, not an error.
+      setDevToken(result._devOnlyInvitationToken ?? null);
       load();
     } catch (err) {
       setError(err instanceof TRPCClientError ? err.message : 'Could not send the invitation.');
