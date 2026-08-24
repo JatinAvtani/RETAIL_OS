@@ -40,6 +40,8 @@ export class SalesIngestionPipeline {
     this.organizationId = organizationId;
   }
 
+  private saleConsumptionService: SaleConsumptionService | null = null;
+
   async ingestSaleLine(input: {
     storeId: string;
     menuItemId: string | null;
@@ -69,8 +71,12 @@ export class SalesIngestionPipeline {
       return { status: 'quarantined', unmappedSaleId: quarantined.id };
     }
 
-    const saleConsumptionService = new SaleConsumptionService(this.db, this.organizationId);
-    return saleConsumptionService.recordSaleConsumption({
+    // Reused across lines, never constructed per line: `SaleConsumptionService` caches the units
+    // table and the resolved recipe tree on the instance, and a fresh instance per line would throw
+    // that away — which is exactly what made ingestion re-read the whole tree ~98,000 times per
+    // full seed.
+    this.saleConsumptionService ??= new SaleConsumptionService(this.db, this.organizationId);
+    return this.saleConsumptionService.recordSaleConsumption({
       storeId: input.storeId,
       menuItemId: input.menuItemId,
       quantitySold: input.quantitySold,

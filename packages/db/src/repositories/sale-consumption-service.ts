@@ -95,6 +95,29 @@ export class SaleConsumptionService {
     this.organizationId = organizationId;
   }
 
+  /**
+   * Per-instance caches for data that is IMMUTABLE for the lifetime of one ingestion run.
+   *
+   * `recordSaleConsumption` re-read the menu item, every unit, and the entire recipe tree on every
+   * call — once per sale line, ~98,000 times during a full seed, measured at 231 ms/sale. The
+   * lookups are identical across lines; only the sale differs.
+   *
+   * **The recipe cache is keyed by `(recipeGroupId, asOf)`, never by group alone.** Recipes are
+   * `validFrom`-dated, so the correct recipe genuinely differs by sale timestamp — caching per
+   * group would resolve a later sale against an earlier sale's recipe version and silently produce
+   * wrong costs, which is precisely the failure this cache must not introduce. That key is the same
+   * one `preloadRecipeTree` already uses internally; this only widens its lifetime from one call to
+   * one instance.
+   *
+   * Units and menu items are immutable master data within a run — a mid-run edit is not a case this
+   * codebase's ingestion supports either way, since the pipeline already reads them once per line
+   * without transactional isolation between lines.
+   */
+  private unitCodeById: Map<string, Unit> | null = null;
+  private unitRowByCode: Map<string, { id: string; code: string }> | null = null;
+  private readonly menuItemCache = new Map<string, Awaited<ReturnType<MenuItemRepository['findById']>>>();
+  private readonly recipeCache = new Map<string, Recipe | null>();
+
   async recordSaleConsumption(input: {
     storeId: string;
     menuItemId: string;
@@ -112,15 +135,29 @@ export class SaleConsumptionService {
     const unitRepository = new UnitRepository(this.db);
     const movementService = new MovementService(this.db, this.organizationId);
 
-    const menuItem = await menuItemRepository.findById(input.menuItemId);
+    let menuItem = this.menuItemCache.get(input.menuItemId);
+    if (menuItem === undefined) {
+      menuItem = await menuItemRepository.findById(input.menuItemId);
+      this.menuItemCache.set(input.menuItemId, menuItem);
+    }
     if (!menuItem) {
       return { status: 'menu_item_not_found', menuItemId: input.menuItemId };
     }
 
-    const allUnits = await unitRepository.findAll();
-    const unitCodeById = new Map(allUnits.map((u) => [u.id, u.code as Unit]));
+    if (this.unitCodeById === null || this.unitRowByCode === null) {
+      const allUnits = await unitRepository.findAll();
+      this.unitCodeById = new Map(allUnits.map((u) => [u.id, u.code as Unit]));
+      // Indexed by code rather than kept as an array: the ingredient lookup below ran a linear
+      // `.find()` per ingredient per line, on top of re-reading the table itself.
+      this.unitRowByCode = new Map(allUnits.map((u) => [u.code, u]));
+    }
+    const unitCodeById = this.unitCodeById;
+    const unitRowByCode = this.unitRowByCode;
 
-    const preloaded = new Map<string, Recipe | null>();
+    // Shared across lines, but still keyed by (groupId, asOf) — `preloadRecipeTree` skips any key
+    // already present, so a repeat sale of the same item at the same timestamp costs no queries
+    // while a sale at a DIFFERENT timestamp still loads its own correct recipe version.
+    const preloaded = this.recipeCache;
     await preloadRecipeTree(recipeRepository, unitCodeById, preloaded, menuItem.recipeGroupId, input.occurredAt);
 
     const rootKey = `${menuItem.recipeGroupId}::${input.occurredAt.toISOString()}`;
@@ -177,7 +214,7 @@ export class SaleConsumptionService {
         continue;
       }
 
-      const ingredientUnitRow = allUnits.find((u) => u.code === ingredient.unit);
+      const ingredientUnitRow = unitRowByCode.get(ingredient.unit);
       if (!ingredientUnitRow) {
         ingredients.push({ productId: ingredient.productId, status: 'unit_conversion_unavailable', actualCost: 'unknown' });
         anyUnknown = true;

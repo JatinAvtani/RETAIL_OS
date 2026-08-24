@@ -317,6 +317,87 @@ describe('SaleConsumptionService', () => {
     expect(flourLots[0]?.remainingQuantity).toBe('5.000000');
   });
 
+  it('the instance recipe cache is keyed by (group, asOf) — two sales at different times resolve to their OWN recipe versions, never the first one cached', async () => {
+    const recipeRepo = new RecipeRepository(createScopedDb(client), organizationId);
+    const recipeGroupId = generateId();
+
+    // v1: 50g flour. v2, valid from June: 80g flour. A cache keyed by group alone would cost the
+    // June sale against v1 and silently understate COGS by 30g of flour on every later sale.
+    await recipeRepo.create({
+      id: generateId(),
+      recipeGroupId,
+      name: 'Cached Loaf v1',
+      yieldQuantity: '1',
+      yieldUnitId: eachUnitId,
+      validFrom: new Date('2026-01-01T00:00:00Z'),
+      components: [{ componentType: 'PRODUCT', productId: flourId, quantity: '50', unitId: gramUnitId }],
+    });
+    // `createNewVersion`, not a second `create`: recipes carry a real exclusion constraint
+    // (`recipes_no_overlapping_versions`), so the open v1 must be closed at v2's validFrom.
+    await recipeRepo.createNewVersion({
+      id: generateId(),
+      recipeGroupId,
+      name: 'Cached Loaf v2',
+      yieldQuantity: '1',
+      yieldUnitId: eachUnitId,
+      validFrom: new Date('2026-06-01T00:00:00Z'),
+      components: [{ componentType: 'PRODUCT', productId: flourId, quantity: '80', unitId: gramUnitId }],
+    });
+
+    const menuItemRepo = new MenuItemRepository(createScopedDb(client), organizationId);
+    const menuItem = await menuItemRepo.create({
+      id: generateId(),
+      name: 'Cached Loaf',
+      recipeGroupId,
+      price: '5.00',
+      priceValidFrom: new Date('2026-01-01T00:00:00Z'),
+    });
+
+    const lotRepo = new LotRepository(createScopedDb(client), organizationId);
+    await lotRepo.receive({
+      id: generateId(),
+      storeId,
+      productId: flourId,
+      variantId: flourVariantId,
+      receivedAt: new Date('2026-01-01T00:00:00Z'),
+      initialQuantity: '1000.000000',
+      unitCost: '0.0020',
+      currency: 'USD',
+    });
+
+    // ONE service instance for both sales — this is what shares the cache.
+    const service = new SaleConsumptionService(createScopedDb(client), organizationId);
+
+    const early = await service.recordSaleConsumption({
+      storeId,
+      menuItemId: menuItem.id,
+      quantitySold: '1',
+      occurredAt: new Date('2026-03-01T00:00:00Z'),
+      currency: 'USD',
+      sourceType: 'test',
+    });
+    const late = await service.recordSaleConsumption({
+      storeId,
+      menuItemId: menuItem.id,
+      quantitySold: '1',
+      occurredAt: new Date('2026-07-01T00:00:00Z'),
+      currency: 'USD',
+      sourceType: 'test',
+    });
+
+    expect(early.status).toBe('consumed');
+    expect(late.status).toBe('consumed');
+    if (early.status !== 'consumed' || late.status !== 'consumed') return;
+
+    // 50g @ 0.0020 = 0.10 ; 80g @ 0.0020 = 0.16 — different versions, from one cached instance.
+    expect(early.ingredients[0]?.actualCost).not.toBe('unknown');
+    expect(late.ingredients[0]?.actualCost).not.toBe('unknown');
+    const earlyCost = early.ingredients[0]!.actualCost as { amount: { toString(): string } };
+    const lateCost = late.ingredients[0]!.actualCost as { amount: { toString(): string } };
+    expect(earlyCost.amount.toString()).toBe('0.1');
+    expect(lateCost.amount.toString()).toBe('0.16');
+  });
+
   it('cross-tenant: a menu item id from another tenant is reported as not found, never resolved', async () => {
     const fixture: TwoTenantFixture = await setUpTwoTenants();
     try {
