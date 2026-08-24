@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
+import { formatMoney } from '@/lib/format';
 import {
   Badge,
   Button,
@@ -29,7 +30,8 @@ type RecipeCost = Awaited<ReturnType<typeof trpc.recipes.cost.query>>;
  * display formatting (`.toFixed`), not a calculation — the real total was already computed
  * server-side by `computeRecipeCost` (I2); this function never sums or derives a number itself.
  */
-const formatMoneyAmount = (amount: unknown): string => Number(amount).toFixed(2);
+const formatMoneyAmount = (amount: unknown, currency?: string | null): string =>
+  formatMoney(String(amount), currency);
 
 /**
  * "Live computed cost": the cost panel is fetched fresh from `recipes.cost`
@@ -102,7 +104,7 @@ export default function RecipeDetailPage() {
                 <span className="mr-1 text-lg font-normal text-content-muted">
                   {cost!.total !== 'unknown' && cost!.total.currency}
                 </span>
-                {cost!.total !== 'unknown' && formatMoneyAmount(cost!.total.amount)}
+                {cost!.total !== 'unknown' && formatMoneyAmount(cost!.total.amount, cost!.total.currency)}
               </p>
             )}
           </div>
@@ -136,7 +138,7 @@ export default function RecipeDetailPage() {
                       // "no supplier price on file" without implying something went wrong.
                       <Badge tone="unknown">No price</Badge>
                     ) : (
-                      `${line.cost.currency} ${formatMoneyAmount(line.cost.amount)}`
+                      `${line.cost.currency} ${formatMoneyAmount(line.cost.amount, line.cost.currency)}`
                     )}
                   </Td>
                 </Tr>

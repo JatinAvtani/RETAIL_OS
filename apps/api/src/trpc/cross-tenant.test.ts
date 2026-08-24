@@ -32,6 +32,8 @@ import {
   recipeComponents,
   recipes,
   salesCsvImports,
+  catalogCsvImports,
+  savedCatalogCsvColumnMappings,
   salesTransactionLines,
   salesTransactions,
   savedCsvColumnMappings,
@@ -153,7 +155,7 @@ describe('cross-tenant suite (merge gate)', () => {
       await db.delete(invoiceMatchLines).where(eq(invoiceMatchLines.organizationId, orgId));
       await db.delete(invoiceMatches).where(eq(invoiceMatches.organizationId, orgId));
       await db.delete(documents).where(eq(documents.organizationId, orgId));
-      // documents.createUploadBatch/.getBatchProgress's registry entries (012-02) now seed real
+      // documents.createUploadBatch/.getBatchProgress's registry entries now seed real
       // document_upload_batches rows that documents.upload_batch_id can reference — must be gone
       // AFTER documents (just deleted above) but BEFORE stores (deleted later in this same
       // function), the same recurring FK-teardown-order class this shared fixture keeps hitting.
@@ -269,6 +271,8 @@ describe('cross-tenant suite (merge gate)', () => {
       await db.delete(posConnections).where(eq(posConnections.organizationId, orgId));
       await db.delete(salesCsvImports).where(eq(salesCsvImports.organizationId, orgId));
       await db.delete(savedCsvColumnMappings).where(eq(savedCsvColumnMappings.organizationId, orgId));
+      await db.delete(catalogCsvImports).where(eq(catalogCsvImports.organizationId, orgId));
+      await db.delete(savedCatalogCsvColumnMappings).where(eq(savedCatalogCsvColumnMappings.organizationId, orgId));
       await db.delete(unmappedSales).where(eq(unmappedSales.organizationId, orgId));
       await db.delete(salesTransactionLines).where(eq(salesTransactionLines.organizationId, orgId));
       await db.delete(salesTransactions).where(eq(salesTransactions.organizationId, orgId));

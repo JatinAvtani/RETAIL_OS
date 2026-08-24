@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { OnboardingRepository } from '@retailos/db';
 import { protectedProcedure, router } from '../trpc';
+import { computeRealOnboardingHealth } from '../../integrations/onboarding-health';
 
 const stepNames = ['salesConnectedStatus', 'invoicesUploadedStatus', 'entitiesConfirmedStatus', 'parLevelsSetStatus'] as const;
 
@@ -32,5 +33,16 @@ export const onboardingRouter = router({
     const onboardingRepository = new OnboardingRepository(ctx.db, ctx.session.organizationId);
     await onboardingRepository.dismiss();
     return { message: 'Dismissed.' };
+  }),
+
+  /**
+   * the health score the plan's own `OnboardingHealth` shape names — computed fresh on
+   * every call from real current data across every real table it draws from, never cached or
+   * persisted (matching detection's own "recomputed fresh" precedent). Same
+   * "caller's own org, no *Id input" shape as `getProgress` — correctly exempt from the
+   * cross-tenant registry, same reasoning as that procedure.
+   */
+  getHealth: protectedProcedure.query(async ({ ctx }) => {
+    return computeRealOnboardingHealth(ctx.db, ctx.session.organizationId);
   }),
 });

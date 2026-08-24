@@ -4,13 +4,14 @@ import { useCallback, useEffect, useState } from 'react';
 import { TRPCClientError } from '@trpc/client';
 import { trpc } from '@/lib/trpc';
 import { shiftDecimalPoint } from '@/lib/format';
-import { Badge, Button, Card, CardHeader, EmptyState, ErrorNotice, Field, Input, LoadingState, PageHeader, Select, Table, Th, Td, Tr, type BadgeTone } from '@/components/ui';
+import { Badge, Button, Card, CardHeader, EmptyState, ErrorNotice, Field, Input, LoadingState, PageHeader, Select, Table, Th, Td, Tr, Value, type BadgeTone } from '@/components/ui';
 
 type Tolerances = Awaited<ReturnType<typeof trpc.settings.getMatchTolerances.query>>;
 type Member = Awaited<ReturnType<typeof trpc.invitations.listMembers.query>>[number];
 type PendingInvitation = Awaited<ReturnType<typeof trpc.invitations.listPending.query>>[number];
 type NotificationPreferences = Awaited<ReturnType<typeof trpc.notifications.getPreferences.query>>;
 type TuningCandidate = Awaited<ReturnType<typeof trpc.notifications.listTuningCandidates.query>>[number];
+type ActionRateReport = Awaited<ReturnType<typeof trpc.notifications.actionRateReport.query>>;
 
 const DEFAULT_PRICE_PERCENT_LABEL = '2%';
 // No currency symbol: the tolerance compares against invoice amounts in the org's own currency,
@@ -445,6 +446,84 @@ const RULE_TYPE_LABELS: Record<string, string> = {
  * discipline; there is no AI involved here, but the same "don't silently self-modify config"
  * reasoning applies.
  */
+/**
+ * The delivered/opened/acted evidence BEHIND the tuning panel below. Deliberately a separate,
+ * read-only panel rather than more columns on that one: the tuning panel only lists rule types
+ * that are already flagged as needing attention, so it can never answer "how is the alert channel
+ * doing overall?" — a healthy rule type is invisible there by design. This report covers every
+ * rule type with real history.
+ */
+const ActionRatePanel = () => {
+  const [report, setReport] = useState<ActionRateReport | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    trpc.notifications.actionRateReport
+      .query({ days: 30 })
+      .then(setReport)
+      .catch((err) => setError(err instanceof TRPCClientError ? err.message : 'Could not load alert engagement.'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) {
+    return (
+      <Card className="mb-6">
+        <CardHeader title="Alert engagement" />
+        <LoadingState />
+      </Card>
+    );
+  }
+
+  // A permission denial is a real, expected outcome here (`financial:read`), not a failure to
+  // report as broken — a STAFF user simply doesn't see this panel.
+  if (error || !report) return null;
+
+  return (
+    <Card className="mb-6 p-6">
+      <h2 className="mb-1 text-sm font-semibold text-content">Alert engagement</h2>
+      <p className="mb-4 text-sm text-content-subtle">
+        Delivered, opened, and acted over the last 30 days. Action rate is per alert, not per
+        recipient — one person acting resolves it for everyone it was sent to.
+      </p>
+
+      {report.byRuleType.length === 0 ? (
+        <EmptyState
+          title="No alerts sent yet"
+          hint="Once notification rules start firing, their delivery and action rates appear here."
+        />
+      ) : (
+        <Table aria-label="Alert engagement by type">
+          <thead>
+            <tr>
+              <Th>Alert type</Th>
+              <Th>Sent</Th>
+              <Th>Acted</Th>
+              <Th>Action rate</Th>
+              <Th>Open rate</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {report.byRuleType.map((row) => (
+              <Tr key={row.ruleType}>
+                <Td>{RULE_TYPE_LABELS[row.ruleType] ?? row.ruleType}</Td>
+                <Td>{row.notificationCount}</Td>
+                <Td>{row.actedCount}</Td>
+                <Td>{Math.round(row.actionRate * 100)}%</Td>
+                {/* `openRate` is genuinely null when nothing has ever been delivered for this type
+                    — rendered as an honest unknown, never a fabricated 0% (I7). */}
+                <Td>
+                  <Value value={row.openRate === null ? null : `${Math.round(row.openRate * 100)}%`} />
+                </Td>
+              </Tr>
+            ))}
+          </tbody>
+        </Table>
+      )}
+    </Card>
+  );
+};
+
 const ThresholdTuningPanel = () => {
   const [candidates, setCandidates] = useState<TuningCandidate[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -711,6 +790,7 @@ export default function SettingsPage() {
         <TeamPanel />
         <NotificationPreferencesPanel />
         <ThresholdTuningPanel />
+        <ActionRatePanel />
         <Card>
           <LoadingState />
         </Card>
@@ -725,6 +805,7 @@ export default function SettingsPage() {
         <TeamPanel />
         <NotificationPreferencesPanel />
         <ThresholdTuningPanel />
+        <ActionRatePanel />
         <ErrorNotice>{error}</ErrorNotice>
       </>
     );
@@ -736,6 +817,7 @@ export default function SettingsPage() {
       <TeamPanel />
       <NotificationPreferencesPanel />
       <ThresholdTuningPanel />
+      <ActionRatePanel />
 
       {error && <ErrorNotice>{error}</ErrorNotice>}
 

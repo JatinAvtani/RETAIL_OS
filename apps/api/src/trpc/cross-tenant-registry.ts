@@ -15,6 +15,7 @@ import {
   recipeComponents,
   recipes,
   salesCsvImports,
+  catalogCsvImports,
   storageLocations,
   stores,
   suppliers,
@@ -35,8 +36,8 @@ import { eq } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import { generateId } from '@retailos/domain';
 import { encryptToken } from '@retailos/pos';
-import { buildProductImageKey, buildCsvImportKey, buildDocumentKey, buildGoodsReceiptLinePhotoKey, createPresignedUploadUrl, ensureBucketExists } from '@retailos/storage';
-import { PRODUCT_IMAGES_BUCKET, SALES_CSV_IMPORTS_BUCKET, DOCUMENTS_BUCKET, GOODS_RECEIPT_PHOTOS_BUCKET, storageClient } from './context';
+import { buildProductImageKey, buildCsvImportKey, buildCatalogCsvImportKey, buildDocumentKey, buildGoodsReceiptLinePhotoKey, createPresignedUploadUrl, ensureBucketExists } from '@retailos/storage';
+import { PRODUCT_IMAGES_BUCKET, SALES_CSV_IMPORTS_BUCKET, CATALOG_CSV_IMPORTS_BUCKET, DOCUMENTS_BUCKET, GOODS_RECEIPT_PHOTOS_BUCKET, storageClient } from './context';
 
 type Db = ReturnType<typeof createDb>['db'];
 
@@ -656,6 +657,36 @@ const seedMappedCsvImport = async (db: Db, organizationId: string): Promise<stri
   return importId;
 };
 
+/** Same shape as `seedCsvImport`, but for `catalog_csv_imports` — org-scoped only (no store), matching `catalogCsvImportRouter`'s own tenant boundary. */
+const seedCatalogCsvImport = async (db: Db, organizationId: string, importType: 'PRODUCT' | 'SUPPLIER'): Promise<string> => {
+  const importId = generateId();
+  await ensureBucketExists(storageClient, CATALOG_CSV_IMPORTS_BUCKET);
+  const key = buildCatalogCsvImportKey(organizationId, importId);
+  const uploadUrl = await createPresignedUploadUrl(storageClient, CATALOG_CSV_IMPORTS_BUCKET, key, 'text/csv');
+  const probeCsv = importType === 'PRODUCT' ? 'sku,name,unit,type\nPROBE-1,Probe Product,each,INGREDIENT\n' : 'name\nProbe Supplier\n';
+  await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': 'text/csv' }, body: probeCsv });
+  await db.insert(catalogCsvImports).values({
+    id: importId,
+    organizationId,
+    importType,
+    storageKey: key,
+    status: 'UPLOADED',
+    detectedHeaders:
+      importType === 'PRODUCT'
+        ? { headers: ['sku', 'name', 'unit', 'type'], sampleRows: [['PROBE-1', 'Probe Product', 'each', 'INGREDIENT']], delimiter: ',' }
+        : { headers: ['name'], sampleRows: [['Probe Supplier']], delimiter: ',' },
+  });
+  return importId;
+};
+
+/** Same as `seedCatalogCsvImport`, but already `MAPPED` — what `catalogCsvImport.commit`'s own-resource case needs to reach a genuine 200. */
+const seedMappedCatalogCsvImport = async (db: Db, organizationId: string, importType: 'PRODUCT' | 'SUPPLIER'): Promise<string> => {
+  const importId = await seedCatalogCsvImport(db, organizationId, importType);
+  const columnMapping = importType === 'PRODUCT' ? { sku: 'sku', name: 'name', unit: 'unit', type: 'type' } : { name: 'name' };
+  await db.update(catalogCsvImports).set({ status: 'MAPPED', columnMapping }).where(eq(catalogCsvImports.id, importId));
+  return importId;
+};
+
 /**
  * a real `Conversation` — `assistant.getConversation`'s own-resource starting state, and
  * `assistant.ask`'s CONTINUING-an-existing-conversation case (see below). The real risk here is
@@ -691,7 +722,7 @@ const seedNotificationRule = async (db: Db, organizationId: string): Promise<str
   return id;
 };
 
-/** Seeds a real document_upload_batches row — 012-02's own new table, what `documents.getBatchProgress`'s own-resource case needs. */
+/** Seeds a real document_upload_batches row — own new table, what `documents.getBatchProgress`'s own-resource case needs. */
 const seedUploadBatch = async (db: Db, organizationId: string): Promise<string> => {
   const storeId = await seedStore(db, organizationId);
   const batchRepository = new DocumentUploadBatchRepository(db, organizationId);
@@ -793,7 +824,7 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     buildInput: (resourceId) => ({ id: resourceId, name: 'Cross-tenant update attempt' }),
   },
   {
-    // the onboarding wizard's own new read path (012-01) — tenant B reading tenant A's real
+    // the onboarding wizard's own new read path — tenant B reading tenant A's real
     // product's variant list (which can reveal a real SKU/barcode) by guessed/observed productId.
     path: 'products.getVariants',
     type: 'query',
@@ -1026,6 +1057,22 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     },
   },
   {
+    // Both storage-location endpoints are store-scoped, so the cross-tenant surface is the same one
+    // every other store-scoped procedure has: attacking with another tenant's storeId. `listForStore`
+    // needs a real store to return a genuine 200 on its own-resource case; a fake id would 404 for
+    // the wrong reason and prove nothing about the guard.
+    path: 'storageLocations.listForStore',
+    type: 'query',
+    seedResource: seedStore,
+    buildInput: (resourceId) => ({ storeId: resourceId }),
+  },
+  {
+    path: 'storageLocations.create',
+    type: 'mutation',
+    seedResource: seedStore,
+    buildInput: (resourceId) => ({ storeId: resourceId, name: 'Cross-tenant probe walk-in' }),
+  },
+  {
     path: 'stocktake.get',
     type: 'query',
     seedResource: seedStockCount,
@@ -1154,6 +1201,27 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     buildInput: (resourceId) => ({ importId: resourceId }),
   },
   {
+    path: 'catalogCsvImport.get',
+    type: 'query',
+    seedResource: async (db, organizationId) => seedCatalogCsvImport(db, organizationId, 'PRODUCT'),
+    buildInput: (resourceId) => ({ importId: resourceId }),
+  },
+  {
+    path: 'catalogCsvImport.submitColumnMapping',
+    type: 'mutation',
+    seedResource: async (db, organizationId) => seedCatalogCsvImport(db, organizationId, 'PRODUCT'),
+    buildInput: (resourceId) => ({
+      importId: resourceId,
+      columnMapping: { sku: 'sku', name: 'name', unit: 'unit', type: 'type' },
+    }),
+  },
+  {
+    path: 'catalogCsvImport.commit',
+    type: 'mutation',
+    seedResource: async (db, organizationId) => seedMappedCatalogCsvImport(db, organizationId, 'PRODUCT'),
+    buildInput: (resourceId) => ({ importId: resourceId }),
+  },
+  {
     // Store-scoped, same shape as inventory.levels/csvImport.requestUpload — attacks with tenant
     // A's storeId, the FIRST check listUnmapped's router runs.
     path: 'posItems.listUnmapped',
@@ -1220,7 +1288,7 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     buildInput: (resourceId) => ({ storeId: resourceId }),
   },
   {
-    // 012-02: store-scoped, same shape as documents.requestUpload — no batch row exists yet at
+    // store-scoped, same shape as documents.requestUpload — no batch row exists yet at
     // this point in the flow.
     path: 'documents.createUploadBatch',
     type: 'mutation',
@@ -1228,7 +1296,7 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     buildInput: (resourceId) => ({ storeId: resourceId, expectedCount: 5 }),
   },
   {
-    // 012-02: tenant B reading tenant A's real upload-batch progress (which reveals real document
+    // tenant B reading tenant A's real upload-batch progress (which reveals real document
     // counts/statuses for an in-progress bulk backfill) by guessed/observed batchId.
     path: 'documents.getBatchProgress',
     type: 'query',
@@ -1661,7 +1729,7 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     }),
   },
   {
-    // the onboarding wizard's own new write path (012-01) — tenant B silently setting a par
+    // the onboarding wizard's own new write path — tenant B silently setting a par
     // level/reorder point against tenant A's real store, corrupting a real reorder threshold
     // tenant A depends on. Same two-layer store check every other store-scoped mutation uses.
     path: 'parLevels.set',
@@ -1691,7 +1759,7 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     buildInput: (resourceId) => ({ storeId: resourceId }),
   },
   {
-    // 012-03: tenant B reading tenant A's real detected-product candidates (which reveal real
+    // tenant B reading tenant A's real detected-product candidates (which reveal real
     // invoice line text, supplier names, and prices) by guessed/observed storeId.
     path: 'productDetection.detectProducts',
     type: 'query',
@@ -1699,7 +1767,7 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     buildInput: (resourceId) => ({ storeId: resourceId }),
   },
   {
-    // 012-04: same risk shape as detectProducts — tenant B reading tenant A's real detected-supplier
+    // same risk shape as detectProducts — tenant B reading tenant A's real detected-supplier
     // candidates (which reveal real supplier names from tenant A's own invoices) by guessed storeId.
     path: 'productDetection.detectSuppliers',
     type: 'query',
@@ -1707,7 +1775,7 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     buildInput: (resourceId) => ({ storeId: resourceId }),
   },
   {
-    // 012-05: tenant B creating a real supplier row inside tenant A's org by guessing tenant A's
+    // tenant B creating a real supplier row inside tenant A's org by guessing tenant A's
     // storeId — the FIRST check this mutation runs is store ownership.
     path: 'productDetection.confirmSupplier',
     type: 'mutation',
@@ -1715,7 +1783,7 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     buildInput: (resourceId) => ({ storeId: resourceId, name: 'Cross-tenant probe confirm supplier' }),
   },
   {
-    // 012-05: tenant B creating a real product + confirmed supplier_products mapping inside tenant
+    // tenant B creating a real product + confirmed supplier_products mapping inside tenant
     // A's org by guessing tenant A's storeId — a genuinely dangerous write (I4), not just a read
     // leak. The own-resource case has no real evidence lines to resolve, so it exercises the
     // store-ownership check succeeding and the product still being created with 0 confirmed
@@ -1732,7 +1800,7 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     }),
   },
   {
-    // 012-10: tenant B reading tenant A's real first-finding report (real supplier names, real
+    // tenant B reading tenant A's real first-finding report (real supplier names, real
     // dollar impacts, real invoice totals) by guessed/observed storeId.
     path: 'firstFindingReport.generate',
     type: 'query',

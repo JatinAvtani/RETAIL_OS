@@ -70,6 +70,31 @@ describe('OnboardingRepository', () => {
     expect(row.invoicesUploadedStatus).toBe('DONE');
   });
 
+  it('findExistingOrNull returns null when no row exists yet, and never creates one as a side effect', async () => {
+    const db = createScopedDb(client);
+    const repo = new OnboardingRepository(db, fixture.tenantB.organizationId);
+
+    // Tenant B has never called findOrCreate at this point in the file — a real "nothing yet" state.
+    const before = await repo.findExistingOrNull();
+    expect(before).toBeNull();
+
+    // A second read proves the first one didn't silently insert a row as a side effect.
+    const after = await repo.findExistingOrNull();
+    expect(after).toBeNull();
+  });
+
+  it('findExistingOrNull returns the real row once one exists (findOrCreate already created it above), never a fresh insert on read', async () => {
+    const db = createScopedDb(client);
+    const repo = new OnboardingRepository(db, fixture.tenantA.organizationId);
+
+    // Tenant A's row already exists from the very first test in this file (findOrCreate's own
+    // "first call creates" proof) — this proves findExistingOrNull reads that SAME real row back,
+    // never creating a second one, without needing a brand-new tenant fixture of its own.
+    const found = await repo.findExistingOrNull();
+    expect(found).not.toBeNull();
+    expect(found?.organizationId).toBe(fixture.tenantA.organizationId);
+  });
+
   it('tenant isolation: tenant B never sees tenant A\'s onboarding row, and gets its own independent one', async () => {
     const dbA = createScopedDb(client);
     const repoA = new OnboardingRepository(dbA, fixture.tenantA.organizationId);

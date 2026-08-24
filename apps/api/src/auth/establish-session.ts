@@ -22,6 +22,57 @@ export type SessionEstablishmentResult =
   | { ok: false; reason: 'no_accepted_membership' | 'multiple_organizations' };
 
 /**
+ * Marks a session as belonging to a user who has authenticated but does not yet have a workspace —
+ * a Google sign-in by someone who has never used the product before.
+ *
+ * Held in the session's `organizationId` slot as a sentinel rather than as a separate field because
+ * every consumer already treats that value as "the tenant this session may touch"; a real org id
+ * can never collide with it, and any tenant-scoped query built from it fails closed rather than
+ * silently reading another tenant's rows. Combined with an empty permission set (which
+ * `packages/authz`'s `hasPermission` denies everything for, by design), a provisioning session can
+ * do precisely one thing: call `auth.completeGoogleSignup`.
+ */
+export const PROVISIONING_ORGANIZATION_ID = '__provisioning__';
+
+/**
+ * Issues the minimal session described above.
+ *
+ * This exists because Google sign-in has a case password login does not: `resolveGoogleUser`
+ * CREATES a real, email-verified `users` row for an unrecognised Google identity, and that row is
+ * committed before anyone knows whether a membership exists. Previously the caller then discovered
+ * there was none, redirected to /login with an error, and left the row behind — an account that
+ * owned the person's email address, could never sign in, and blocked them from signing up properly
+ * with the same address. A dead end reachable in one click.
+ *
+ * Rather than refuse to create the user (which would make Google sign-in work only for people who
+ * had already registered with a password — not what anyone means by "use my Google account"), the
+ * account is kept and finished: this session lets exactly one procedure run, the one that creates
+ * the workspace Google cannot supply.
+ */
+export const createProvisioningSession = async (
+  sessionStore: SessionStore,
+  userId: string,
+  ip: string,
+  userAgent: string
+): Promise<string> => {
+  const { token } = await sessionStore.create(
+    {
+      userId,
+      organizationId: PROVISIONING_ORGANIZATION_ID,
+      storeIds: [],
+      // OWNER is the role this user will genuinely hold once their workspace exists
+      // (`createOrganizationWithOwner` assigns it), but it grants nothing here: permissions is empty
+      // and `hasPermission` fails closed, so the role is a record of intent, not of authority.
+      role: 'OWNER',
+      permissions: [],
+    },
+    ip,
+    userAgent
+  );
+  return token;
+};
+
+/**
  * The "given an already-authenticated user, find their one accepted org membership and issue a
  * real session" step — shared by `auth.login` (password) and the Google OAuth callback, since both
  * reach the identical fork once a user's identity is established: multi-org accounts aren't

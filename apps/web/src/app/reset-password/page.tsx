@@ -5,9 +5,10 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { TRPCClientError } from '@trpc/client';
 import { trpc } from '@/lib/trpc';
-import { Button, Card, ErrorNotice, Field, Input } from '@/components/ui';
-import { LogoMark } from '@/components/logo';
-import { ThemeToggle } from '@/components/theme-toggle';
+import { Button, Card, ErrorNotice, Field } from '@/components/ui';
+import { LogoLockup } from '@/components/logo';
+import { AuthPage } from '@/components/auth-page';
+import { PasswordInput } from '@/components/password-input';
 
 const ResetPasswordContent = () => {
   const router = useRouter();
@@ -53,8 +54,7 @@ const ResetPasswordContent = () => {
         {error && <ErrorNotice>{error}</ErrorNotice>}
 
         <Field label="New password">
-          <Input
-            type="password"
+          <PasswordInput
             value={newPassword}
             onChange={(event) => setNewPassword(event.target.value)}
             required
@@ -74,19 +74,16 @@ const ResetPasswordContent = () => {
 /** Consumes `auth.resetPassword`'s token — the other half of a flow that previously had no page at all. `resetPassword` revokes every existing session on success (a real backend guarantee, not just a UI nicety), so this redirects to /login rather than assuming any prior session survived. */
 export default function ResetPasswordPage() {
   return (
-    <main className="grid min-h-screen place-items-center px-6 py-12">
-      <div className="absolute right-6 top-6">
-        <ThemeToggle />
-      </div>
+    <AuthPage>
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <LogoMark className="mx-auto mb-5 size-11 text-content" />
+          <LogoLockup className="mb-7 flex w-full items-center" />
           <h1 className="text-xl font-semibold tracking-tight text-content">Choose a new password</h1>
         </div>
         <Suspense fallback={<Card className="p-6 text-center text-sm text-content-muted">Loading…</Card>}>
           <ResetPasswordContent />
         </Suspense>
       </div>
-    </main>
+    </AuthPage>
   );
 }

@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { authRateLimiters, db, redis, sessionStore } from '../trpc/context';
-import { establishSessionForUser, setSessionCookie } from '../auth/establish-session';
+import { createProvisioningSession, establishSessionForUser, setSessionCookie } from '../auth/establish-session';
 import { enforceSignupRateLimit, recordSignupAttempt } from '../auth/rate-limit';
 import { OAuthStateStore } from './state-store';
 import { resolveGoogleUser } from './resolve-user';
@@ -98,6 +98,37 @@ export const registerGoogleOAuthRoutes = (app: FastifyInstance): void => {
       );
 
       if (!result.ok) {
+        /*
+         * A brand-new Google account has no membership because it has no workspace YET — that is
+         * the ordinary first-run case, not a failure. Previously it fell through to the
+         * `no_membership` redirect below, which left the freshly-created `users` row stranded:
+         * it owned the person's email address, could never establish a session, and blocked them
+         * from signing up properly with that same address. A permanent dead end, one click deep.
+         *
+         * Instead, issue a provisioning session and send them to finish the workspace Google
+         * cannot describe (business name, store name, currency).
+         *
+         * Gated on `needsWorkspace` (no password on the account), NOT on "was just created": a user
+         * who reached the setup page and closed the tab must be able to come back. Keying this on
+         * first-contact left exactly that person locked out of their own account by every route —
+         * no password to sign in with, and a returning Google sign-in fell through to the error
+         * below. An account with a password is excluded here on purpose: it can always be entered
+         * the original way, so a missing membership on it is a genuine error rather than an
+         * unfinished signup, and handing it a brand-new workspace would be wrong.
+         */
+        if (result.reason === 'no_accepted_membership' && resolved.needsWorkspace) {
+          const token = await createProvisioningSession(
+            sessionStore,
+            resolved.userId,
+            request.ip,
+            request.headers['user-agent'] ?? 'unknown',
+          );
+          await authRateLimiters.perIp.reset(request.ip);
+          setSessionCookie(reply, token);
+          reply.redirect('/complete-signup');
+          return;
+        }
+
         if (result.reason !== 'multiple_organizations') {
           await recordSignupAttempt(authRateLimiters, request.ip);
         }

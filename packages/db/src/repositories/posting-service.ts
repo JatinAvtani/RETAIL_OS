@@ -230,7 +230,19 @@ export class PostingService {
             gte(stockMovements.occurredAt, trailingSince)
           )
         );
-      const trailing12moQuantity = receiptTotal?.total !== null && receiptTotal?.total !== undefined ? new Decimal(receiptTotal.total) : null;
+      // `stock_movements.quantity` is stored in BASE units (grams), but `oldUnitPrice`/`newUnitPrice`
+      // below are per PACK — the same asymmetry lines 276-279 handle explicitly when costing the lot.
+      // `detectPriceChange` multiplies `priceDelta × trailing12moQuantity`, so both sides must share
+      // one basis; feeding a gram count against a per-sack price delta overstated the annualised
+      // impact by exactly `conversionToBase` (25,000× for a 25kg sack tracked in grams). Converting
+      // the receipt sum back to packs is the correct direction: it keeps `priceDelta` in the units
+      // the invoice actually quotes, which is what the supplier scorecard reports (I6 — the
+      // conversion is explicit, applied once, at this boundary).
+      const trailingBaseQuantity =
+        receiptTotal?.total !== null && receiptTotal?.total !== undefined ? new Decimal(receiptTotal.total) : null;
+      const trailingConversion = mapping.conversionToBase !== null ? new Decimal(mapping.conversionToBase) : new Decimal(1);
+      const trailing12moQuantity =
+        trailingBaseQuantity !== null && !trailingConversion.isZero() ? trailingBaseQuantity.dividedBy(trailingConversion) : null;
 
       const priceChange = detectPriceChange({
         oldUnitPrice: new Decimal(currentPrice.unitPrice),

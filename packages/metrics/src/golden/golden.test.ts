@@ -24,7 +24,6 @@ import {
   suppliers,
   supplierProducts,
   supplierPrices,
-  MenuItemRepository,
 } from '@retailos/db';
 import { executeMetric } from '../catalog/index.js';
 import type { MarginMetricContext } from '../margin/catalog-entries.js';
@@ -73,23 +72,25 @@ describe('golden regression — a representative cross-section of registered met
 
   const ALL_PERMISSIONS = ['financial:read', 'inventory:read', 'documents:read', 'purchasing:read'];
 
-  // `resolveRecipeUnitCost`'s real production wiring (`apps/api`'s `dashboard.ts`) is called with a
-  // MENU ITEM id, not a recipe group id directly — it looks up the menu item first, THEN resolves
-  // its `recipeGroupId`, before calling the low-level cost resolver. The parameter is genuinely
-  // named `menuItemId` at every real call site despite the type's own parameter name; skipping this
-  // translation is exactly the "menuItemId passed where recipeGroupId was expected" bug class this
-  // project's own memory already flags from earlier work — reproduced here on the first draft, caught by
-  // this harness itself before being trusted.
+  /**
+   * `resolveRecipeUnitCost` receives a RECIPE GROUP ID, matching `RecipeUnitCostResolver`'s own
+   * declaration and all four production call sites, which each resolve the menu item themselves and
+   * pass `menuItem.recipeGroupId`.
+   *
+   * An earlier version of this stub did its own `findById(menuItemId)` translation and asserted in a
+   * comment that "the parameter is genuinely named menuItemId at every real call site". That was not
+   * true, and it made this harness ENCODE the bug instead of catching it: production's
+   * `dashboard.ts` really was calling `findById()` with a recipe group id, so every per-item
+   * contribution and the whole theoretical COGS resolved to "unknown" on the live dashboard while
+   * these tests stayed green. A stub that mirrors a mistaken belief about production tests the
+   * belief, not the code.
+   */
   const marginCtx = (organizationId: string): MarginMetricContext => ({
     db,
     organizationId,
     storeIds: 'ALL',
-    resolveRecipeUnitCost: async (ctx, menuItemId, currency) => {
-      const menuItemRepository = new MenuItemRepository(ctx.db, ctx.organizationId);
-      const menuItem = await menuItemRepository.findById(menuItemId);
-      if (!menuItem) return 'unknown';
-      return resolveGoldenRecipeUnitCost(ctx.db, ctx.organizationId, menuItem.recipeGroupId, currency);
-    },
+    resolveRecipeUnitCost: async (ctx, recipeGroupId, currency) =>
+      resolveGoldenRecipeUnitCost(ctx.db, ctx.organizationId, recipeGroupId, currency),
   });
 
   const plainCtx = (organizationId: string) => ({ db, organizationId, storeIds: 'ALL' as const });

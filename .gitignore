@@ -16,3 +16,15 @@ CLAUDE.md
 
 spikes/extraction/corpus/
 spikes/extraction/results/
+
+# Generated mock corpus — data files are ignored, the GENERATOR is not.
+# Same shape as spikes/extraction/corpus/ above: the corpus is reproducible output, so it is
+# regenerated on a fresh clone rather than committed. `generate/` is the reproducible source and
+# MUST stay tracked, hence the negation. Order matters: the directory rule comes first, then the
+# re-include, then the explicit un-ignore of everything under generate/.
+mock-data/*
+!mock-data/generate/
+!mock-data/.gitignore
+
+# Local database backups — never committed (they can contain full tenant data).
+.backups/

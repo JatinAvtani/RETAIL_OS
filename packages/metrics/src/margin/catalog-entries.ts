@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import Decimal from 'decimal.js';
 import { money, type CurrencyCode, type Money } from '@retailos/domain';
-import { DashboardRepository } from '@retailos/db';
+import { DashboardRepository, MenuItemRepository } from '@retailos/db';
 import { defineMetric, resolveCurrency, type MetricContext, type MetricResult } from '../catalog/index.js';
 import {
   computeCogsActual,
@@ -126,9 +126,20 @@ const fetchSoldItemLines = async (
   currency: CurrencyCode
 ): Promise<SoldItemLine[]> => {
   const soldMapped = await dashboard.findSoldMappedItems(params.storeId, params.from, params.to);
+  const menuItemRepository = new MenuItemRepository(ctx.db, ctx.organizationId);
   const lines: SoldItemLine[] = [];
   for (const sold of soldMapped) {
-    const unitRecipeCost = await ctx.resolveRecipeUnitCost(ctx, sold.menuItemId, currency);
+    /**
+     * `resolveRecipeUnitCost` takes a RECIPE GROUP ID, not a menu item id — the menu item has to be
+     * resolved first. Passing `sold.menuItemId` straight through (as this did) made theoretical
+     * COGS, and therefore cost variance, permanently "unknown": both ids are `string`, so nothing
+     * failed loudly. The sibling callers in `attribution-catalog-entries.ts` and
+     * `cost/catalog-entries.ts` already did this correctly.
+     */
+    const menuItem = await menuItemRepository.findById(sold.menuItemId);
+    const unitRecipeCost = menuItem
+      ? await ctx.resolveRecipeUnitCost(ctx, menuItem.recipeGroupId, currency)
+      : ('unknown' as const);
     lines.push({ menuItemId: sold.menuItemId, quantitySold: sold.quantitySold, unitRecipeCost });
   }
   return lines;

@@ -297,6 +297,36 @@ describe('PostingService', () => {
       void mappingId;
     });
 
+    it('annualized impact stays in PACK units when conversionToBase != 1 — a base-unit receipt sum must not be multiplied by a per-pack price delta', async () => {
+      // The regression this pins: `stock_movements.quantity` is stored in BASE units (grams), but
+      // `unitPrice` is per PACK. Multiplying a per-pack price delta by a gram count overstated the
+      // annualised impact by exactly `conversionToBase` — 25x here, and 25,000x for a real 25kg
+      // sack tracked in grams. This is the figure the supplier scorecard reports, on a product
+      // whose entire thesis is "no fabricated numbers", so it gets an explicit test.
+      await setUpMappedLine({ conversionToBase: '25' });
+
+      const firstService = new PostingService(createScopedDb(client), organizationId);
+      await firstService.postDocument({
+        documentId,
+        storeId,
+        fields: { supplier: { value: (await new SupplierRepository(createScopedDb(client), organizationId).findById(supplierId))!.name } },
+        // 4 packs at $5.00 => 4 x 25 = 100 BASE units received, but only 4 PACKS.
+        lines: [{ sku: { value: 'FLR-POST-1' }, quantity: { value: '4' }, unitPrice: { value: '5.00' }, lineTotal: { value: '20.00' } }],
+        actorUserId: userId,
+      });
+
+      await postSecondDocument('6.00', '1');
+
+      const adminDb = drizzle(adminClient, { schema });
+      const events = await adminDb.select().from(supplierPerformanceEvents).where(eq(supplierPerformanceEvents.organizationId, organizationId));
+      const priceChangeEvent = events.find((e) => e.eventType === 'PRICE_CHANGE');
+      expect(priceChangeEvent).toBeDefined();
+
+      // $1.00 per-pack delta x 4 trailing PACKS = $4.00.
+      // The bug produced $1.00 x 100 base units = $100.00 — exactly 25x too high.
+      expect(priceChangeEvent!.variance).toBe('4.000000');
+    });
+
     it('a price change WITHIN the default 2% threshold emits NEITHER a PRICE_CHANGE event nor a supplier.price_changed outbox event', async () => {
       await setUpMappedLine();
 

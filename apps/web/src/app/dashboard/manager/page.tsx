@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
+import { formatMoneyTotal } from '@/lib/format';
 import { useStores } from '@/lib/use-stores';
 import {
   Badge,
@@ -30,8 +31,9 @@ const PERIODS = [
   { days: 90, label: 'Last 90 days' },
 ];
 
+/** Shared formatter, so INR groups the Indian way (lakh/crore) and no float is involved. */
 const fmt = (m: { amount: string; currency: string } | null): string | null =>
-  m === null ? null : `${m.currency} ${Number(m.amount).toFixed(2)}`;
+  m === null ? null : formatMoneyTotal(m.amount, m.currency);
 
 const humanizeStatus = (status: string) => status.toLowerCase().replace(/_/g, ' ');
 
@@ -99,7 +101,10 @@ export default function ManagerDashboardPage() {
       {(loading || storesLoading) && <LoadingState />}
       {!storesLoading && stores.length === 0 && (
         <Card>
-          <EmptyState title="No stores available." />
+          <EmptyState
+            title="No stores available."
+            hint="Every workspace gets a store when it's created, so this usually means your account isn't linked to one yet. Contact your workspace owner if this doesn't resolve after signing out and back in."
+          />
         </Card>
       )}
 
@@ -134,7 +139,7 @@ export default function ManagerDashboardPage() {
             />
             <StatTile
               label="Expiring stock, value at risk"
-              value={`${summary.currency} ${Number(summary.expiryQueue.totalValueAtRisk).toFixed(2)}`}
+              value={formatMoneyTotal(String(summary.expiryQueue.totalValueAtRisk), summary.currency)}
               unknownReason="Lot costs could not be determined"
               hint={`${summary.expiryQueue.lots.length} lot${summary.expiryQueue.lots.length === 1 ? '' : 's'} expiring soon`}
               footer={
@@ -187,7 +192,7 @@ export default function ManagerDashboardPage() {
               ) : (
                 <p className="px-5 py-4 text-sm text-content-muted">
                   {summary.expiryQueue.lots.length} lot{summary.expiryQueue.lots.length === 1 ? '' : 's'} expiring
-                  soon, {summary.currency} {Number(summary.expiryQueue.totalValueAtRisk).toFixed(2)} of value at
+                  soon, {formatMoneyTotal(String(summary.expiryQueue.totalValueAtRisk), summary.currency)} of value at
                   risk — see lots for exact expiry dates.
                 </p>
               )}

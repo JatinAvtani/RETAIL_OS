@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { TRPCClientError } from '@trpc/client';
 import { trpc } from '@/lib/trpc';
 import { useStores } from '@/lib/use-stores';
 import {
@@ -25,8 +26,8 @@ type SupplierCandidate = Awaited<ReturnType<typeof trpc.productDetection.detectS
 const UNIT_OPTIONS = ['kg', 'g', 'l', 'ml', 'mg', 'each'] as const;
 
 /**
- * 012-05: the bulk-confirm screen plan.md calls "where onboarding is won or lost." Detection
- * (012-03/012-04) only ever proposes — every field here is editable before confirming, and
+ * the bulk-confirm screen the plan calls "where onboarding is won or lost." Detection
+ * (earlier work) only ever proposes — every field here is editable before confirming, and
  * confirming is the ONLY place this epic writes a real product/supplier (I9). Suppliers confirm
  * first, in one click each (no editable fields exist to confirm — see the honest scope-narrowing
  * note in supplier-detection.ts), since a product's evidence lines can only resolve to a real
@@ -47,6 +48,7 @@ export default function ConfirmDetectedPage() {
   const [productEdits, setProductEdits] = useState<Record<string, { sku: string; name: string; unit: string }>>({});
   const [confirmingProducts, setConfirmingProducts] = useState(false);
   const [confirmResults, setConfirmResults] = useState<Record<string, { confirmedMappingCount: number; skippedLines: Array<{ reason: string }> }>>({});
+  const [mergeError, setMergeError] = useState<string | null>(null);
 
   const load = () => {
     if (!selectedStoreId) return;
@@ -136,6 +138,77 @@ export default function ConfirmDetectedPage() {
     setSelectedProductKeys(new Set());
     setConfirmingProducts(false);
     load();
+  };
+
+  /**
+   * "Merge selected" — the plan named this in own bullet list and it was flagged as a real
+   * unbuilt gap at the time. The detectors deduplicate WITHIN their own clustering, but two
+   * genuinely-separate clusters can still describe one real product ("Flour T55 25kg" and "T55
+   * FLOUR 25KG SACK" from two suppliers with different SKUs), and nothing could combine them.
+   *
+   * Merging needs no new backend: `confirmProduct` already accepts an arbitrary `evidenceLines`
+   * list, so confirming N clusters as ONE product is exactly "pool their evidence lines into a
+   * single call". Every pooled line still gets its own real, confirmed `supplier_products` mapping,
+   * so both suppliers' SKUs resolve to the one product on every future invoice — which is the
+   * whole point of merging rather than confirming twice and hand-fixing later.
+   *
+   * The merged identity is the PRIMARY cluster's edited name/SKU/unit — a real, human-chosen row,
+   * never a synthesized blend of both names (I7: the name is read verbatim from what the user
+   * confirmed, not invented).
+   */
+  const mergeSelectedProducts = async () => {
+    if (!selectedStoreId || selectedProductKeys.size < 2) return;
+
+    const keys = [...selectedProductKeys];
+    const primaryKey = keys[0]!;
+    const primary = productCandidates.find((c) => c.clusterKey === primaryKey);
+    const primaryEdit = productEdits[primaryKey];
+    if (!primary || !primaryEdit || !primaryEdit.sku.trim()) {
+      setMergeError('The first selected candidate needs a SKU before merging.');
+      return;
+    }
+
+    const clusters = keys
+      .map((key) => productCandidates.find((c) => c.clusterKey === key))
+      .filter((c): c is ProductCandidate => c !== undefined);
+
+    // Deduplicate by (documentId, lineIndex) — two clusters can legitimately reference the same
+    // real invoice line, and confirming it twice would be a wasted round trip at best.
+    const seen = new Set<string>();
+    const pooledEvidence: { documentId: string; lineIndex: number }[] = [];
+    for (const cluster of clusters) {
+      for (const line of cluster.evidenceLines) {
+        const id = `${line.documentId}:${line.lineIndex}`;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        pooledEvidence.push({ documentId: line.documentId, lineIndex: line.lineIndex });
+      }
+    }
+
+    setMergeError(null);
+    setConfirmingProducts(true);
+    try {
+      const result = await trpc.productDetection.confirmProduct.mutate({
+        storeId: selectedStoreId,
+        sku: primaryEdit.sku.trim(),
+        name: primaryEdit.name.trim(),
+        baseUnitCode: primaryEdit.unit as (typeof UNIT_OPTIONS)[number],
+        evidenceLines: pooledEvidence,
+        ...(primary.proposedPackSize ? { packSize: primary.proposedPackSize } : {}),
+      });
+      // Every merged cluster is marked resolved by the one real confirmation, so none of them
+      // reappear in the remaining list.
+      setConfirmResults((current) => ({
+        ...current,
+        ...Object.fromEntries(keys.map((key) => [key, result])),
+      }));
+      setSelectedProductKeys(new Set());
+      load();
+    } catch (err) {
+      setMergeError(err instanceof TRPCClientError ? err.message : 'Could not merge these candidates.');
+    } finally {
+      setConfirmingProducts(false);
+    }
   };
 
   const remainingProductCandidates = useMemo(
@@ -300,15 +373,43 @@ export default function ConfirmDetectedPage() {
               </Table>
             )}
             {remainingProductCandidates.length > 0 && (
-              <div className="flex items-center justify-between border-t border-border px-5 py-3">
-                <span className="text-sm text-content-muted">{selectedProductKeys.size} selected</span>
-                <Button
-                  variant="primary"
-                  onClick={confirmSelectedProducts}
-                  disabled={confirmingProducts || selectedProductKeys.size === 0}
-                >
-                  {confirmingProducts ? 'Confirming…' : `Confirm ${selectedProductKeys.size || ''} product${selectedProductKeys.size === 1 ? '' : 's'}`}
-                </Button>
+              <div className="border-t border-border px-5 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <span className="text-sm text-content-muted">{selectedProductKeys.size} selected</span>
+                  <div className="flex items-center gap-2">
+                    {/* Merging only makes sense for 2+ — with one selected it's just a confirm. */}
+                    <Button
+                      variant="secondary"
+                      onClick={mergeSelectedProducts}
+                      disabled={confirmingProducts || selectedProductKeys.size < 2}
+                      title={
+                        selectedProductKeys.size < 2
+                          ? 'Select two or more candidates that are the same real product'
+                          : undefined
+                      }
+                    >
+                      Merge into one product
+                    </Button>
+                    <Button
+                      variant="primary"
+                      onClick={confirmSelectedProducts}
+                      disabled={confirmingProducts || selectedProductKeys.size === 0}
+                    >
+                      {confirmingProducts ? 'Confirming…' : `Confirm ${selectedProductKeys.size || ''} product${selectedProductKeys.size === 1 ? '' : 's'}`}
+                    </Button>
+                  </div>
+                </div>
+                {selectedProductKeys.size >= 2 && (
+                  <p className="mt-2 text-xs text-content-subtle">
+                    Merging confirms all {selectedProductKeys.size} as one product, using the first
+                    one&apos;s name and SKU — every selected supplier SKU then maps to it.
+                  </p>
+                )}
+                {mergeError && (
+                  <p role="alert" className="mt-2 text-xs font-medium text-danger">
+                    {mergeError}
+                  </p>
+                )}
               </div>
             )}
           </Card>

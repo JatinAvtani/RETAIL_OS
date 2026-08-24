@@ -8,8 +8,10 @@ import { unitsRouter } from './routers/units';
 import { recipesRouter } from './routers/recipes';
 import { inventoryRouter } from './routers/inventory';
 import { stocktakeRouter } from './routers/stocktake';
+import { storageLocationsRouter } from './routers/storage-locations';
 import { integrationsRouter } from './routers/integrations';
 import { csvImportRouter } from './routers/csv-import';
+import { catalogCsvImportRouter } from './routers/catalog-csv-import';
 import { posItemsRouter } from './routers/pos-items';
 import { dashboardRouter } from './routers/dashboard';
 import { documentsRouter } from './routers/documents';
@@ -37,8 +39,10 @@ export const appRouter = router({
   recipes: recipesRouter,
   inventory: inventoryRouter,
   stocktake: stocktakeRouter,
+  storageLocations: storageLocationsRouter,
   integrations: integrationsRouter,
   csvImport: csvImportRouter,
+  catalogCsvImport: catalogCsvImportRouter,
   posItems: posItemsRouter,
   dashboard: dashboardRouter,
   documents: documentsRouter,

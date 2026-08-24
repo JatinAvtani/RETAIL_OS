@@ -1,19 +1,34 @@
 /**
- * Seeds a realistic demo tenant so the UI has something meaningful to show.
+ * Seeds the demo tenant by READING the generated Indian corpus in `mock-data/`.
  *
- * This is DEMO data, not the project's eventual full mock corpus — that stays a single deliberate
- * generation pass once every epic's data shape is settled. This script covers only the domains
- * that genuinely exist today (catalog, suppliers/prices, recipes, inventory, POS sales) and
- * deliberately writes through the REAL repositories and services rather than raw inserts, so the
- * seeded state is reachable by the same code paths the app itself uses — a stock level here is a
- * real projection of real ledger movements, not a hand-written number.
+ * This script holds NO business data of its own. Every product, price, recipe, supplier and sale
+ * comes from `mock-data/`, which is produced by the deterministic generator in
+ * `mock-data/generate/`. That split is the point: the corpus is browsable and reviewable as plain
+ * JSON before a single row is written, and a fresh clone reproduces it byte-identically from the
+ * committed generator. A seed script that also invents its own numbers cannot offer either.
+ *
+ * Everything is written THROUGH THE REAL REPOSITORIES AND SERVICES, never raw inserts. A stock level
+ * here is a genuine projection of genuine ledger movements; a recipe cost genuinely resolves (or
+ * genuinely does not — see the unpriced product) through the same code paths the app itself uses. A
+ * demo built on raw inserts proves only that rows can be inserted.
+ *
+ * IDEMPOTENT: re-running WIPES the demo organization and rebuilds it, so the demo never accumulates
+ * duplicate history across runs. The delete order is derived from `pg_constraint` at runtime by
+ * `wipe-organization.mts` — see that file for the genuine FK cycle it has to break.
+ *
+ * The demo LOGIN IS PRESERVED across re-seeds: the user row is never deleted, only its membership
+ * and the organization beneath it. A real "Explore demo" button depends on that account existing.
  *
  * Usage:
- *   DATABASE_URL=... pnpm --filter @retailos/api exec tsx src/scripts/seed-demo.mts <email>
+ *   DATABASE_URL=... REDIS_URL=... pnpm --filter @retailos/api exec tsx src/scripts/seed-demo.mts
  *
- * The email must belong to an existing, verified user (sign up through the app first). The script
- * creates a fresh organization and store for that user each run, so repeated runs never collide.
+ * Flags:
+ *   --dry-run      report what would be seeded, write nothing
+ *   --skip-wipe    add to the existing org instead of rebuilding (debugging only)
  */
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   createDb,
   units,
@@ -36,74 +51,309 @@ import {
   SalesIngestionPipeline,
 } from '@retailos/db';
 import { generateId } from '@retailos/domain';
+import type { CurrencyCode } from '@retailos/domain';
 import { eq } from 'drizzle-orm';
-import Decimal from 'decimal.js';
 import { createQueueRedisConnection, createFactAggregationQueue, registerFactAggregationJob } from '@retailos/queue';
+// `.mjs`, not `.mts`: this package emits real `.mjs` output, so the built specifier must match, and
+// tsx resolves `.mjs` back to the `.mts` source when running from source. Verified both ways.
+import { wipeOrganization } from './wipe-organization.mjs';
 
-const email = process.argv[2];
-if (!email) {
-  console.error('Usage: tsx src/scripts/seed-demo.mts <email-of-existing-verified-user>');
-  process.exit(1);
+const DRY_RUN = process.argv.includes('--dry-run');
+const SKIP_WIPE = process.argv.includes('--skip-wipe');
+/**
+ * `--limit-days=N` seeds only the most recent N days of sales. Every sale line runs the real
+ * ingestion pipeline (recipe explosion -> FEFO draw -> movement posting) in its own transaction, so
+ * a full window is ~148k sequential round-trips. This flag exists to MEASURE that rate on a real
+ * slice rather than guess at it, and to give a usable demo quickly on a constrained machine.
+ * Catalog, suppliers and stock are always seeded in full — only the sales window is narrowed.
+ */
+const limitArg = process.argv.find((a) => a.startsWith('--limit-days='));
+const LIMIT_DAYS = limitArg ? Number(limitArg.split('=')[1]) : null;
+
+/* ------------------------------------------------------------------ corpus */
+
+const CORPUS = join(dirname(fileURLToPath(import.meta.url)), '../../../../mock-data');
+// The trailing comma in `<T,>` is required: in a .mts file a bare `<T>` arrow generic is reserved
+// syntax (it parses as JSX), which is a compile error rather than a style preference.
+const read = <T,>(relative: string): T => JSON.parse(readFileSync(join(CORPUS, relative), 'utf8')) as T;
+
+interface CorpusMeta {
+  seed: number;
+  generatedAt: string;
+  organization: { name: string; slug: string; baseCurrency: string };
+  stores: { code: string; name: string; address: string; timezone: string; role: string; opensDaysAgo: number }[];
+  staff: { email: string; name: string; role: 'OWNER' | 'MANAGER'; storeCode: string | null; approvalLimit?: string }[];
+  historyDays: number;
+  receiptLevelDays: number;
+}
+interface CorpusProduct {
+  sku: string; name: string; unitCode: 'g' | 'ml' | 'each'; category: string; storageLocation: string;
+  perishable: boolean; packPrice: string; packLabel: string; conversionToBase: string; unitCost: string;
+  hsn: string; gstBasisPoints: number; expiryInDays?: number; deliberatelyUnpriced?: boolean;
+}
+interface CorpusMenuItem {
+  name: string; posName: string; yieldQuantity: string; yieldUnitCode: 'g' | 'ml' | 'each';
+  price: string; flagshipPerDay: number; components: { sku: string; quantity: string }[];
+}
+interface CorpusSupplier {
+  code: string; name: string; gstin: string; address: string; paymentTerms: string; leadTimeDays: number;
+}
+interface CorpusSupplierProduct {
+  supplierCode: string; sku: string; supplierSku: string; packLabel: string; packSize: string;
+  conversionToBase: string; basePackPrice: string; confirmed: boolean;
+}
+interface CorpusPosItems {
+  fromMenu: { externalId: string; posName: string; menuItemName: string; price: string }[];
+  nonMenu: { externalId: string; name: string; price: string }[];
+}
+interface CorpusReceipt {
+  externalId: string; storeCode: string; occurredAt: string; daysAgo: number;
+  lines: { externalId: string; posName: string; qty: number; unitPrice: string; lineTotal: string }[];
+  subtotal: string; discount: string; cgst: string; sgst: string; total: string;
+  paymentMode: string; status: 'COMPLETED' | 'VOIDED';
+}
+interface CorpusAggregate {
+  storeCode: string; date: string; daysAgo: number;
+  items: { externalId: string; posName: string; units: number; unitPrice: string }[];
 }
 
-const { db } = createDb(process.env.DATABASE_URL!);
+const meta = read<CorpusMeta>('meta.json');
+const categories = read<{ name: string }[]>('catalog/categories.json');
+const products = read<CorpusProduct[]>('catalog/products.json');
+const menuItemSpecs = read<CorpusMenuItem[]>('catalog/menu-items.json');
+const posItemsSpec = read<CorpusPosItems>('catalog/pos-items.json');
+const supplierSpecs = read<CorpusSupplier[]>('suppliers/suppliers.json');
+const supplierProducts = read<CorpusSupplierProduct[]>('suppliers/supplier-products.json');
+/**
+ * Filtered ONCE, here, so replenishment sizing and the sales actually written are derived from the
+ * same set. Sizing stock against the full window while seeding only part of it would leave every
+ * lot massively overstocked and make stock-on-hand meaningless.
+ */
+const withinWindow = (daysAgo: number): boolean => LIMIT_DAYS === null || daysAgo <= LIMIT_DAYS;
 
-const [user] = await db.select().from(users).where(eq(users.email, email));
-if (!user) {
-  console.error(`No user found for ${email}. Sign up through the app first, then re-run.`);
+const aggregates = read<CorpusAggregate[]>('sales/daily-aggregates.json').filter((a) => withinWindow(a.daysAgo));
+
+/**
+ * Receipts are loaded ONE STORE AT A TIME, never all at once.
+ *
+ * The three receipt files are 28 MB of JSON, which becomes several hundred MB once parsed into JS
+ * objects — and this run holds them for hours while writing ~50k transactions. Free RAM on this
+ * machine has been measured under 1 GB, and it has previously OOM'd hard enough to kill Docker
+ * Desktop. Holding one store's receipts at a time caps the resident set at roughly the largest
+ * single file instead of the sum of all three.
+ *
+ * The two passes that need receipts (demand sizing, then seeding) each call this and let the array
+ * go out of scope, so at most one store's worth is reachable at any moment.
+ */
+const loadReceipts = (storeCode: string): CorpusReceipt[] =>
+  read<CorpusReceipt[]>(`sales/receipts-${storeCode.toLowerCase()}.json`).filter((r) => withinWindow(r.daysAgo));
+
+/** Counted without retaining the receipts themselves — used only for the dry-run report. */
+const countReceipts = (): { receipts: number; lines: number } => {
+  let receipts = 0;
+  let lines = 0;
+  for (const store of meta.stores) {
+    const batch = loadReceipts(store.code);
+    receipts += batch.length;
+    lines += batch.reduce((n, r) => n + r.lines.length, 0);
+  }
+  return { receipts, lines };
+};
+
+/**
+ * Validated at the boundary rather than cast. The corpus is plain JSON, so its currency arrives as a
+ * bare string; asserting it into the branded union would defeat the exact protection that type
+ * exists for. A corpus naming an unsupported currency must fail here, loudly, not surface later as
+ * money arithmetic in a currency nothing else understands.
+ */
+const SUPPORTED_CURRENCIES: CurrencyCode[] = ['USD', 'EUR', 'GBP', 'INR'];
+const isCurrencyCode = (value: string): value is CurrencyCode =>
+  (SUPPORTED_CURRENCIES as string[]).includes(value);
+
+if (!isCurrencyCode(meta.organization.baseCurrency)) {
+  console.error(
+    `Corpus base currency "${meta.organization.baseCurrency}" is not a supported CurrencyCode ` +
+      `(${SUPPORTED_CURRENCIES.join(', ')}).`
+  );
+  process.exit(1);
+}
+const CURRENCY: CurrencyCode = meta.organization.baseCurrency;
+
+/* ------------------------------------------------------------------ connect */
+
+const { db, client } = createDb(process.env.DATABASE_URL!);
+
+/**
+ * The corpus is plain JSON, so its shape is UNCHECKED by the compiler — the declared interfaces
+ * above are a claim, not a guarantee. A missing field arrives as `undefined`, sails through every
+ * type check, and surfaces hundreds of rows later as a NOT NULL violation far from its cause (which
+ * is exactly what happened: `meta.json` was projecting `timezone` away, and the seed died on the
+ * first store insert). Asserting the fields actually needed, up front, turns that into one clear
+ * error before anything is written.
+ */
+const requireFields = (label: string, object: Record<string, unknown>, fields: string[]): void => {
+  const missing = fields.filter((f) => object[f] === undefined || object[f] === null);
+  if (missing.length > 0) {
+    console.error(
+      `Corpus ${label} is missing required field(s): ${missing.join(', ')}. ` +
+        'Regenerate the corpus (mock-data/generate/generate.mts) — the reader cannot invent these.'
+    );
+    process.exit(1);
+  }
+};
+
+requireFields('meta.organization', meta.organization as unknown as Record<string, unknown>, ['name', 'slug', 'baseCurrency']);
+for (const store of meta.stores) {
+  // `storeCode: null` is legitimate for an all-stores OWNER, so nullable fields are not asserted.
+  requireFields(`store ${store.code}`, store as unknown as Record<string, unknown>, ['code', 'name', 'timezone', 'opensDaysAgo']);
+}
+for (const person of meta.staff) {
+  requireFields(`staff ${person.email}`, person as unknown as Record<string, unknown>, ['email', 'role']);
+}
+
+const owner = meta.staff.find((s) => s.role === 'OWNER');
+if (!owner) throw new Error('Corpus defines no OWNER — refusing to seed a tenant nobody can sign into.');
+
+const [demoUser] = await db.select().from(users).where(eq(users.email, owner.email));
+if (!demoUser) {
+  // The demo login is a product feature, not an implementation detail — a real "Explore demo" button
+  // depends on it. Creating the user here would mean inventing a password hash, so this fails loudly
+  // with the exact remedy instead of silently seeding a tenant nobody can reach.
+  console.error(
+    `No user found for ${owner.email}. Sign that account up through the app first (or run the ` +
+      'auth seed), then re-run — this script never creates credentials.'
+  );
   process.exit(1);
 }
 
 const unitRows = await db.select().from(units);
 const unitByCode = new Map(unitRows.map((u) => [u.code, u.id]));
-const gram = unitByCode.get('g');
-const kilogram = unitByCode.get('kg');
-const each = unitByCode.get('each');
-const millilitre = unitByCode.get('ml');
-if (!gram || !kilogram || !each || !millilitre) {
-  console.error('Base units are missing — run migrations first.');
-  process.exit(1);
+for (const code of ['g', 'ml', 'each', 'kg']) {
+  if (!unitByCode.get(code)) {
+    console.error(`Base unit "${code}" is missing — run migrations first.`);
+    process.exit(1);
+  }
+}
+const unitIdFor = (code: string): string => unitByCode.get(code)!;
+
+if (DRY_RUN) {
+  console.log(
+    JSON.stringify(
+      {
+        dryRun: true,
+        corpusSeed: meta.seed,
+        generatedAt: meta.generatedAt,
+        wouldSeed: {
+          organization: meta.organization.name,
+          stores: meta.stores.length,
+          staff: meta.staff.length,
+          categories: categories.length,
+          products: products.length,
+          menuItems: menuItemSpecs.length,
+          suppliers: supplierSpecs.length,
+          supplierProducts: supplierProducts.length,
+          posItems: posItemsSpec.fromMenu.length + posItemsSpec.nonMenu.length,
+          dailyAggregates: aggregates.length,
+          ...countReceipts(),
+        },
+      },
+      null,
+      2
+    )
+  );
+  await client.end();
+  process.exit(0);
 }
 
-/* ------------------------------------------------------------------ org, store, membership */
+/* ------------------------------------------------------------------ wipe + org */
+
+const started = Date.now();
+const log = (stage: string, detail?: unknown) =>
+  console.log(`[${String(Math.round((Date.now() - started) / 1000)).padStart(4)}s] ${stage}${detail === undefined ? '' : ` ${JSON.stringify(detail)}`}`);
+
+/**
+ * Existing demo orgs are found TWO ways, and both are needed:
+ *
+ *  - by the OWNER's membership, so a renamed org is still found and replaced;
+ *  - by the corpus slug, which catches an ORPHANED org from a run that died after creating the
+ *    organization but before creating the membership. Membership-only lookup cannot see those, and
+ *    they then block the next run forever on the slug unique constraint. (This is not hypothetical —
+ *    it happened on the first real run here.)
+ */
+const byMembership = await db
+  .select({ organizationId: memberships.organizationId })
+  .from(memberships)
+  .where(eq(memberships.userId, demoUser.id));
+
+const bySlug = await db
+  .select({ organizationId: organizations.id })
+  .from(organizations)
+  .where(eq(organizations.slug, meta.organization.slug));
+
+const existing = [...new Map([...byMembership, ...bySlug].map((r) => [r.organizationId, r])).values()];
+
+if (!SKIP_WIPE) {
+  for (const row of existing) {
+    const result = await wipeOrganization(db, row.organizationId, {});
+    const removed = Object.entries(result.deleted).filter(([, n]) => n > 0);
+    log('wiped org', { organizationId: row.organizationId, tables: removed.length, rows: removed.reduce((n, [, v]) => n + v, 0) });
+    // The organization row itself is outside the wipe's scope (it is the anchor every predicate
+    // filters on), so it is removed last, here, once everything beneath it is gone.
+    await db.delete(organizations).where(eq(organizations.id, row.organizationId));
+  }
+} else {
+  log('skip-wipe', { existingOrgs: existing.length });
+}
 
 const organizationId = generateId();
 await db.insert(organizations).values({
   id: organizationId,
-  name: 'Ardent Bakehouse',
-  slug: `ardent-bakehouse-${organizationId}`,
-  baseCurrency: 'INR',
+  name: meta.organization.name,
+  slug: meta.organization.slug,
+  baseCurrency: meta.organization.baseCurrency,
 });
 
-const storeId = generateId();
-const storeTimezone = 'America/New_York';
-await db.insert(stores).values({
-  id: storeId,
-  organizationId,
-  name: 'Mill Street',
-  timezone: storeTimezone,
-});
+const storeIdByCode = new Map<string, string>();
+const factConnection = createQueueRedisConnection(process.env.REDIS_URL ?? 'redis://localhost:6379');
+const factQueue = createFactAggregationQueue(factConnection);
+for (const store of meta.stores) {
+  const storeId = generateId();
+  await db.insert(stores).values({
+    id: storeId,
+    organizationId,
+    name: store.name,
+    timezone: store.timezone,
+  });
+  storeIdByCode.set(store.code, storeId);
+  // Store creation is still the only real trigger point for the daily fact-aggregation job.
+  await registerFactAggregationJob(factQueue, { organizationId, storeId, storeTimezone: store.timezone });
+}
+await factQueue.close();
+await factConnection.quit();
 
-// this is currently the ONLY real store-creation code path in the codebase (the stores
-// tRPC router is read-only; a real create endpoint doesn't exist until the later milestone's onboarding
-// flow), so this is where the daily fact-aggregation job genuinely gets registered today. The same
-// `registerFactAggregationJob` call belongs in that future onboarding endpoint too — this is not a
-// demo-only concern, just demo's only current trigger point.
-const factAggregationConnection = createQueueRedisConnection(process.env.REDIS_URL ?? 'redis://localhost:6379');
-const factAggregationQueue = createFactAggregationQueue(factAggregationConnection);
-await registerFactAggregationJob(factAggregationQueue, { organizationId, storeId, storeTimezone });
-await factAggregationQueue.close();
-await factAggregationConnection.quit();
-
-await db.insert(memberships).values({
-  id: generateId(),
-  organizationId,
-  userId: user.id,
-  role: 'OWNER',
-  storeIds: [storeId],
-  approvalLimit: '10000.0000',
-  acceptedAt: new Date(),
-});
+for (const person of meta.staff) {
+  const [row] = await db.select().from(users).where(eq(users.email, person.email));
+  if (!row) {
+    // A missing non-owner is a gap in the demo, not a reason to abort a seed that is otherwise fine.
+    log('staff skipped (no user row)', { email: person.email, role: person.role });
+    continue;
+  }
+  await db.insert(memberships).values({
+    id: generateId(),
+    organizationId,
+    userId: row.id,
+    role: person.role,
+    /**
+     * The MANAGER is scoped to ONE store, the OWNER to all of them. This is what gives the authz
+     * model something real to enforce — a demo where everyone is an owner never exercises a single
+     * store-scoped access check.
+     */
+    storeIds: person.storeCode === null ? [...storeIdByCode.values()] : [storeIdByCode.get(person.storeCode)!],
+    ...(person.approvalLimit ? { approvalLimit: person.approvalLimit } : {}),
+    acceptedAt: new Date(),
+  });
+}
+log('org + stores + memberships', { organizationId, stores: storeIdByCode.size });
 
 /* ------------------------------------------------------------------ catalog */
 
@@ -111,432 +361,446 @@ const categoryRepo = new CategoryRepository(db, organizationId);
 const productRepo = new ProductRepository(db, organizationId);
 const locationRepo = new StorageLocationRepository(db, organizationId);
 
-const dryGoods = await categoryRepo.create({ id: generateId(), name: 'Dry goods' });
-const dairy = await categoryRepo.create({ id: generateId(), name: 'Dairy' });
-const beverage = await categoryRepo.create({ id: generateId(), name: 'Beverage' });
+const categoryIdByName = new Map<string, string>();
+for (const category of categories) {
+  const row = await categoryRepo.create({ id: generateId(), name: category.name });
+  categoryIdByName.set(category.name, row.id);
+}
 
-const dryStore = await locationRepo.create({ id: generateId(), storeId, name: 'Dry store' });
-const walkIn = await locationRepo.create({ id: generateId(), storeId, name: 'Walk-in fridge' });
+/** Storage locations are per-store: each outlet has its own dry store and cold room. */
+const locationIdByStoreAndName = new Map<string, string>();
+const locationNames = [...new Set(products.map((p) => p.storageLocation))];
+for (const [code, storeId] of storeIdByCode) {
+  for (const name of locationNames) {
+    const row = await locationRepo.create({ id: generateId(), storeId, name });
+    locationIdByStoreAndName.set(`${code}:${name}`, row.id);
+  }
+}
 
-type SeedProduct = {
-  sku: string;
-  name: string;
-  unitId: string;
-  /** The domain-level unit code, needed by movement/waste APIs which take a `Unit`, not a unit id. */
-  unitCode: 'g' | 'ml' | 'each';
-  categoryId: string;
-  locationId: string;
-  perishable: boolean;
-  /** Supplier pack price and how many base units one pack contains. */
-  packPrice: string;
-  packSize: string;
-  conversionToBase: string;
-  openingQty: string;
-  unitCost: string;
-  expiryInDays?: number;
-};
-
-const seedProducts: SeedProduct[] = [
-  // Opening quantities are sized to sustain the full two weeks of seeded sales below without
-  // running dry — a mid-period stockout would silently truncate consumption and make food cost
-  // percentage read far lower than reality.
-  { sku: 'FLR-00', name: 'Flour, type 00', unitId: gram, unitCode: 'g', categoryId: dryGoods.id, locationId: dryStore.id, perishable: false, packPrice: '24.00', packSize: '25', conversionToBase: '25000', openingQty: '400000', unitCost: '0.0010' },
-  { sku: 'BTR-UNS', name: 'Butter, unsalted', unitId: gram, unitCode: 'g', categoryId: dairy.id, locationId: walkIn.id, perishable: true, packPrice: '38.50', packSize: '5', conversionToBase: '5000', openingQty: '120000', unitCost: '0.0077', expiryInDays: 21 },
-  { sku: 'SGR-CST', name: 'Caster sugar', unitId: gram, unitCode: 'g', categoryId: dryGoods.id, locationId: dryStore.id, perishable: false, packPrice: '18.00', packSize: '10', conversionToBase: '10000', openingQty: '60000', unitCost: '0.0018' },
-  { sku: 'EGG-LRG', name: 'Eggs, large', unitId: each, unitCode: 'each', categoryId: dairy.id, locationId: walkIn.id, perishable: true, packPrice: '9.60', packSize: '60', conversionToBase: '60', openingQty: '600', unitCost: '0.1600', expiryInDays: 12 },
-  { sku: 'MLK-WHL', name: 'Milk, whole', unitId: millilitre, unitCode: 'ml', categoryId: dairy.id, locationId: walkIn.id, perishable: true, packPrice: '14.40', packSize: '12', conversionToBase: '12000', openingQty: '90000', unitCost: '0.0012', expiryInDays: 6 },
-  { sku: 'CFE-ESP', name: 'Espresso beans', unitId: gram, unitCode: 'g', categoryId: beverage.id, locationId: dryStore.id, perishable: false, packPrice: '46.00', packSize: '2', conversionToBase: '2000', openingQty: '24000', unitCost: '0.0230' },
-  { sku: 'SLT-SEA', name: 'Sea salt', unitId: gram, unitCode: 'g', categoryId: dryGoods.id, locationId: dryStore.id, perishable: false, packPrice: '6.50', packSize: '2', conversionToBase: '2000', openingQty: '8000', unitCost: '0.0033' },
-  { sku: 'YST-FRS', name: 'Fresh yeast', unitId: gram, unitCode: 'g', categoryId: dryGoods.id, locationId: walkIn.id, perishable: true, packPrice: '11.20', packSize: '1', conversionToBase: '1000', openingQty: '5000', unitCost: '0.0112', expiryInDays: 4 },
-];
-
-const created = new Map<string, { id: string; variantId: string; unitId: string }>();
-for (const p of seedProducts) {
-  const product = await productRepo.create({
+const productBySku = new Map<string, { id: string; variantId: string; unitId: string; unitCode: string }>();
+for (const p of products) {
+  const row = await productRepo.create({
     id: generateId(),
     sku: p.sku,
     name: p.name,
-    baseUnitId: p.unitId,
+    baseUnitId: unitIdFor(p.unitCode),
     type: 'INGREDIENT',
-    categoryId: p.categoryId,
+    categoryId: categoryIdByName.get(p.category)!,
     isPerishable: p.perishable,
   });
-  // No repository path assigns a storage location yet (neither `create` nor `update` accepts one),
-  // so products stay unassigned here rather than reaching around the repository layer with a raw
-  // insert. The stocktake sheet renders these as "Unassigned", which is honest.
-  const variants = await productRepo.findVariants(product.id);
-  created.set(p.sku, { id: product.id, variantId: variants[0]!.id, unitId: p.unitId });
+  const variants = await productRepo.findVariants(row.id);
+  productBySku.set(p.sku, { id: row.id, variantId: variants[0]!.id, unitId: unitIdFor(p.unitCode), unitCode: p.unitCode });
 }
+log('catalog', { categories: categories.length, locations: locationIdByStoreAndName.size, products: products.length });
 
-/* ------------------------------------------------------------------ suppliers + confirmed prices */
+/* ------------------------------------------------------------------ suppliers + prices */
 
 const supplierRepo = new SupplierRepository(db, organizationId);
 const supplierProductRepo = new SupplierProductRepository(db, organizationId);
 const supplierPriceRepo = new SupplierPriceRepository(db, organizationId);
 
-const millers = await supplierRepo.create({
-  id: generateId(),
-  name: 'Northgate Millers',
-  paymentTerms: 'NET30',
-  leadTimeDaysContracted: 3,
-});
-const creamery = await supplierRepo.create({
-  id: generateId(),
-  name: 'Hollow Creek Creamery',
-  paymentTerms: 'NET14',
-  leadTimeDaysContracted: 2,
-});
+const supplierIdByCode = new Map<string, string>();
+for (const s of supplierSpecs) {
+  const row = await supplierRepo.create({
+    id: generateId(),
+    name: s.name,
+    paymentTerms: s.paymentTerms,
+    leadTimeDaysContracted: s.leadTimeDays,
+  });
+  supplierIdByCode.set(s.code, row.id);
+}
 
-const supplierFor = (sku: string) =>
-  ['BTR-UNS', 'EGG-LRG', 'MLK-WHL'].includes(sku) ? creamery.id : millers.id;
+/**
+ * Prices must predate the whole sales window. A `validFrom` after the earliest sale would leave that
+ * period's recipe cost genuinely unresolvable — correct I7 behaviour, but not the intent here.
+ */
+const priceValidFrom = new Date(Date.now() - (meta.historyDays + 30) * 24 * 60 * 60 * 1000);
 
-for (const p of seedProducts) {
-  const product = created.get(p.sku)!;
+const supplierProductIdBySku = new Map<string, string>();
+for (const sp of supplierProducts) {
+  const product = productBySku.get(sp.sku);
+  if (!product) continue;
   const link = await supplierProductRepo.create({
     id: generateId(),
-    supplierId: supplierFor(p.sku),
+    supplierId: supplierIdByCode.get(sp.supplierCode)!,
     productId: product.id,
-    supplierSku: `${p.sku}-PACK`,
-    packSize: p.packSize,
-    packUnitId: p.unitId,
-    conversionToBase: p.conversionToBase,
+    supplierSku: sp.supplierSku,
+    packSize: sp.packSize,
+    packUnitId: product.unitId,
+    conversionToBase: sp.conversionToBase,
   });
-  // Every mapping is confirmed, so recipe costs and therefore theoretical COGS genuinely resolve
-  // — cost variance is the dashboard's headline number and needs both sides known to exist at all.
-  // The "unknown, never zero" behaviour is still demonstrated elsewhere and honestly: an
-  // additional unpriced product is created below with no supplier mapping at all.
-  await supplierProductRepo.confirm(link.id);
+  supplierProductIdBySku.set(sp.sku, link.id);
+  if (sp.confirmed) await supplierProductRepo.confirm(link.id);
   await supplierPriceRepo.recordNewPrice({
     id: generateId(),
     supplierProductId: link.id,
-    unitPrice: p.packPrice,
-    currency: 'USD',
-    validFrom: new Date(Date.now() - 45 * 24 * 60 * 60 * 1000),
+    unitPrice: sp.basePackPrice,
+    currency: CURRENCY,
+    validFrom: priceValidFrom,
   });
 }
 
 /**
- * A product with NO supplier mapping at all — a genuinely unpriced ingredient, the everyday case
- * where someone adds an item to the catalog before anyone records what it costs. The recipe using
- * it below therefore reports its cost as unknown rather than as a number, which is the behaviour
- * worth demonstrating: a missing cost must never quietly become zero, because a zero cost reads as
- * pure profit.
+ * The deliberately unpriced product gets NO supplier mapping at all, so every menu item using it
+ * resolves to a real *unknown* cost. Do not "fix" this: a demo where every number resolves proves
+ * nothing about how missing data is handled, and "unknown, never zero" is the load-bearing claim.
  */
-const unpricedProduct = await productRepo.create({
-  id: generateId(),
-  sku: 'VAN-POD',
-  name: 'Vanilla pods',
-  baseUnitId: each,
-  type: 'INGREDIENT',
-  categoryId: dryGoods.id,
-  isPerishable: false,
-});
-const unpricedVariants = await productRepo.findVariants(unpricedProduct.id);
-created.set('VAN-POD', {
-  id: unpricedProduct.id,
-  variantId: unpricedVariants[0]!.id,
-  unitId: each,
-});
-
-/* ------------------------------------------------------------------ opening stock (real ledger) */
-
-const lotRepo = new LotRepository(db, organizationId);
-const movements = new MovementService(db, organizationId);
-
-for (const p of seedProducts) {
-  const product = created.get(p.sku)!;
-  const lot = await lotRepo.receive({
-    id: generateId(),
-    storeId,
-    productId: product.id,
-    variantId: product.variantId,
-    lotNumber: `${p.sku}-L1`,
-    receivedAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
-    initialQuantity: p.openingQty,
-    unitCost: p.unitCost,
-    currency: 'USD',
-    ...(p.expiryInDays !== undefined
-      ? { expiryDate: new Date(Date.now() + p.expiryInDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10) }
-      : {}),
-  });
-
-  await movements.postMovement({
-    storeId,
-    productId: product.id,
-    variantId: product.variantId,
-    lotId: lot.id,
-    movementType: 'RECEIPT',
-    quantity: p.openingQty,
-    unitCost: p.unitCost,
-    currency: 'USD',
-    occurredAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
-    sourceType: 'demo-seed',
-    actorUserId: user.id,
-  });
-}
-
-/* ------------------------------------------------------------------ a little real waste */
-
-await movements.logWaste({
-  storeId,
-  productId: created.get('MLK-WHL')!.id,
-  variantId: created.get('MLK-WHL')!.variantId,
-  quantity: '750',
-  unit: 'ml',
-  occurredAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
-  sourceType: 'demo-seed',
-  reasonCode: 'SPILLAGE',
-  actorUserId: user.id,
-});
-
-await movements.logWaste({
-  storeId,
-  productId: created.get('BTR-UNS')!.id,
-  variantId: created.get('BTR-UNS')!.variantId,
-  quantity: '400',
-  unit: 'g',
-  occurredAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000),
-  sourceType: 'demo-seed',
-  reasonCode: 'PREP_ERROR',
-  actorUserId: user.id,
-});
+const unpriced = products.filter((p) => p.deliberatelyUnpriced).map((p) => p.sku);
+log('suppliers', { suppliers: supplierSpecs.length, mappings: supplierProductIdBySku.size, deliberatelyUnpriced: unpriced });
 
 /* ------------------------------------------------------------------ recipes + menu items */
 
 const recipeRepo = new RecipeRepository(db, organizationId);
 const menuItemRepo = new MenuItemRepository(db, organizationId);
 
-const recipeSpecs = [
-  {
-    name: 'Sourdough loaf',
-    yieldQuantity: '1',
-    yieldUnitId: each,
-    price: '8.50',
-    components: [
-      { sku: 'FLR-00', quantity: '500', unitId: gram },
-      { sku: 'SLT-SEA', quantity: '10', unitId: gram },
-      { sku: 'YST-FRS', quantity: '7', unitId: gram },
-    ],
-  },
-  {
-    name: 'Butter croissant',
-    yieldQuantity: '12',
-    yieldUnitId: each,
-    price: '4.25',
-    components: [
-      { sku: 'FLR-00', quantity: '1000', unitId: gram },
-      { sku: 'BTR-UNS', quantity: '600', unitId: gram },
-      { sku: 'SGR-CST', quantity: '80', unitId: gram },
-      { sku: 'MLK-WHL', quantity: '250', unitId: millilitre },
-    ],
-  },
-  {
-    name: 'Flat white',
-    yieldQuantity: '1',
-    yieldUnitId: each,
-    price: '4.75',
-    components: [
-      { sku: 'CFE-ESP', quantity: '18', unitId: gram },
-      { sku: 'MLK-WHL', quantity: '150', unitId: millilitre },
-    ],
-  },
-  {
-    name: 'Vanilla custard tart',
-    yieldQuantity: '8',
-    yieldUnitId: each,
-    price: '5.50',
-    components: [
-      { sku: 'FLR-00', quantity: '300', unitId: gram },
-      { sku: 'BTR-UNS', quantity: '150', unitId: gram },
-      { sku: 'EGG-LRG', quantity: '6', unitId: each },
-      { sku: 'MLK-WHL', quantity: '500', unitId: millilitre },
-      { sku: 'SGR-CST', quantity: '120', unitId: gram },
-    ],
-  },
-  {
-    // Uses the unpriced vanilla pod, so this recipe's cost genuinely resolves to "unknown" on the
-    // recipe detail page. Deliberately NOT sold through the POS below — an unknown-cost item in
-    // the sales mix would make the whole period's theoretical COGS unknown, correctly but
-    // unhelpfully, hiding the cost-variance feature behind a single unpriced ingredient.
-    name: 'Vanilla bean custard (prep)',
-    yieldQuantity: '10',
-    yieldUnitId: each,
-    price: '6.00',
-    components: [
-      { sku: 'MLK-WHL', quantity: '800', unitId: millilitre },
-      { sku: 'EGG-LRG', quantity: '8', unitId: each },
-      { sku: 'SGR-CST', quantity: '150', unitId: gram },
-      { sku: 'VAN-POD', quantity: '2', unitId: each },
-    ],
-  },
-];
-
-const menuItems: Array<{ id: string; name: string }> = [];
-for (const spec of recipeSpecs) {
+const menuItemIdByName = new Map<string, string>();
+for (const spec of menuItemSpecs) {
   const recipeGroupId = generateId();
-  const recipe = await recipeRepo.create({
+  await recipeRepo.create({
     id: generateId(),
     recipeGroupId,
     name: spec.name,
     yieldQuantity: spec.yieldQuantity,
-    yieldUnitId: spec.yieldUnitId,
-    validFrom: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+    yieldUnitId: unitIdFor(spec.yieldUnitCode),
+    validFrom: priceValidFrom,
     components: spec.components.map((c) => ({
       componentType: 'PRODUCT' as const,
-      productId: created.get(c.sku)!.id,
+      productId: productBySku.get(c.sku)!.id,
       quantity: c.quantity,
-      unitId: c.unitId,
+      unitId: unitIdFor(productBySku.get(c.sku)!.unitCode),
     })),
   });
-  void recipe;
-
   const menuItem = await menuItemRepo.create({
     id: generateId(),
     name: spec.name,
     recipeGroupId,
     price: spec.price,
-    priceValidFrom: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+    priceValidFrom: priceValidFrom,
   });
-  menuItems.push({ id: menuItem.id, name: menuItem.name });
+  menuItemIdByName.set(spec.name, menuItem.id);
 }
+log('recipes + menu items', { count: menuItemSpecs.length });
 
-/* ------------------------------------------------------------------ POS catalog + real sales */
+/* ------------------------------------------------------------------ POS catalog */
 
 const posItemRepo = new PosItemRepository(db, organizationId);
-const salesRepo = new SalesTransactionRepository(db, organizationId);
 
-/** Names deliberately don't match menu items exactly — that's the real mapping problem the
- *  POS-mapping screen exists to solve, and it makes the fuzzy suggestions meaningful. */
-const posCatalog = [
-  { externalId: 'SQ-1001', name: 'Sourdough Loaf', mapTo: 'Sourdough loaf', unitPrice: '8.50', sold: 46 },
-  { externalId: 'SQ-1002', name: 'Croissant - Butter', mapTo: 'Butter croissant', unitPrice: '4.25', sold: 118 },
-  { externalId: 'SQ-1003', name: 'Flat White', mapTo: 'Flat white', unitPrice: '4.75', sold: 204 },
-  { externalId: 'SQ-1004', name: 'Custard Tart (Vanilla)', mapTo: null, unitPrice: '5.50', sold: 37 },
-  { externalId: 'SQ-1005', name: 'Gift Card $25', mapTo: null, unitPrice: '25.00', sold: 4 },
-  { externalId: 'SQ-1006', name: 'Oat Milk Surcharge', mapTo: null, unitPrice: '0.75', sold: 61 },
-];
-
-const menuItemByName = new Map(menuItems.map((m) => [m.name, m.id]));
-
-const posItemIds = new Map<string, string>();
-for (const item of posCatalog) {
-  const posItem = await posItemRepo.upsert({
-    id: generateId(),
-    storeId,
-    source: 'square',
-    externalId: item.externalId,
-    name: item.name,
-    price: item.unitPrice,
-    currency: 'USD',
-  });
-  posItemIds.set(item.externalId, posItem.id);
-
-  if (item.mapTo) {
-    await posItemRepo.mapToMenuItem(posItem.id, menuItemByName.get(item.mapTo)!);
-  }
-}
-
-/**
- * Sales are written as one transaction per day per item across the trailing two weeks. Critically,
- * the SAME per-day quantities drive both the recorded revenue here and the consumption triggered
- * below — if revenue covered the full volume while consumption only ran for part of it, food cost
- * percentage would come out implausibly low for reasons that have nothing to do with the business.
- */
-const SALES_DAYS = 14;
-/** `unitsSold` is a whole-unit count kept as a Decimal so every line total below stays exact decimal arithmetic — never a float multiplication against a price. */
-type DailySale = { externalId: string; day: number; unitsSold: Decimal; occurredAt: Date };
-const dailySales: DailySale[] = [];
-
-for (const item of posCatalog) {
-  const perDay = Decimal.max(1, new Decimal(item.sold).dividedBy(SALES_DAYS).floor());
-  for (let dayOffset = SALES_DAYS; dayOffset >= 1; dayOffset--) {
-    dailySales.push({
-      externalId: item.externalId,
-      day: dayOffset,
-      unitsSold: perDay,
-      occurredAt: new Date(Date.now() - dayOffset * 24 * 60 * 60 * 1000),
+/** POS items are per-store, keyed `STORE:EXTERNAL_ID` — each outlet has its own till catalogue. */
+const posItemIdByStoreAndExternal = new Map<string, string>();
+for (const [code, storeId] of storeIdByCode) {
+  for (const item of posItemsSpec.fromMenu) {
+    const row = await posItemRepo.upsert({
+      id: generateId(), storeId, source: 'square',
+      externalId: item.externalId, name: item.posName, price: item.price, currency: CURRENCY,
     });
+    posItemIdByStoreAndExternal.set(`${code}:${item.externalId}`, row.id);
+    // The POS name deliberately differs from the menu item name ("MASALA DOSA" vs "Masala dosa") —
+    // that mismatch is the real fuzzy-matching problem, and it survives being mapped.
+    await posItemRepo.mapToMenuItem(row.id, menuItemIdByName.get(item.menuItemName)!);
+  }
+  for (const item of posItemsSpec.nonMenu) {
+    const row = await posItemRepo.upsert({
+      id: generateId(), storeId, source: 'square',
+      externalId: item.externalId, name: item.name, price: item.price, currency: CURRENCY,
+    });
+    posItemIdByStoreAndExternal.set(`${code}:${item.externalId}`, row.id);
+    /**
+     * A parcel charge has no recipe and a gift card is not food. `ignore` records that as a REAL
+     * state, distinct from "nobody has mapped it yet" — without it the dashboard's unmapped gate
+     * treats them as a gap and suppresses every margin figure all-or-nothing.
+     */
+    await posItemRepo.ignore(row.id);
+  }
+}
+log('pos catalogue', { perStore: posItemsSpec.fromMenu.length + posItemsSpec.nonMenu.length, total: posItemIdByStoreAndExternal.size });
+
+/* ------------------------------------------------------------------ stock: real ledger */
+
+const lotRepo = new LotRepository(db, organizationId);
+const movements = new MovementService(db, organizationId);
+
+/**
+ * Replenishment is sized from ACTUAL consumption, computed by exploding every corpus sale through
+ * its recipe — not hand-guessed. A hand-picked opening quantity either runs dry mid-window (which
+ * silently truncates consumption and makes food-cost percentage read far too low) or sits absurdly
+ * overstocked. Deriving it from the same sales the ledger will later consume is the only way the
+ * two agree.
+ *
+ * Per-store, per-product base-unit demand across the whole window:
+ */
+const demandByStoreAndSku = new Map<string, number>();
+const componentsByPosExternal = new Map<string, { sku: string; quantity: number }[]>();
+for (const item of posItemsSpec.fromMenu) {
+  const spec = menuItemSpecs.find((m) => m.name === item.menuItemName)!;
+  // Recipe quantities are per BATCH, and the batch yields `yieldQuantity` units — dividing here is
+  // what keeps a 12-portion batch from being charged as 12 full batches.
+  const yieldQty = Number(spec.yieldQuantity);
+  componentsByPosExternal.set(
+    item.externalId,
+    spec.components.map((c) => ({ sku: c.sku, quantity: Number(c.quantity) / yieldQty }))
+  );
+}
+
+const addDemand = (storeCode: string, externalId: string, units: number) => {
+  for (const component of componentsByPosExternal.get(externalId) ?? []) {
+    const key = `${storeCode}:${component.sku}`;
+    // `?? 0` here is accumulator initialisation, not a costing default: "no entry yet" genuinely
+    // means zero demand accumulated so far. No cost is involved, so I7 does not apply.
+    demandByStoreAndSku.set(key, (demandByStoreAndSku.get(key) ?? 0) + component.quantity * units);
+  }
+};
+for (const day of aggregates) for (const item of day.items) addDemand(day.storeCode, item.externalId, item.units);
+for (const store of meta.stores) {
+  // Scoped so each store's receipts become garbage before the next file is read.
+  for (const receipt of loadReceipts(store.code)) {
+    if (receipt.status !== 'COMPLETED') continue;
+    for (const line of receipt.lines) addDemand(receipt.storeCode, line.externalId, line.qty);
   }
 }
 
-for (const sale of dailySales) {
-  const item = posCatalog.find((c) => c.externalId === sale.externalId)!;
-  const lineTotal = new Decimal(item.unitPrice).times(sale.unitsSold).toFixed(4);
-  await salesRepo.recordIfNew({
-    storeId,
-    source: 'square',
-    externalId: `SQ-ORDER-${sale.externalId}-D${sale.day}`,
-    occurredAt: sale.occurredAt,
-    subtotal: lineTotal,
-    discount: '0.0000',
-    tax: '0.0000',
-    total: lineTotal,
-    currency: 'USD',
-    lines: [
-      {
-        posItemId: posItemIds.get(sale.externalId)!,
-        quantity: sale.unitsSold.toFixed(6),
-        unitPrice: item.unitPrice,
-        discount: '0.0000',
-        lineTotal,
-      },
-    ],
-  });
-}
+/**
+ * One real receipt per product per cycle, each sized to cover consumption until the next one with
+ * headroom. Perishables get a shorter cycle: a single lot from 180 days ago would be long expired
+ * and FEFO-invisible for most of the window, which is exactly what the expiry logic exists to model.
+ */
+const REPLENISH_DAYS_AMBIENT = 21;
+const REPLENISH_DAYS_PERISHABLE = 5;
+/** Headroom so a demand spike (Diwali) cannot exhaust a lot and silently truncate consumption. */
+const REPLENISH_HEADROOM = 1.6;
 
-/* ------------------------------------------------------------------ trigger real consumption */
+const productBySkuSpec = new Map(products.map((p) => [p.sku, p]));
+let lotsCreated = 0;
+let receiptMovements = 0;
+
+for (const store of meta.stores) {
+  const storeId = storeIdByCode.get(store.code)!;
+  for (const p of products) {
+    /**
+     * A deliberately unpriced product NEVER receives stock, because it cannot do so honestly.
+     * `lots.unit_cost` is NOT NULL at the database layer, so receiving this product would force a
+     * fabricated `0.0000` into the ledger — and a zero cost reads as FREE stock, inflating margin,
+     * which is precisely the `?? 0` failure I7 exists to prevent. The earlier version did exactly
+     * that, and the inventory screen duly showed "Vanilla extract — INR 0.00".
+     *
+     * Holding no stock is the truthful state: nobody has recorded what this costs, so nothing about
+     * it can be valued. The recipe using it still resolves to a genuine "unknown".
+     */
+    if (p.deliberatelyUnpriced) continue;
+
+    const totalDemand = demandByStoreAndSku.get(`${store.code}:${p.sku}`) ?? 0;
+    if (totalDemand <= 0) continue;
+
+    const cycleDays = p.perishable ? REPLENISH_DAYS_PERISHABLE : REPLENISH_DAYS_AMBIENT;
+    // Respects --limit-days: replenishing across 180 days while only 7 days of sales exist would
+    // leave every lot enormously overstocked and make stock-on-hand meaningless.
+    const openDays = Math.min(store.opensDaysAgo, meta.historyDays, LIMIT_DAYS ?? Number.POSITIVE_INFINITY);
+    const perDay = totalDemand / openDays;
+    const perCycle = Math.ceil(perDay * cycleDays * REPLENISH_HEADROOM);
+    if (perCycle <= 0) continue;
+
+    let cycleIndex = 0;
+    // Start one cycle BEFORE the store opens so day one already has stock — a store that opens with
+    // an empty ledger would post its first sales against nothing and consume at unknown cost.
+    for (let daysAgo = openDays + cycleDays; daysAgo >= 0; daysAgo -= cycleDays) {
+      const receivedAt = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
+      const lot = await lotRepo.receive({
+        id: generateId(),
+        storeId,
+        productId: productBySku.get(p.sku)!.id,
+        variantId: productBySku.get(p.sku)!.variantId,
+        lotNumber: `${store.code}-${p.sku}-L${++cycleIndex}`,
+        receivedAt,
+        initialQuantity: String(perCycle),
+        unitCost: p.unitCost,
+        currency: CURRENCY,
+        ...(p.expiryInDays !== undefined
+          ? { expiryDate: new Date(receivedAt.getTime() + p.expiryInDays * 86400000).toISOString().slice(0, 10) }
+          : {}),
+      });
+      lotsCreated += 1;
+      await movements.postMovement({
+        storeId,
+        productId: productBySku.get(p.sku)!.id,
+        variantId: productBySku.get(p.sku)!.variantId,
+        lotId: lot.id,
+        movementType: 'RECEIPT',
+        quantity: String(perCycle),
+        unitCost: p.unitCost,
+        currency: CURRENCY,
+        occurredAt: receivedAt,
+        sourceType: 'demo-seed',
+        actorUserId: demoUser.id,
+      });
+      receiptMovements += 1;
+    }
+  }
+  log('stock seeded', { store: store.code, lots: lotsCreated, receipts: receiptMovements });
+}
+void productBySkuSpec;
+
+/* ------------------------------------------------------------------ sales: revenue + consumption */
+
+const salesRepo = new SalesTransactionRepository(db, organizationId);
+const pipeline = new SalesIngestionPipeline(db, organizationId);
+
+const menuItemIdByPosExternal = new Map(
+  posItemsSpec.fromMenu.map((i) => [i.externalId, menuItemIdByName.get(i.menuItemName)!])
+);
+
+let salesRecorded = 0;
+let consumedLines = 0;
+let quarantinedLines = 0;
+/** Receipts an earlier run already recorded (and therefore already consumed) — see the resumability note below. */
+let resumedSkips = 0;
 
 /**
- * Runs the same ingestion pipeline a real POS sync would: for every mapped sale line, explode the
- * recipe and FEFO-consume the ingredients, posting real SALE_CONSUMPTION movements at the actual
- * cost of the lots drawn from. Without this the dashboard's actual COGS would be zero — and a zero
- * COGS reads as 100% margin, exactly the fabricated-looking number the whole design prevents.
- *
- * Sales are spread across the trailing two weeks so the dashboard's period filters show movement
- * rather than one spike.
+ * REVENUE and CONSUMPTION are driven by the SAME sale events. If revenue covered the full volume
+ * while consumption only ran for part of it, food-cost percentage would come out implausibly low
+ * for reasons that have nothing to do with the business.
  */
-const pipeline = new SalesIngestionPipeline(db, organizationId);
-let consumedLines = 0;
-let otherOutcomes = 0;
 
-// Walks the exact same daily sale events that produced the revenue above, so actual COGS and net
-// revenue describe the same sales — the only way food cost percentage means anything.
-for (const sale of dailySales) {
-  const item = posCatalog.find((c) => c.externalId === sale.externalId)!;
-  const result = await pipeline.ingestSaleLine({
+/** Older history is stored as daily aggregates; recent days are individual receipts. Both are real sales. */
+for (const day of aggregates) {
+  const storeId = storeIdByCode.get(day.storeCode)!;
+  const occurredAt = new Date(`${day.date}T12:00:00.000Z`);
+  for (const item of day.items) {
+    const lineTotal = (Number(item.unitPrice) * item.units).toFixed(4);
+    const recordedAgg = await salesRepo.recordIfNew({
+      storeId,
+      source: 'square',
+      externalId: `AGG-${day.storeCode}-${day.date}-${item.externalId}`,
+      occurredAt,
+      subtotal: lineTotal,
+      discount: '0.0000',
+      tax: '0.0000',
+      total: lineTotal,
+      currency: CURRENCY,
+      lines: [
+        {
+          posItemId: posItemIdByStoreAndExternal.get(`${day.storeCode}:${item.externalId}`)!,
+          quantity: item.units.toFixed(6),
+          unitPrice: item.unitPrice,
+          discount: '0.0000',
+          lineTotal,
+        },
+      ],
+    });
+    // Same resumability guard as the receipt loop — consumption must not run twice (I3).
+    if (recordedAgg.status === 'duplicate') {
+      resumedSkips += 1;
+      continue;
+    }
+    salesRecorded += 1;
+    const result = await pipeline.ingestSaleLine({
+      storeId,
+      menuItemId: menuItemIdByPosExternal.get(item.externalId) ?? null,
+      posItemExternalId: item.externalId,
+      posItemName: item.posName,
+      quantitySold: item.units.toFixed(6),
+      revenue: lineTotal,
+      currency: CURRENCY,
+      occurredAt,
+      sourceType: 'demo-seed',
+      actorUserId: demoUser.id,
+    });
+    if (result.status === 'consumed') consumedLines += 1;
+    else quarantinedLines += 1;
+  }
+  if (salesRecorded % 2000 === 0) log('aggregate sales', { salesRecorded, consumedLines });
+}
+log('aggregate sales complete', { salesRecorded, consumedLines, quarantinedLines });
+
+for (const store of meta.stores) {
+ // One store's receipts at a time — see loadReceipts. The array is released before the next store.
+ for (const receipt of loadReceipts(store.code)) {
+  const storeId = storeIdByCode.get(receipt.storeCode)!;
+  const occurredAt = new Date(receipt.occurredAt);
+  const recorded = await salesRepo.recordIfNew({
     storeId,
-    // An unmapped item goes to quarantine rather than consuming anything — the real branch, kept
-    // deliberately so the dashboard's completeness panel has genuine unmapped volume to report.
-    menuItemId: item.mapTo ? menuItemByName.get(item.mapTo)! : null,
-    posItemExternalId: item.externalId,
-    posItemName: item.name,
-    quantitySold: sale.unitsSold.toFixed(6),
-    revenue: new Decimal(item.unitPrice).times(sale.unitsSold).toFixed(4),
-    currency: 'USD',
-    occurredAt: sale.occurredAt,
-    sourceType: 'demo-seed',
-    actorUserId: user.id,
+    source: 'square',
+    externalId: receipt.externalId,
+    occurredAt,
+    subtotal: receipt.subtotal,
+    discount: receipt.discount,
+    // CGST and SGST are separate lines on a real Indian invoice but a single tax figure here — the
+    // split is preserved in the source corpus and on the supplier PDFs, which is where it matters.
+    tax: (Number(receipt.cgst) + Number(receipt.sgst)).toFixed(4),
+    total: receipt.total,
+    currency: CURRENCY,
+    lines: receipt.lines.map((line) => ({
+      posItemId: posItemIdByStoreAndExternal.get(`${receipt.storeCode}:${line.externalId}`)!,
+      quantity: line.qty.toFixed(6),
+      unitPrice: line.unitPrice,
+      discount: '0.0000',
+      lineTotal: line.lineTotal,
+    })),
   });
-  if (result.status === 'consumed') consumedLines += 1;
-  else otherOutcomes += 1;
+
+  /**
+   * RESUMABILITY, and it has to be here rather than as a separate progress file.
+   *
+   * `recordIfNew` is idempotent (`onConflictDoNothing`), but CONSUMPTION IS NOT: re-running would
+   * post a second set of SALE_CONSUMPTION movements for a receipt already consumed. Because
+   * `stock_movements` is append-only (I3), that damage cannot be undone by a later correction — the
+   * ledger would simply be wrong, and stock-on-hand with it.
+   *
+   * A `duplicate` status means this exact receipt was already recorded by an earlier run, so its
+   * consumption already happened too. Skipping it makes an interrupted run safely resumable with
+   * `--skip-wipe`, which matters for a multi-hour unattended seed.
+   */
+  if (recorded.status === 'duplicate') {
+    resumedSkips += 1;
+    continue;
+  }
+  salesRecorded += 1;
+
+  // A VOIDED receipt is recorded (it genuinely happened and appears in the POS export) but consumes
+  // NOTHING — voiding is precisely the case where revenue and stock must not move together.
+  if (receipt.status !== 'COMPLETED') continue;
+
+  for (const line of receipt.lines) {
+    const result = await pipeline.ingestSaleLine({
+      storeId,
+      menuItemId: menuItemIdByPosExternal.get(line.externalId) ?? null,
+      posItemExternalId: line.externalId,
+      posItemName: line.posName,
+      quantitySold: line.qty.toFixed(6),
+      revenue: line.lineTotal,
+      currency: CURRENCY,
+      occurredAt,
+      sourceType: 'demo-seed',
+      actorUserId: demoUser.id,
+    });
+    if (result.status === 'consumed') consumedLines += 1;
+    else quarantinedLines += 1;
+  }
+  if (salesRecorded % 2000 === 0) log('receipt sales', { store: store.code, salesRecorded, consumedLines });
+ }
+ log('store receipts complete', { store: store.code, salesRecorded, consumedLines });
 }
 
 console.log(
   JSON.stringify(
     {
-      organization: 'Ardent Bakehouse',
-      consumedLines,
-      otherOutcomes,
+      stage: 'complete',
       organizationId,
-      storeId,
-      products: seedProducts.length,
-      recipes: recipeSpecs.length,
-      posItems: posCatalog.length,
-      unmappedPosItems: posCatalog.filter((p) => !p.mapTo).length,
-      signInAs: email,
+      corpusSeed: meta.seed,
+      signInAs: owner.email,
+      stores: storeIdByCode.size,
+      products: products.length,
+      menuItems: menuItemSpecs.length,
+      suppliers: supplierSpecs.length,
+      lots: lotsCreated,
+      receiptMovements,
+      salesRecorded,
+      consumedLines,
+      quarantinedLines,
+      resumedSkips,
+      elapsedSeconds: Math.round((Date.now() - started) / 1000),
     },
     null,
     2
   )
 );
+await client.end();
 process.exit(0);

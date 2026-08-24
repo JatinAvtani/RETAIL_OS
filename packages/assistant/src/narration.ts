@@ -121,7 +121,8 @@ Things that could NOT be answered:
 ${gapsBlock}${passagesSection}
 
 Rules:
-- Use ONLY the exact values listed above. Never calculate, estimate, round differently, or derive a new number from them.
+- Use ONLY the exact values listed above. Never calculate, estimate, or derive a new number from them.
+- You MAY write a figure readably: group digits with commas and drop meaningless trailing zeros ("407619.3100" is better written "4,07,619.31"). Do not change the value itself. For rupee amounts use Indian grouping — the last three digits, then pairs: 4,07,619.31, not 407,619.31.
 - Cite each figure by naming the metric it came from.
 - If "Computed metrics available" is "None." or doesn't actually answer the question, say so honestly and explain what's missing using the "Things that could NOT be answered" list if relevant — never guess or make up a plausible-sounding answer.${passageRules}
 - Write in plain, concise language a busy restaurant owner would understand. No jargon.

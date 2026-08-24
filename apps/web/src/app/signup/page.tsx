@@ -6,8 +6,10 @@ import { useRouter } from 'next/navigation';
 import { TRPCClientError } from '@trpc/client';
 import { trpc } from '@/lib/trpc';
 import { Button, Card, ErrorNotice, Field, Input, Select } from '@/components/ui';
-import { LogoMark } from '@/components/logo';
-import { ThemeToggle } from '@/components/theme-toggle';
+import { LogoLockup } from '@/components/logo';
+import { AuthPage } from '@/components/auth-page';
+import { PasswordInput } from '@/components/password-input';
+import { GoogleSignIn } from '@/components/google-sign-in';
 
 const CURRENCIES = [
   { code: 'INR', label: 'INR — Indian Rupee (₹)' },
@@ -64,22 +66,42 @@ export default function SignupPage() {
   };
 
   return (
-    <main className="grid min-h-screen place-items-center px-6 py-12">
-      <div className="absolute right-6 top-6">
-        <ThemeToggle />
-      </div>
+    <AuthPage intro>
+      <div className="w-full max-w-sm lg:w-[31rem] lg:max-w-none">
+        {/* Same reasoning as the sign-in screen: the lockup says the name and what it means, so the
+            heading states only the task. */}
+        {/* "Create your account", not "Create your workspace". The old wording named the OUTCOME
+            (a workspace exists afterwards) rather than the ACTION, so someone scanning the page did
+            not necessarily register that they were signing up at all — the word "account" is what
+            makes that unambiguous. The subheading then explains what else the form does, since this
+            single step creates an account AND the business and store it belongs to. */}
+        <LogoLockup className="mb-8 flex w-full items-center lg:hidden" />
 
-      <div className="w-full max-w-sm">
-        <div className="mb-8 text-center">
-          <LogoMark className="mx-auto mb-5 size-14 text-content" />
-          <h1 className="text-xl font-semibold tracking-tight text-content">Create your workspace</h1>
-          <p className="mt-1 text-sm text-content-muted">
-            Know where your margin goes.
+        <Card className="p-8">
+          <h1 className="text-center text-lg font-semibold tracking-tight text-content">Create your account</h1>
+          <p className="mb-5 mt-1.5 text-center text-sm text-content-muted">
+            Sets up your Vyapaar account and your first store.
           </p>
-        </div>
 
-        <Card className="p-6">
-          <form onSubmit={handleSubmit} className="space-y-4">
+
+          {/* Google IS offered here now. It was deliberately withheld while a Google sign-in with
+              no workspace dead-ended: the account was created, `establishSessionForUser` failed
+              `no_membership`, and the orphaned row then owned the email address so this form could
+              not be used either. `completeGoogleSignup` closed that hole — a Google visitor with no
+              workspace is handed a provisioning session and sent to /complete-signup to supply the
+              business name, store name and currency Google cannot provide. Both routes now end in a
+              real workspace, so the familiar button is no longer a trap. */}
+          <div className="mb-6">
+            <GoogleSignIn label="Sign up with Google" />
+          </div>
+
+          <div className="mb-6 flex items-center gap-3 text-xs text-content-subtle">
+            <div className="h-px flex-1 bg-border" />
+            or
+            <div className="h-px flex-1 bg-border" />
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-5">
             {error && <ErrorNotice>{error}</ErrorNotice>}
 
             <Field label="Business name">
@@ -126,8 +148,7 @@ export default function SignupPage() {
             </Field>
 
             <Field label="Password">
-              <Input
-                type="password"
+              <PasswordInput
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 required
@@ -137,18 +158,18 @@ export default function SignupPage() {
             </Field>
 
             <Button type="submit" variant="primary" disabled={submitting} className="w-full">
-              {submitting ? 'Creating your workspace…' : 'Create workspace'}
+              {submitting ? 'Creating your account…' : 'Create account'}
             </Button>
           </form>
         </Card>
 
-        <p className="mt-4 text-center text-sm text-content-muted">
+        <p className="mt-6 text-center text-sm text-content-muted">
           Already have an account?{' '}
           <Link href="/login" className="font-medium text-accent hover:underline">
             Sign in
           </Link>
         </p>
       </div>
-    </main>
+    </AuthPage>
   );
 }

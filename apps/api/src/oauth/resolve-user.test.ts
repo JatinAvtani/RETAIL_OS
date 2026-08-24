@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { createDb, hashPassword, users, verificationTokens } from '@retailos/db';
+import { generateId } from '@retailos/domain';
 import { resolveGoogleUser } from './resolve-user';
 import type { GoogleIdentity } from './google';
 
@@ -94,5 +95,44 @@ describe('resolveGoogleUser', () => {
 
     const [unchanged] = await db.select().from(users).where(eq(users.id, existing!.id));
     expect(unchanged?.googleId).toBeNull();
+  });
+
+  /**
+   * The abandoned-setup regression. A Google user who reaches the workspace form and closes the tab
+   * has an account with no password and no membership; if a RETURNING sign-in does not route them
+   * back to setup, they are locked out by every route — no password to sign in with, and the
+   * membership check rejects them. The first version of this flow keyed on "was just created",
+   * which fired only on the very first sign-in and left exactly this person stranded.
+   */
+  it('flags a returning passwordless Google user as still needing a workspace', async () => {
+    const first = await resolveGoogleUser(db, identity());
+    if (!first.ok) throw new Error('expected the first sign-in to succeed');
+    createdUserIds.push(first.userId);
+    expect(first.created).toBe(true);
+    expect(first.needsWorkspace).toBe(true);
+
+    // Same Google identity, second visit — the row now exists, so `created` is false, but the
+    // account still has no password and still needs its workspace.
+    const rows = await db.select().from(users).where(eq(users.id, first.userId));
+    const second = await resolveGoogleUser(db, identity({ googleId: rows[0]!.googleId!, email: rows[0]!.email }));
+    if (!second.ok) throw new Error('expected the second sign-in to succeed');
+
+    expect(second.created).toBe(false);
+    expect(second.needsWorkspace).toBe(true);
+    expect(second.userId).toBe(first.userId);
+  });
+
+  it('does not flag an account that has a password — it can always sign in the original way', async () => {
+    const email = uniqueEmail('has-password');
+    const passwordHash = await hashPassword('a-genuinely-long-password-123');
+    // ids are generated in application code (UUID v7), never by a column default.
+    const userId = generateId();
+    await db.insert(users).values({ id: userId, email, passwordHash, emailVerifiedAt: new Date() });
+    createdUserIds.push(userId);
+
+    const result = await resolveGoogleUser(db, identity({ email }));
+    if (!result.ok) throw new Error('expected linking to succeed');
+
+    expect(result.needsWorkspace).toBe(false);
   });
 });

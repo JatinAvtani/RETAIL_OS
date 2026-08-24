@@ -144,19 +144,26 @@ export const dashboardRouter = router({
       db: ctx.db,
       organizationId: ctx.session.organizationId,
       storeIds: ctx.session.storeIds,
-      resolveRecipeUnitCost: async (_ctx, menuItemId, resolveCurrency) => {
-        const menuItem = await menuItemRepository.findById(menuItemId);
-        if (!menuItem) return 'unknown';
+      /**
+       * The second parameter is a RECIPE GROUP ID, per `RecipeUnitCostResolver`'s own declaration —
+       * not a menu item id.
+       *
+       * This previously did `menuItemRepository.findById(recipeGroupId)`, which never matched, so
+       * EVERY per-item contribution and the whole theoretical COGS silently resolved to "unknown"
+       * while the dashboard's other figures looked fine. Both ids are `string`, so the compiler
+       * could not see the mismatch, and the resolver's own `catch { return 'unknown' }` turned the
+       * miss into a plausible-looking answer rather than an error.
+       */
+      resolveRecipeUnitCost: async (_ctx, recipeGroupId, resolveCurrency) =>
         // Per-UNIT cost, not per-batch — see resolveRecipeUnitCost for why the yield division
         // matters and how easily its absence hides.
-        return resolveRecipeUnitCost(
+        resolveRecipeUnitCost(
           ctx.db,
           ctx.session.organizationId,
           recipeRepository,
-          menuItem.recipeGroupId,
+          recipeGroupId,
           resolveCurrency
-        );
-      },
+        ),
     };
 
     const metricParams = { storeId: input.storeId, from, to };

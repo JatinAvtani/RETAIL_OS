@@ -15,7 +15,18 @@ import {
   recordSignupAttempt,
   resetAuthRateLimit,
 } from '../../auth/rate-limit';
-import { protectedProcedure, publicProcedure, router } from '../trpc';
+import { protectedProcedure, provisioningProcedure, publicProcedure, router } from '../trpc';
+
+/**
+ * The one shared demo tenant every "Explore with sample data" click lands in — see `demoLogin`'s
+ * own doc comment for why this is a real, singular account rather than a per-visitor provisioning
+ * flow. Built by `apps/api/src/scripts/seed-demo.mts`. Overridable via env (`DEMO_ACCOUNT_EMAIL`)
+ * so `auth.test.ts` can exercise the real `demoLogin` path against a throwaway per-test-run email
+ * without ever touching the real `demo@vyapaar.test` row — this file's tests run against the same
+ * database as local dev (no separate TEST_DATABASE_URL for apps/api), so seeding/deleting the
+ * literal production demo account in a test would be a real, destructive mistake.
+ */
+const DEMO_ACCOUNT_EMAIL = process.env.DEMO_ACCOUNT_EMAIL ?? 'demo@vyapaar.test';
 
 const signupInput = z.object({
   email: z.string().email(),
@@ -25,6 +36,17 @@ const signupInput = z.object({
   storeTimezone: z.string().min(1),
   // A one-time choice, never changeable after signup — no exchange-rate/conversion logic exists
   // anywhere in this codebase, so this is only safe to offer before any real financial data exists.
+  baseCurrency: z.enum(['USD', 'EUR', 'GBP', 'INR']),
+});
+
+/**
+ * Everything Google cannot tell us. Deliberately the same three workspace fields `signupInput`
+ * collects — minus email and password, which the Google identity already established.
+ */
+const completeGoogleSignupInput = z.object({
+  organizationName: z.string().min(1).max(200),
+  storeName: z.string().min(1).max(200),
+  storeTimezone: z.string().min(1),
   baseCurrency: z.enum(['USD', 'EUR', 'GBP', 'INR']),
 });
 
@@ -147,6 +169,74 @@ export const authRouter = router({
   }),
 
   /**
+   * Finishes a Google sign-up: creates the workspace for someone Google authenticated but who had
+   * no organization, then upgrades their provisioning session into a real one.
+   *
+   * The counterpart to `signup` for the OAuth path. `signup` collects five things; Google already
+   * established two of them (email, identity — and pre-verified the address, so there is no
+   * verification step here), leaving the three workspace fields this takes.
+   *
+   * `provisioningProcedure` is what makes this safe: it accepts ONLY a provisioning session, so a
+   * user who already has a workspace cannot call this to mint a second one, and the userId comes
+   * from the session rather than from client input — a client-supplied userId here would let anyone
+   * create a workspace owned by someone else.
+   *
+   * The session swap at the end is not optional. The provisioning session is barred from every
+   * `protectedProcedure` by design, so leaving it in place would strand the user on a working
+   * account they still could not use — the exact dead end this whole flow exists to remove. The old
+   * token is revoked rather than left to expire: it can no longer do anything useful, and a
+   * still-valid token that outlives its purpose is a needless credential in the wild.
+   */
+  completeGoogleSignup: provisioningProcedure
+    .input(completeGoogleSignupInput)
+    .mutation(async ({ ctx, input }) => {
+      const userRepository = new UserRepository(ctx.db);
+      const user = await userRepository.findById(ctx.session.userId);
+
+      if (!user) {
+        // The session resolved but its user is gone — only reachable if the row was deleted
+        // mid-flow. Nothing to recover; the caller must start again.
+        throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Not signed in.' });
+      }
+
+      await createOrganizationWithOwner(ctx.db, {
+        organizationName: input.organizationName,
+        storeName: input.storeName,
+        storeTimezone: input.storeTimezone,
+        baseCurrency: input.baseCurrency,
+        userId: ctx.session.userId,
+      });
+
+      // Re-derives the session from the membership that now exists rather than hand-building one,
+      // so an OAuth-created workspace and a password-created one produce byte-identical sessions —
+      // permissions included. Hand-assembling the record here would be a second place for the
+      // role→permission mapping to drift out of step with `establishSessionForUser`.
+      const result = await establishSessionForUser(
+        ctx.db,
+        ctx.sessionStore,
+        ctx.session.userId,
+        user.email,
+        ctx.req.ip,
+        ctx.req.headers['user-agent'] ?? 'unknown'
+      );
+
+      if (!result.ok) {
+        // Unreachable in practice: the membership was just created, accepted, and is the user's
+        // only one. Surfaced rather than swallowed so a future change that breaks that assumption
+        // fails loudly instead of silently leaving the user provisioning-locked.
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Your workspace was created, but the session could not be started. Please sign in.',
+        });
+      }
+
+      await ctx.sessionStore.revoke(ctx.sessionToken, ctx.session.userId);
+      setSessionCookie(ctx.res, result.token);
+
+      return { message: 'Workspace created.' };
+    }),
+
+  /**
    * Generic "invalid credentials" for every failure case (nonexistent email, wrong password,
    * unverified email, zero/multiple accepted memberships) — the design requires this
    * specifically for login to prevent account enumeration. The one exception is the
@@ -202,6 +292,50 @@ export const authRouter = router({
     await resetAuthRateLimit(ctx.authRateLimiters, input.email, ctx.req.ip);
     setSessionCookie(ctx.res, result.token);
 
+    return { message: 'Logged in.' };
+  }),
+
+  /**
+   * "Explore with sample data" — a real, discoverable entry point into the existing shared
+   * demo tenant, confirmed with the user as the correct shape (one real shared tenant every visitor
+   * lands in, not a fresh isolated tenant provisioned per click, which this project has no
+   * card/cost budget to run at scale). Deliberately its own procedure, not the client sending
+   * hardcoded demo credentials through `login` — that would ship a real password in browser JS for
+   * no reason, when the server already knows exactly which account this is. Reuses
+   * `establishSessionForUser` (the SAME session-issuing code path `login` and Google OAuth both
+   * use) so a demo session is a completely ordinary session in every way that matters — same
+   * cookie, same permissions-from-role derivation, same tenant isolation (I4): nothing about this
+   * account or its data is special-cased anywhere in the app layer, matching the plan's own "a real
+   * isolated tenant, never a bypass" requirement.
+   *
+   * Rate-limited by IP only (`enforceSignupRateLimit`'s exact shape, reused directly) — NOT the
+   * per-account limiter `login` uses, since every visitor's "account" here is deliberately the
+   * SAME email; a per-account limit would throttle every future visitor after a handful of
+   * unrelated people already clicked the button today.
+   */
+  demoLogin: publicProcedure.mutation(async ({ ctx }) => {
+    await enforceSignupRateLimit(ctx.authRateLimiters, ctx.req.ip);
+
+    const userRepository = new UserRepository(ctx.db);
+    const user = await userRepository.findByEmail(DEMO_ACCOUNT_EMAIL);
+    if (!user || !user.emailVerifiedAt) {
+      throw new TRPCError({ code: 'SERVICE_UNAVAILABLE', message: 'The demo is temporarily unavailable. Please try again shortly.' });
+    }
+
+    const result = await establishSessionForUser(
+      ctx.db,
+      ctx.sessionStore,
+      user.id,
+      user.email,
+      ctx.req.ip,
+      ctx.req.headers['user-agent'] ?? 'unknown',
+    );
+
+    if (!result.ok) {
+      throw new TRPCError({ code: 'SERVICE_UNAVAILABLE', message: 'The demo is temporarily unavailable. Please try again shortly.' });
+    }
+
+    setSessionCookie(ctx.res, result.token);
     return { message: 'Logged in.' };
   }),
 

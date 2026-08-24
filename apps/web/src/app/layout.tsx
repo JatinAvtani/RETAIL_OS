@@ -3,7 +3,20 @@ import type { ReactNode } from 'react';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Vyapaar',
+  /*
+   * `default` titles the pages that set nothing; `template` names the rest. Before this, every
+   * route in the app rendered the bare string 'Vyapaar', so a user with the dashboard, inventory
+   * and a purchase order open saw three identical tabs and had to click through to tell them
+   * apart — the tab strip is a navigation surface, and it was carrying no information at all.
+   *
+   * Page name first, product second: a tab is truncated from the right, so the distinguishing word
+   * has to lead or it is the first thing lost. The en dash rather than a pipe matches the
+   * typographic register of the rest of the interface.
+   */
+  title: {
+    default: 'Vyapaar — know where your margin goes',
+    template: '%s — Vyapaar',
+  },
   description: 'Know where your margin goes.',
   icons: {
     // Both forms on purpose: the SVG is the primary declared icon, but plenty of consumers
@@ -40,14 +53,18 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         {/*
-         * Two faces, two jobs. Public Sans carries the interface: it was commissioned for public
+         * Three faces, three jobs. Public Sans carries the interface: it was commissioned for public
          * -service forms and records, so it was drawn for exactly this product's condition of use —
          * text people must read correctly, small, when tired. JetBrains Mono carries every figure;
          * see `--font-mono` in globals.css for why numbers get a face of their own rather than just
          * `tabular-nums` on the body face.
+         *
+         * Fraunces is loaded for ONE string — the wordmark in `logo.tsx` — and only at the single
+         * weight it uses (600), so the third face costs one small subset rather than a full variable
+         * family. It is deliberately not exposed as a general-purpose face; see `--font-display`.
          */}
         <link
-          href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+          href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Fraunces:opsz,wght@9..144,600&display=swap"
           rel="stylesheet"
         />
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />

@@ -189,7 +189,22 @@ export class DashboardRepository extends TenantScopedRepository<typeof salesTran
     }));
   }
 
-  /** How many sold lines in the period came from a POS item nobody has mapped yet — the honesty signal on the dashboard. */
+  /**
+   * How many sold lines in the period came from a POS item nobody has mapped yet — the honesty
+   * signal on the dashboard.
+   *
+   * `IGNORED` is deliberately NOT counted as unmapped. It is a real, recorded human decision
+   * ("this line never needs a menu item" — a gift card, a service charge, a tip) via
+   * `posItems.ignore`, which is a genuinely different fact from `UNMAPPED` ("nobody has looked at
+   * this yet"). Counting it as a gap meant one gift-card sale forced `cost_variance` and
+   * `food_cost_pct` to "unknown" permanently, since this count gates them all-or-nothing — the
+   * honest signal became a permanently-stuck one, which is the opposite of what it exists for.
+   * A truly `UNMAPPED` item still counts, so the real "we can't cost part of what sold" warning
+   * survives intact.
+   *
+   * Note this counts LINES, not revenue: an ignored line's revenue still flows into revenue-side
+   * figures, which is correct — a gift card really was sold, it just has no food cost.
+   */
   async countUnmappedSoldLines(storeId: string, from: Date, to: Date): Promise<number> {
     const rows = await this.runScoped((db) =>
       db.execute<{ count: string }>(sql`
@@ -203,6 +218,7 @@ export class DashboardRepository extends TenantScopedRepository<typeof salesTran
           AND st.status = 'COMPLETED'
           AND st.occurred_at >= ${from.toISOString()}::timestamptz
           AND st.occurred_at < ${to.toISOString()}::timestamptz
+          AND pi.mapping_status IS DISTINCT FROM 'IGNORED'
           AND (pi.id IS NULL OR pi.mapping_status <> 'MAPPED' OR pi.menu_item_id IS NULL)
       `)
     );

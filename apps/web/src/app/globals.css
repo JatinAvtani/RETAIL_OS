@@ -32,6 +32,18 @@
      colour, so the distinction survives greyscale printing and every form of colour blindness. */
   --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, 'SF Mono', monospace;
 
+  /* Wordmark face — ONE string, the logo, and nothing else.
+     The bahi-khata is the cloth-bound ledger Indian traders have kept for centuries, and is the
+     direct ancestor of what this product does. A serif claims that lineage in a way a grotesque
+     cannot, so the name gets one and the interface stays sans.
+     Confining it to the wordmark is the whole point: the palette note above is explicit that the
+     screen must NOT dress itself in the warmth of the café world, and a ledger serif loose in the
+     UI would walk straight back into it. As a mark it reads as heritage; as body text it would read
+     as decoration. Fraunces is optical — its personality lives in the lowercase, which is why the
+     wordmark is set mixed-case rather than in caps (caps also drop the y's descender, flatten the
+     silhouette, and leave the bindu with nothing to sit over). */
+  --font-display: 'Fraunces', Georgia, 'Times New Roman', serif;
+
   --color-surface: #f2f0eb;
   --color-surface-raised: #fbfaf8;
   --color-surface-sunken: #e8e5de;
@@ -183,4 +195,65 @@ body {
   .skeleton {
     animation: none;
   }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   The signed-out brand panel.
+
+   ONE brass ground, identical in both themes — deliberately. Earlier versions inverted it per theme
+   (dark panel on light, light panel on dark), which meant the brand side changed material depending
+   on a setting that has nothing to do with the brand. Pinning it makes the panel a constant: the
+   product's own colour, the same one the primary button carries, so the two are recognisably the
+   same material. Only the FORM half flips with the theme, which is the half that is actually being
+   read rather than looked at.
+
+   The ground is the accent taken down in lightness while keeping its hue and chroma, so it stays
+   brass rather than drifting to a neutral brown-black — on a screen built from warm greys a neutral
+   panel reads as a hole cut in the page.
+
+   The panel redefines the semantic foreground tokens inside itself, which is what lets everything
+   it contains keep using `text-content` / `text-content-muted` / `bg-accent` unchanged. Nothing in
+   the subtree needs to know it is on a brass ground. Because the values are pinned rather than
+   theme-derived, they are also stable to reason about for contrast: every pairing below is checked
+   against #33260c once, not once per theme.
+   ───────────────────────────────────────────────────────────────────────────── */
+.auth-brand-panel {
+  /* EXACTLY the primary button's brass. Not a darkened version of it — the panel and the Sign in
+     button are meant to read as one material, and any shift in lightness breaks that. */
+  background-color: #82641d;
+
+  /* Every value below is measured against #82641d, which is a MID-tone: it gives far less headroom
+     than a near-black panel would, so the usual pale-brass accent (#d9b569) lands at 2.84:1 and is
+     unusable here. On this ground the "look here" signal has to be near-white rather than brass —
+     the accent's job is contrast, and on its own hue the only way to get contrast is value. */
+  --color-content: #fdfbf6; /* 5.36:1 */
+  --color-content-muted: #f0e6cf; /* 4.47:1 */
+  --color-content-subtle: #e3d4b0; /* 3.78:1 — decorative/label use only, never body text */
+  --color-accent: #fff8e8; /* 5.24:1 */
+  --color-border: #9a7c33;
+  --color-border-strong: #cbb27a;
+  --color-surface-raised: #6f5416;
+}
+
+/* Dark theme gets its OWN panel brass — the dark theme's button colour (#c9a44e), exactly as the
+   light panel takes the light theme's (#82641d). That gives the page four distinct colours in
+   total, two visible at a time, none shared between the modes: brass-on-paper in light,
+   light-brass-on-near-black in dark. Keeping one panel colour across both themes would have shown
+   the same brass twice and collapsed it to three.
+
+   This brass is a LIGHT mid-tone, so the polarity of the panel's foreground flips: dark ink on
+   brass, where the light panel is near-white ink on brass. Values measured against #c9a44e. */
+html.dark .auth-brand-panel {
+  background-color: #c9a44e;
+
+  --color-content: #12100a; /* 9.2:1 */
+  /* 6.95:1, not the 5.34:1 first used here. That value passed AA on paper but the chain's detail
+     lines are 13px on a LIGHT mid-tone, and small text on a bright ground needs more separation
+     than the minimum to stay comfortable — it read as washed out on screen. */
+  --color-content-muted: #251f0d; /* 6.95:1 */
+  --color-content-subtle: #352c13; /* 5.8:1 */
+  --color-accent: #241c09; /* 7.15:1 */
+  --color-border: #a8863a;
+  --color-border-strong: #6d5722;
+  --color-surface-raised: #d8b872;
 }

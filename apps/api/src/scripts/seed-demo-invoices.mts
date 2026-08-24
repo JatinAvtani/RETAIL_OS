@@ -17,6 +17,15 @@
  * Usage: (env with DATABASE_URL/REDIS_URL/S3_*; GEMINI_API_KEY may be set — it is removed)
  *   pnpm --filter @retailos/api exec tsx src/scripts/seed-demo-invoices.mts
  */
+/**
+ * Node built-ins only. These are hoisted above the `delete` below, which is fine — they read no
+ * env. Everything that COULD observe GEMINI_API_KEY stays a dynamic `await import` further down,
+ * so the key is genuinely absent by the time the server is constructed.
+ */
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 delete process.env.GEMINI_API_KEY;
 
 const { buildServer } = await import('../server');
@@ -33,7 +42,8 @@ await app.ready();
 const loginResponse = await app.inject({
   method: 'POST',
   url: '/trpc/auth.login',
-  payload: { email: 'demo@vyapaar.test', password: 'DemoPass123!' },
+  // The demo account's real credentials — a stale password here fails the whole run on line one.
+  payload: { email: 'demo@vyapaar.test', password: 'Vyapaar-Demo-Cafe-2026!' },
 });
 if (loginResponse.statusCode !== 200) {
   console.error('Login failed:', loginResponse.statusCode, loginResponse.body.slice(0, 200));
@@ -47,8 +57,28 @@ if (!sessionCookie) {
 const cookies = { '__Host-session': sessionCookie };
 
 const storesResponse = await app.inject({ method: 'GET', url: '/trpc/stores.list', cookies });
-const stores = (JSON.parse(storesResponse.body) as { result: { data: { id: string }[] } }).result.data;
-const storeId = stores[0]!.id;
+const stores = (JSON.parse(storesResponse.body) as { result: { data: { id: string; name: string }[] } }).result.data;
+
+/**
+ * Invoices are delivered to the outlet that ordered them, not all to the flagship. Routing every
+ * document to `stores[0]` would put Jayanagar's and Koramangala's stock receipts on Indiranagar's
+ * ledger, quietly corrupting per-outlet stock value and margin — the exact comparison the demo
+ * exists to support. Corpus store CODES map to names, which is what the API exposes.
+ */
+const STORE_NAME_BY_CODE: Record<string, string> = {
+  IND: 'Indiranagar',
+  JAY: 'Jayanagar',
+  KOR: 'Koramangala',
+};
+const storeIdByCode = new Map<string, string>();
+for (const [code, name] of Object.entries(STORE_NAME_BY_CODE)) {
+  const match = stores.find((s) => s.name === name);
+  if (!match) {
+    console.error(`No store named "${name}" (corpus code ${code}). Run seed-demo.mts first.`);
+    process.exit(1);
+  }
+  storeIdByCode.set(code, match.id);
+}
 
 // The demo user's own org id, straight from their accepted membership — never assumed from a
 // response shape this script doesn't own.
@@ -63,22 +93,18 @@ const organizationId = membershipRow!.organizationId;
 // Pack prices drift around the org's real current supplier_prices, so posting's price-change
 // detection sees believable movement (flour takes a genuine ~8% step up mid-series). Quantities
 // are whole packs; line totals are exact qty × unitPrice so the arithmetic validation gate holds.
-type Line = { sku: string; description: string; qty: string; unitPrice: string };
-type Invoice = { supplier: string; number: string; date: string; lines: Line[] };
-
-/**
- * qty (a whole-pack count) × a 4dp price string, exactly, via scaled BigInt — the invariant
- * scanner rightly flagged this file's first draft for float money math, and a seed whose line
- * totals drift from qty × price by a floating-point hair would trip the pipeline's own arithmetic
- * validation gate, which is proof the gate works, not data worth seeding.
- */
-const mulPackPrice = (qty: string, unitPrice: string): string => {
-  const [intPart = '0', fracPart = ''] = unitPrice.split('.');
-  const scaled = BigInt(intPart + fracPart.padEnd(4, '0').slice(0, 4)) * BigInt(qty);
-  const s = scaled.toString().padStart(5, '0');
-  return `${s.slice(0, -4)}.${s.slice(-4)}`;
+type Line = { sku: string; description: string; qty: string; unitPrice: string; lineTotal: string };
+/** Totals come from the corpus (exact BigInt) rather than being recomputed here — see below. */
+type Invoice = {
+  supplier: string; number: string; date: string; storeCode: string;
+  subtotal: string; cgst: string; sgst: string; total: string; lines: Line[];
 };
 
+/**
+ * Exact 4dp addition via scaled BigInt, never float. Only ADDITION is needed here now: line totals
+ * and invoice totals come from the corpus already computed, and the one thing this script derives
+ * is CGST + SGST as a single tax figure for the extraction payload.
+ */
 const sumMoney = (values: string[]): string => {
   const total = values.reduce((sum, v) => {
     const [i = '0', f = ''] = v.split('.');
@@ -88,101 +114,117 @@ const sumMoney = (values: string[]): string => {
   return `${s.slice(0, -4)}.${s.slice(-4)}`;
 };
 
-const INVOICES: Invoice[] = [
-  { supplier: 'Northgate Millers', number: 'NM-2026-1104', date: '2026-06-02', lines: [
-    { sku: 'FLR-00-PACK', description: 'Flour tipo 00, 25kg sack', qty: '6', unitPrice: '24.0000' },
-    { sku: 'SGR-CST-PACK', description: 'Caster sugar, 10kg', qty: '3', unitPrice: '18.0000' },
-    { sku: 'YST-FRS-PACK', description: 'Fresh yeast, 1kg block', qty: '4', unitPrice: '11.2000' } ] },
-  { supplier: 'Hollow Creek Creamery', number: 'HCC-8841', date: '2026-06-05', lines: [
-    { sku: 'BTR-UNS-PACK', description: 'Butter unsalted, 5kg', qty: '4', unitPrice: '38.5000' },
-    { sku: 'MLK-WHL-PACK', description: 'Whole milk, 12L crate', qty: '6', unitPrice: '14.4000' },
-    { sku: 'EGG-LRG-PACK', description: 'Eggs large, tray of 60', qty: '5', unitPrice: '9.6000' } ] },
-  { supplier: 'Northgate Millers', number: 'NM-2026-1178', date: '2026-06-16', lines: [
-    { sku: 'FLR-00-PACK', description: 'Flour tipo 00, 25kg sack', qty: '8', unitPrice: '24.0000' },
-    { sku: 'CFE-ESP-PACK', description: 'Espresso beans, 2kg', qty: '5', unitPrice: '46.0000' },
-    { sku: 'SLT-SEA-PACK', description: 'Sea salt, 2kg', qty: '2', unitPrice: '6.5000' } ] },
-  { supplier: 'Hollow Creek Creamery', number: 'HCC-8903', date: '2026-06-19', lines: [
-    { sku: 'BTR-UNS-PACK', description: 'Butter unsalted, 5kg', qty: '3', unitPrice: '38.5000' },
-    { sku: 'MLK-WHL-PACK', description: 'Whole milk, 12L crate', qty: '8', unitPrice: '14.6000' } ] },
-  { supplier: 'Northgate Millers', number: 'NM-2026-1240', date: '2026-06-30', lines: [
-    { sku: 'FLR-00-PACK', description: 'Flour tipo 00, 25kg sack', qty: '6', unitPrice: '24.5000' },
-    { sku: 'SGR-CST-PACK', description: 'Caster sugar, 10kg', qty: '4', unitPrice: '18.0000' },
-    { sku: 'YST-FRS-PACK', description: 'Fresh yeast, 1kg block', qty: '4', unitPrice: '11.2000' } ] },
-  { supplier: 'Hollow Creek Creamery', number: 'HCC-8967', date: '2026-07-03', lines: [
-    { sku: 'EGG-LRG-PACK', description: 'Eggs large, tray of 60', qty: '6', unitPrice: '9.8000' },
-    { sku: 'MLK-WHL-PACK', description: 'Whole milk, 12L crate', qty: '6', unitPrice: '14.6000' } ] },
-  // The flour price step: 24.50 → 26.50 (+8.2%) — a genuine, threshold-crossing change.
-  { supplier: 'Northgate Millers', number: 'NM-2026-1305', date: '2026-07-14', lines: [
-    { sku: 'FLR-00-PACK', description: 'Flour tipo 00, 25kg sack', qty: '8', unitPrice: '26.5000' },
-    { sku: 'CFE-ESP-PACK', description: 'Espresso beans, 2kg', qty: '4', unitPrice: '46.0000' } ] },
-  { supplier: 'Hollow Creek Creamery', number: 'HCC-9024', date: '2026-07-17', lines: [
-    { sku: 'BTR-UNS-PACK', description: 'Butter unsalted, 5kg', qty: '4', unitPrice: '39.2000' },
-    { sku: 'MLK-WHL-PACK', description: 'Whole milk, 12L crate', qty: '7', unitPrice: '14.6000' },
-    { sku: 'EGG-LRG-PACK', description: 'Eggs large, tray of 60', qty: '5', unitPrice: '9.8000' } ] },
-  { supplier: 'Northgate Millers', number: 'NM-2026-1377', date: '2026-07-28', lines: [
-    { sku: 'FLR-00-PACK', description: 'Flour tipo 00, 25kg sack', qty: '7', unitPrice: '26.5000' },
-    { sku: 'SGR-CST-PACK', description: 'Caster sugar, 10kg', qty: '3', unitPrice: '18.4000' },
-    { sku: 'SLT-SEA-PACK', description: 'Sea salt, 2kg', qty: '2', unitPrice: '6.5000' } ] },
-  { supplier: 'Hollow Creek Creamery', number: 'HCC-9101', date: '2026-08-01', lines: [
-    { sku: 'BTR-UNS-PACK', description: 'Butter unsalted, 5kg', qty: '5', unitPrice: '39.2000' },
-    { sku: 'EGG-LRG-PACK', description: 'Eggs large, tray of 60', qty: '6', unitPrice: '9.8000' } ] },
-  { supplier: 'Northgate Millers', number: 'NM-2026-1440', date: '2026-08-11', lines: [
-    { sku: 'FLR-00-PACK', description: 'Flour tipo 00, 25kg sack', qty: '8', unitPrice: '26.5000' },
-    { sku: 'YST-FRS-PACK', description: 'Fresh yeast, 1kg block', qty: '5', unitPrice: '11.4000' },
-    { sku: 'CFE-ESP-PACK', description: 'Espresso beans, 2kg', qty: '5', unitPrice: '46.0000' } ] },
-  { supplier: 'Hollow Creek Creamery', number: 'HCC-9165', date: '2026-08-14', lines: [
-    { sku: 'MLK-WHL-PACK', description: 'Whole milk, 12L crate', qty: '8', unitPrice: '14.8000' },
-    { sku: 'BTR-UNS-PACK', description: 'Butter unsalted, 5kg', qty: '3', unitPrice: '39.2000' } ] },
-];
+/**
+ * READ FROM THE GENERATED CORPUS, not hardcoded here.
+ *
+ * `mock-data/documents/invoices.json` is produced by the deterministic generator, which already
+ * computes every line total and GST split with exact scaled-BigInt arithmetic. Those values are
+ * used AS-IS rather than recomputed: the pipeline runs an arithmetic validation gate on approval,
+ * and two independent implementations of the same money maths are exactly how a seed drifts from
+ * the corpus it claims to represent.
+ *
+ * The corpus also carries the planted price creep (one supplier's prices ratchet ~13% across the
+ * window in discrete, threshold-crossing steps), which only becomes visible once these invoices
+ * are posted and build real supplier price history.
+ */
+interface CorpusInvoiceLine {
+  sku: string; supplierSku: string; description: string; hsn: string;
+  qty: string; unitPrice: string; lineTotal: string; gstBasisPoints: number;
+}
+interface CorpusInvoice {
+  number: string; supplierCode: string; supplierName: string; gstin: string; supplierAddress: string;
+  date: string; storeCode: string; lines: CorpusInvoiceLine[];
+  subtotal: string; cgst: string; sgst: string; total: string;
+}
 
-// ---------------------------------------------------------------- a minimal real PDF per invoice
-// A valid single-page PDF with the invoice text as an uncompressed stream — enough for the review
-// screen's presigned download to open something real rather than a broken object.
-const buildPdf = (invoice: Invoice): Buffer => {
-  const display = (v4dp: string): string => v4dp.slice(0, -2); // 4dp → 2dp for the printed page
-  const total = sumMoney(invoice.lines.map((l) => mulPackPrice(l.qty, l.unitPrice)));
-  const textLines = [
-    `${invoice.supplier}`,
-    `TAX INVOICE  ${invoice.number}`,
-    `Date: ${invoice.date}`,
-    `Bill to: Ardent Bakehouse, Mill Street`,
-    ``,
-    ...invoice.lines.map((l) => `${l.sku}  ${l.description}  x${l.qty} @ ${l.unitPrice}  = ${display(mulPackPrice(l.qty, l.unitPrice))}`),
-    ``,
-    `TOTAL DUE: ${display(total)} INR`,
-  ];
-  const escape = (s: string): string => s.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
-  const content = [
-    'BT /F1 10 Tf 40 800 Td 14 TL',
-    ...textLines.map((l) => `(${escape(l)}) Tj T*`),
-    'ET',
-  ].join('\n');
-  const objects = [
-    '<< /Type /Catalog /Pages 2 0 R >>',
-    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
-    `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}\nendstream`,
-    '<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>',
-  ];
-  let body = '%PDF-1.4\n';
-  const offsets: number[] = [];
-  objects.forEach((obj, i) => {
-    offsets.push(Buffer.byteLength(body));
-    body += `${i + 1} 0 obj\n${obj}\nendobj\n`;
-  });
-  const xrefAt = Buffer.byteLength(body);
-  body += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
-  for (const at of offsets) body += `${String(at).padStart(10, '0')} 00000 n \n`;
-  body += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefAt}\n%%EOF`;
-  return Buffer.from(body, 'latin1');
+const CORPUS_DIR = join(dirname(fileURLToPath(import.meta.url)), '../../../../mock-data');
+const CORPUS_INVOICES: CorpusInvoice[] = JSON.parse(
+  readFileSync(join(CORPUS_DIR, 'documents/invoices.json'), 'utf8')
+) as CorpusInvoice[];
+
+/**
+ * Dates in the corpus are absolute strings fixed at generation time. Re-anchoring them to the
+ * CURRENT date keeps invoices inside the same window as the seeded sales — an invoice dated before
+ * the sales window would build price history that never applies to anything sold.
+ */
+const corpusGeneratedAt = new Date(
+  (JSON.parse(readFileSync(join(CORPUS_DIR, 'meta.json'), 'utf8')) as { generatedAt: string }).generatedAt
+);
+const shiftDays = Math.round((Date.now() - corpusGeneratedAt.getTime()) / 86400000);
+const reanchor = (isoDate: string): string => {
+  const d = new Date(`${isoDate}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + shiftDays);
+  return d.toISOString().slice(0, 10);
 };
 
+const INVOICES: Invoice[] = CORPUS_INVOICES.map((inv) => ({
+  supplier: inv.supplierName,
+  number: inv.number,
+  date: reanchor(inv.date),
+  storeCode: inv.storeCode,
+  subtotal: inv.subtotal,
+  cgst: inv.cgst,
+  sgst: inv.sgst,
+  total: inv.total,
+  lines: inv.lines.map((l) => ({
+    sku: l.supplierSku,
+    description: l.description,
+    qty: l.qty,
+    unitPrice: l.unitPrice,
+    lineTotal: l.lineTotal,
+  })),
+}));
+
+
+// ---------------------------------------------------------------- the real PDF from the corpus
+/**
+ * Reuses the PDF the GENERATOR already produced, rather than rebuilding a lesser one here.
+ *
+ * The corpus PDFs carry four distinct per-supplier layouts (wholesaler / distributor / mandi /
+ * corporate) with real GSTIN, HSN codes and a CGST/SGST split. Re-deriving a plainer PDF in this
+ * script would mean the document a reviewer opens does not match the document the corpus describes
+ * — and layout variation is exactly what makes extraction a real problem worth demonstrating.
+ */
+const pdfFor = (invoice: Invoice): Buffer =>
+  readFileSync(join(CORPUS_DIR, 'documents/pdf', `${invoice.number.replace(/\//g, '-')}.pdf`));
+
 // ---------------------------------------------------------------- run every invoice through the real path
+/**
+ * Already-posted invoice numbers, so a re-run resumes instead of duplicating.
+ *
+ * This matters more than convenience: approving a document POSTS it — price history, lots and
+ * receipt movements. Re-posting the same invoice would double-count stock received, and because
+ * `stock_movements` is append-only (I3) that cannot be undone by a later correction.
+ *
+ * The number lives in the extraction payload (`fields.documentNumber.value`) because that is where
+ * the pipeline itself reads it from.
+ */
+const existingNumbers = new Set(
+  (
+    await db
+      .select({ fields: documentExtractions.fields })
+      .from(documentExtractions)
+      .where(eq(documentExtractions.organizationId, organizationId))
+  )
+    .map((row) => (row.fields as { documentNumber?: { value?: string } })?.documentNumber?.value)
+    .filter((n): n is string => typeof n === 'string')
+);
+if (existingNumbers.size > 0) {
+  console.log(`Resuming: ${existingNumbers.size} invoice(s) already posted, skipping those.`);
+}
+
 const seeded: string[] = [];
+let skipped = 0;
 for (const invoice of INVOICES) {
+  if (existingNumbers.has(invoice.number)) {
+    skipped += 1;
+    continue;
+  }
+  // Each invoice lands at the outlet it was actually delivered to.
+  const storeId = storeIdByCode.get(invoice.storeCode)!;
   const requestResponse = await app.inject({ method: 'POST', url: '/trpc/documents.requestUpload', payload: { storeId }, cookies });
   const { uploadUrl, key } = (JSON.parse(requestResponse.body) as { result: { data: { uploadUrl: string; key: string } } }).result.data;
-  const put = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': 'application/pdf' }, body: buildPdf(invoice) });
+  const put = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': 'application/pdf' }, body: pdfFor(invoice) });
   if (!put.ok) {
     console.error(`PUT failed for ${invoice.number}: ${put.status}`);
     process.exit(1);
@@ -196,10 +238,28 @@ for (const invoice of INVOICES) {
   const { documentId } = (JSON.parse(confirmResponse.body) as { result: { data: { documentId: string } } }).result.data;
 
   // Remove the extraction job confirmUpload just enqueued — see the header for why.
-  await (await extractionQueue.getJob(documentId))?.remove();
+  /**
+   * Best-effort. If a worker is running it may already hold the lock, and BullMQ throws rather than
+   * returning false — which crashed an earlier run mid-corpus. A locked job is a warning, not a
+   * reason to abandon the remaining invoices: the consequence is a live extraction overwriting this
+   * seeded one, which the operator can avoid by stopping the worker (as the header says).
+   */
+  try {
+    await (await extractionQueue.getJob(documentId))?.remove();
+  } catch (err) {
+    console.warn(
+      `  note: could not remove extraction job for ${invoice.number} (${(err as Error).message}). ` +
+        'Stop the worker (pnpm dev) before seeding so it cannot re-extract over the seeded rows.'
+    );
+  }
 
-  const lineTotal = (l: Line): string => mulPackPrice(l.qty, l.unitPrice);
-  const total = sumMoney(invoice.lines.map((l) => mulPackPrice(l.qty, l.unitPrice)));
+  /**
+   * Totals come straight from the corpus. Recomputing them here would be a SECOND implementation of
+   * the same money maths, and any drift between the two would surface as a false failure in the
+   * pipeline's arithmetic validation gate — the gate would be right and the seed wrong.
+   */
+  const lineTotal = (l: Line): string => l.lineTotal;
+  const total = invoice.total;
   await db.insert(documentExtractions).values({
     id: generateId(),
     organizationId,
@@ -212,8 +272,11 @@ for (const invoice of INVOICES) {
       documentNumber: { value: invoice.number, confidence: 0.98 },
       documentDate: { value: invoice.date, confidence: 0.98 },
       currency: { value: 'INR', confidence: 0.99 },
-      subtotal: { value: total, confidence: 0.95 },
-      tax: { value: '0', confidence: 0.9 },
+      // A real Indian tax invoice splits GST into CGST + SGST. The extraction carries their SUM as
+      // one tax figure (the shape the pipeline validates: subtotal + tax = total), while the split
+      // itself stays visible on the PDF where a reviewer would actually look for it.
+      subtotal: { value: invoice.subtotal, confidence: 0.95 },
+      tax: { value: sumMoney([invoice.cgst, invoice.sgst]), confidence: 0.9 },
       discount: { value: null, confidence: null },
       total: { value: total, confidence: 0.97 },
     },
@@ -238,7 +301,13 @@ for (const invoice of INVOICES) {
   console.log(`${invoice.number} (${invoice.supplier}) → approved, posted, match attempted`);
 }
 
-console.log(JSON.stringify({ seededDocuments: seeded.length }, null, 2));
+console.log(
+  JSON.stringify(
+    { seededDocuments: seeded.length, skippedAlreadyPosted: skipped, totalInCorpus: INVOICES.length },
+    null,
+    2
+  )
+);
 console.log('Embedding jobs are queued — run the worker with the real key to embed:');
 console.log('  pnpm --filter @retailos/worker dev');
 await app.close();

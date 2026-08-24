@@ -22,6 +22,36 @@ const withThousandsSeparator = (value: string): string => {
   return fracPart !== undefined ? `${withCommas}.${fracPart}` : withCommas;
 };
 
+/**
+ * The Indian grouping convention: last three digits, then pairs — `407619.31` reads as
+ * `4,07,619.31` (four lakh seven thousand...), not `407,619.31`.
+ *
+ * This exists in the ALLOWLIST rather than as a formatting step because the validator, not a
+ * formatter, is what decides which numeric forms a narration may contain. Without it the model has
+ * no grouped form it is permitted to write for an INR figure, so it falls back to the raw bundle
+ * value and the briefing reads "your dead stock value is 407619.3100" — technically grounded,
+ * genuinely unreadable.
+ *
+ * Both conventions stay allowed: the bundle carries no currency code (see the note above), so the
+ * validator cannot know which one is right for a given figure, and rejecting a correctly-grouped
+ * number would be a false violation.
+ */
+const withIndianSeparator = (value: string): string => {
+  const parts = value.split('.');
+  const intPart = parts[0] ?? '';
+  const fracPart = parts[1];
+  const negative = intPart.startsWith('-');
+  const digits = negative ? intPart.slice(1) : intPart;
+
+  const grouped =
+    digits.length <= 3
+      ? digits
+      : `${digits.slice(0, -3).replace(/\B(?=(\d{2})+(?!\d))/g, ',')},${digits.slice(-3)}`;
+
+  const withSign = negative ? `-${grouped}` : grouped;
+  return fracPart !== undefined ? `${withSign}.${fracPart}` : withSign;
+};
+
 const abbreviatedForm = (decimal: Decimal): string | null => {
   const abs = decimal.abs();
   if (abs.gte(1_000_000)) return `${decimal.div(1_000_000).toDecimalPlaces(1).toString()}m`;
@@ -42,8 +72,12 @@ export const formatVariants = (value: string, unit: MetricUnit): string[] => {
   variants.add(decimal.toFixed(1));
   variants.add(decimal.toFixed(2));
 
-  // Thousands-separated forms of every precision variant generated so far.
-  for (const v of [...variants]) variants.add(withThousandsSeparator(v));
+  // Grouped forms of every precision variant generated so far, in BOTH conventions — the bundle
+  // carries no currency code, so the validator cannot know which grouping a given figure warrants.
+  for (const v of [...variants]) {
+    variants.add(withThousandsSeparator(v));
+    variants.add(withIndianSeparator(v));
+  }
 
   const abbreviated = abbreviatedForm(decimal);
   if (abbreviated) variants.add(abbreviated);

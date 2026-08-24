@@ -33,8 +33,12 @@ export const PageHeader = ({
   description?: string;
   actions?: ReactNode;
 }) => (
-  <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+  <div className="mb-6 flex flex-wrap items-start justify-between gap-4 border-b border-border pb-4">
     <div>
+      {/* A short brass rule above the title. The page heading previously started flush against the
+          content with nothing separating it from the body, so every screen opened flat; this gives
+          each page a deliberate masthead without adding a heavy bar or a second background. */}
+      <span aria-hidden="true" className="mb-2.5 block h-0.5 w-8 rounded-full bg-accent" />
       <h1 className="text-2xl font-semibold tracking-[-0.02em] text-content">{title}</h1>
       {description && <p className="mt-1 max-w-2xl text-sm text-content-muted">{description}</p>}
     </div>
@@ -43,7 +47,10 @@ export const PageHeader = ({
 );
 
 export const Card = ({ children, className }: { children: ReactNode; className?: string }) => (
-  <div className={cx('rounded-card border border-border bg-surface-raised', className)}>{children}</div>
+  // A single hairline shadow, not a soft drop shadow: enough to lift a card off the paper-grey
+  // ground so stacked surfaces read as layered rather than as one flat wash, while staying inside
+  // the "ruled and printed" register the 3px radius sets.
+  <div className={cx('rounded-card border border-border bg-surface-raised shadow-sm', className)}>{children}</div>
 );
 
 export const CardHeader = ({ title, actions }: { title: string; actions?: ReactNode }) => (
@@ -51,6 +58,56 @@ export const CardHeader = ({ title, actions }: { title: string; actions?: ReactN
     <h2 className="text-base font-semibold text-content">{title}</h2>
     {actions}
   </div>
+);
+
+/* ---------------------------------------------------------------- guidance */
+
+/**
+ * a small, reusable tooltip for the handful of controls in this app that are genuinely
+ * unclear without one. Deliberately NOT for every control — over-tooltipping trains people to
+ * ignore tooltips, and this codebase's own demonstrated convention everywhere else (`Field.hint`,
+ * `EmptyState.hint`, `StatTile.unknownReason`) is ALWAYS-VISIBLE guidance, not hover-gated — a real
+ * pattern worth following before reaching for this component. Two real placements were tried while
+ * building this (a `StatTile` label inside `StatTileGrid`, a CSV-import field label) and both hit
+ * genuine structural conflicts (see below) or were simply better served by `Field.hint` — this
+ * component currently has NO live caller in the app, and that's a deliberate, confirmed decision,
+ * not an oversight: it ships as real, tested, available infrastructure for a future spot cramped
+ * enough that an always-visible hint genuinely doesn't fit (e.g. a dense table-header abbreviation).
+ *
+ * KNOWN STRUCTURAL LIMITATION, confirmed by live screenshot before this note was written: `position:
+ * absolute` positioning here is clipped by ANY ancestor with `overflow: hidden`/`overflow: auto` —
+ * `StatTileGrid` (rounded-corner clipping) and `Table` (`overflow-auto` for horizontal scroll) both
+ * do this. A future caller inside either container will need a different positioning strategy (or a
+ * true floating-UI library) — don't assume this component is safe to drop into an arbitrary
+ * container without checking its overflow behavior first.
+ *
+ * Pure CSS (`group-hover`/`group-focus-within`, the same pattern this file already uses for
+ * `Tr`'s hover-reveal actions), not a `useState`-driven show/hide — this file has no `'use client'`
+ * boundary today and is imported by both server and client components; a stateful tooltip would
+ * force every consumer of `ui.tsx` into the client bundle just to render this one control.
+ *
+ * The bubble is always present in the DOM (never `aria-hidden`), linked via `aria-describedby` on
+ * the trigger, so a screen reader announces it as part of the trigger's accessible description
+ * regardless of hover/focus state — CSS visibility is a sighted-user affordance only, not the
+ * accessibility mechanism. `id` is caller-supplied (not generated internally) since this file has
+ * no `'use client'`/hook boundary to safely call `useId` from.
+ */
+export const Tooltip = ({ id, text, children }: { id: string; text: string; children: ReactNode }) => (
+  <span className="group relative inline-flex">
+    <span aria-describedby={id} tabIndex={0} className="inline-flex rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+      {children}
+    </span>
+    <span
+      id={id}
+      role="tooltip"
+      className={cx(
+        'pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 w-max max-w-xs -translate-x-1/2 rounded-sm bg-content px-2.5 py-1.5 text-xs text-surface opacity-0 shadow-md transition-opacity',
+        'group-hover:opacity-100 group-focus-within:opacity-100'
+      )}
+    >
+      {text}
+    </span>
+  </span>
 );
 
 /* ---------------------------------------------------------------- feedback states */
@@ -73,6 +130,24 @@ export const EmptyState = ({
   action?: ReactNode;
 }) => (
   <div className="px-5 py-14 text-center">
+    {/* A quiet mark above the message. Two different glyphs for two genuinely different facts —
+        a dashed outline for "nothing here yet" vs. a magnifier for "your filter matched nothing" —
+        so the distinction the two variants exist to carry survives even before the words are read. */}
+    <span
+      aria-hidden="true"
+      className="mx-auto mb-3 flex size-10 items-center justify-center rounded-full border border-border bg-surface-sunken text-content-subtle"
+    >
+      {variant === 'no-matches' ? (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" className="size-5">
+          <circle cx="11" cy="11" r="6" />
+          <path d="M20 20l-4.5-4.5" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeDasharray="3 3" className="size-5">
+          <rect x="4" y="4" width="16" height="16" rx="2" />
+        </svg>
+      )}
+    </span>
     {variant === 'no-matches' && (
       <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-content-subtle">No matches</p>
     )}
@@ -235,7 +310,10 @@ export const StatTile = ({
   /** Optional slot beneath the figure — used for drill-through triggers. */
   footer?: ReactNode;
 }) => (
-  <div className="bg-surface-raised px-4 py-4">
+  // `transition-colors` + a sunken hover: the tiles are the densest, most-read part of the app, and
+  // a tile that responds to the cursor makes an otherwise-static grid feel like an instrument panel
+  // rather than a printed table. Colour only — no lift or scale, which would fight the flat register.
+  <div className="bg-surface-raised px-4 py-4 transition-colors hover:bg-surface">
     <p className="text-xs font-semibold uppercase tracking-wide text-content-subtle">{label}</p>
     {value === null ? (
       <>

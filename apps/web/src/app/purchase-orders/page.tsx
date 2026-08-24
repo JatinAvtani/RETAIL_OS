@@ -169,7 +169,12 @@ export default function PurchaseOrdersPage() {
         </TableToolbar>
 
         {(loading || storesLoading) && <SkeletonRows columns={5} />}
-        {!storesLoading && !loading && stores.length === 0 && <EmptyState title="No stores available." />}
+        {!storesLoading && !loading && stores.length === 0 && (
+          <EmptyState
+            title="No stores available."
+            hint="Every workspace gets a store when it's created, so this usually means your account isn't linked to one yet. Contact your workspace owner if this doesn't resolve after signing out and back in."
+          />
+        )}
         {!loading && !error && stores.length > 0 && orders.length === 0 && (
           <EmptyState
             variant={hasFilters ? 'no-matches' : 'no-data'}

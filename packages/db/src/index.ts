@@ -22,6 +22,9 @@ export * from './repositories/lot-repository';
 export * from './repositories/stock-level-repository';
 export * from './repositories/movement-service';
 export * from './repositories/stock-count-service';
+// TransferService was implemented and tested but never exported, so no consumer outside
+// packages/db could use it — inter-outlet transfers were unreachable from the API layer.
+export * from './repositories/transfer-service';
 export * from './repositories/sale-consumption-service';
 export * from './repositories/sales-ingestion-pipeline';
 export * from './repositories/pos-item-repository';
@@ -35,6 +38,7 @@ export * from './repositories/saved-csv-mapping-repository';
 export * from './repositories/unmapped-sale-repository';
 export * from './repositories/document-repository';
 export * from './repositories/document-upload-batch-repository';
+export * from './repositories/catalog-csv-import-repository';
 export * from './repositories/document-email-intake-repository';
 export * from './repositories/purchase-order-repository';
 export * from './repositories/goods-receipt-repository';

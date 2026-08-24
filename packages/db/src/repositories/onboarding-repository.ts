@@ -23,6 +23,20 @@ export class OnboardingRepository extends TenantScopedRepository<typeof onboardi
     super(db, onboardingProgress, organizationId);
   }
 
+  /**
+   * a read that must NOT create a row as a side effect of merely being viewed — the health
+   * score reads `updatedAt` to detect a stalled org, but a brand-new org that has never touched the
+   * wizard at all is a genuinely different state from one that started and went quiet, and creating
+   * a fresh PENDING row here would collapse that distinction the moment anyone's health score is
+   * first computed (I7). `findOrCreate` remains reserved for the wizard's own real step writes.
+   */
+  async findExistingOrNull() {
+    const rows = await this.runScoped((db, scopedWhere) =>
+      db.select().from(onboardingProgress).where(scopedWhere(eq(onboardingProgress.organizationId, this.organizationId)))
+    );
+    return rows[0] ?? null;
+  }
+
   async findOrCreate() {
     const existing = await this.runScoped((db, scopedWhere) =>
       db.select().from(onboardingProgress).where(scopedWhere(eq(onboardingProgress.organizationId, this.organizationId)))

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
 import { useStores } from '@/lib/use-stores';
+import { formatMoneyTotal } from '@/lib/format';
 import {
   Badge,
   Button,
@@ -24,6 +25,15 @@ import {
 } from '@/components/ui';
 
 type Summary = Awaited<ReturnType<typeof trpc.dashboard.summary.query>>;
+type OnboardingProgress = Awaited<ReturnType<typeof trpc.onboarding.getProgress.query>>;
+
+/** The four real, independently-skippable wizard steps `onboarding_progress` tracks. Any one still `PENDING` means setup genuinely isn't finished — a `SKIPPED` step is a real decision the user already made, so it must NOT keep the prompt alive. */
+const ONBOARDING_STEPS = [
+  'salesConnectedStatus',
+  'invoicesUploadedStatus',
+  'entitiesConfirmedStatus',
+  'parLevelsSetStatus',
+] as const;
 type DrillThroughResult = Awaited<ReturnType<typeof trpc.dashboard.drillThrough.query>>;
 type DrillThroughFigure = Parameters<typeof trpc.dashboard.drillThrough.query>[0]['figure'];
 
@@ -34,8 +44,15 @@ const PERIODS = [
 ];
 
 /** Formats a serialized money amount for display. Purely presentational — every figure here was already computed server-side by the metric catalog. */
+/**
+ * Delegates to the shared `formatMoney` rather than doing its own `Number(...).toFixed(2)`, which
+ * this previously did and which was wrong twice over: it dropped digit grouping entirely (an INR
+ * figure rendered as `2304500.00`, unreadable at a glance), and it round-tripped an exact decimal
+ * string through a float on the way. `formatMoney` groups by the CURRENCY's own convention — Indian
+ * lakh/crore for INR — and never touches a float.
+ */
 const fmt = (m: { amount: string; currency: string } | null): string | null =>
-  m === null ? null : `${m.currency} ${Number(m.amount).toFixed(2)}`;
+  m === null ? null : formatMoneyTotal(m.amount, m.currency);
 
 const humanize = (value: string) => value.toLowerCase().replace(/_/g, ' ');
 
@@ -125,7 +142,7 @@ const DrillThroughPanel = ({
                     <Td>{row.label}</Td>
                     <Td variant="numeric">
                       <Value
-                        value={row.amount ? `${row.amount.currency} ${Number(row.amount.amount).toFixed(2)}` : null}
+                        value={row.amount ? formatMoneyTotal(row.amount.amount, row.amount.currency) : null}
                       />
                     </Td>
                   </Tr>
@@ -145,6 +162,7 @@ export default function DashboardPage() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [setupProgress, setSetupProgress] = useState<OnboardingProgress | null>(null);
 
   useEffect(() => {
     if (!selectedStoreId) return;
@@ -156,6 +174,27 @@ export default function DashboardPage() {
       .catch(() => setError('Could not load the dashboard.'))
       .finally(() => setLoading(false));
   }, [selectedStoreId, days]);
+
+  // The guided setup wizard used to be genuinely unreachable — nothing anywhere linked to it, so a
+  // brand-new org landed on an empty dashboard with no route into setup. A nav entry now exists,
+  // but a nav item alone is easy to miss on day one, which is exactly when it matters most. This
+  // banner is deliberately driven by the REAL recorded progress row (never a guess at "looks
+  // empty"), and disappears the moment every step is genuinely done or the user dismisses it.
+  useEffect(() => {
+    trpc.onboarding.getProgress.query().then(setSetupProgress).catch(() => setSetupProgress(null));
+  }, []);
+
+  const dismissSetup = async () => {
+    // Optimistic: the banner is a prompt, not a figure — a failed dismiss that silently reappears
+    // on the next load is a better outcome than blocking the user behind a spinner to hide a hint.
+    setSetupProgress(null);
+    await trpc.onboarding.dismiss.mutate().catch(() => undefined);
+  };
+
+  const setupIncomplete =
+    setupProgress !== null &&
+    !setupProgress.dismissed &&
+    ONBOARDING_STEPS.some((step) => setupProgress[step] === 'PENDING');
 
   const variance = summary?.costVariance;
   const varianceTone =
@@ -192,12 +231,37 @@ export default function DashboardPage() {
         }
       />
 
+      {setupIncomplete && (
+        <Card className="mb-4 border-l-[3px] border-l-accent p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-content">Finish setting up</p>
+              <p className="mt-0.5 text-sm text-content-muted">
+                Connect your sales and upload invoices — that&apos;s what turns these figures from
+                &ldquo;not known&rdquo; into real numbers.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Link href="/onboarding">
+                <Button variant="primary">Continue setup</Button>
+              </Link>
+              <Button variant="ghost" onClick={dismissSetup}>
+                Dismiss
+              </Button>
+            </div>
+          </div>
+        </Card>
+      )}
+
       {error && <ErrorNotice>{error}</ErrorNotice>}
 
       {(loading || storesLoading) && <LoadingState />}
       {!storesLoading && stores.length === 0 && (
         <Card>
-          <EmptyState title="No stores available." />
+          <EmptyState
+            title="No stores available."
+            hint="Every workspace gets a store when it's created, so this usually means your account isn't linked to one yet. Contact your workspace owner if this doesn't resolve after signing out and back in."
+          />
         </Card>
       )}
 
@@ -441,7 +505,7 @@ export default function DashboardPage() {
                       <Tr key={entry.reasonCode}>
                         <Td className="capitalize">{humanize(entry.reasonCode)}</Td>
                         <Td variant="numeric">
-                          {summary.currency} {Number(entry.value).toFixed(2)}
+                          {formatMoneyTotal(String(entry.value), summary.currency)}
                         </Td>
                       </Tr>
                     ))}

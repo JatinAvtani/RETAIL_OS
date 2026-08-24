@@ -17,43 +17,99 @@ import { cx } from './ui';
  * not which module owns the table: you come here to watch the numbers, look something up in the
  * catalogue, follow stock as it moves, or wire up a connection.
  */
-const NAV_GROUPS: { label: string; items: { href: string; label: string }[] }[] = [
+/**
+ * Nav icons. Deliberately hairline geometric strokes on a 24px grid, not filled/rounded glyphs:
+ * the whole design register here is "ruled and printed", and a set of soft filled icons is exactly
+ * the generic-SaaS tell the 3px radius was chosen to avoid. Every path uses `currentColor` and
+ * inherits stroke width, so an icon picks up the active/muted/hover colour of its own link with no
+ * per-state variants and no theme-specific asset.
+ *
+ * These earn their place twice: they give the expanded rail a scannable left edge (previously a
+ * flat wall of same-size text), and they replace the two-letter abbreviation the COLLAPSED rail
+ * used to fall back to, which was genuinely hard to read ("Su" for both Suppliers and Supplier
+ * scorecard, "Re" for Recipes and Reorder suggestions).
+ */
+const ICONS: Record<string, string> = {
+  overview: 'M3 13h4v8H3zM10 3h4v18h-4zM17 9h4v12h-4z',
+  finding: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-3.5-3.5',
+  manager: 'M3 20h18M6 20V10M12 20V4M18 20v7',
+  variance: 'M12 3v18M5 8l7-5 7 5M5 16l7 5 7-5',
+  assistant: 'M4 5h16v11H9l-5 4V5z',
+  notifications: 'M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6M10 21h4',
+  products: 'M3 8l9-5 9 5-9 5-9-5zM3 8v8l9 5 9-5V8',
+  categories: 'M4 5h6v6H4zM14 5h6v6h-6zM4 15h6v6H4zM14 15h6v6h-6z',
+  recipes: 'M6 3v18M6 3a3 3 0 0 1 0 6M14 3c-2 0-3 3-3 6s1 3 3 3 3 0 3-3-1-6-3-6zM14 12v9',
+  suppliers: 'M3 16V8h11v8M14 11h4l3 3v2h-7M6.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM17.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z',
+  import: 'M12 3v12M8 11l4 4 4-4M4 19h16',
+  inventory: 'M4 7h16v13H4zM4 7l2-4h12l2 4M10 12h4',
+  documents: 'M6 3h8l4 4v14H6zM14 3v4h4M9 13h6M9 17h6',
+  purchaseOrders: 'M7 4h10l2 4v13H5V8zM5 8h14M9 12h6M9 16h4',
+  reorder: 'M4 12a8 8 0 0 1 13.7-5.7M20 12a8 8 0 0 1-13.7 5.7M17 3v4h-4M7 21v-4h4',
+  scorecard: 'M4 4h16v16H4zM8 15v-4M12 15V8M16 15v-6',
+  integrations: 'M9 3v6M15 3v6M6 9h12v4a6 6 0 0 1-12 0zM12 19v2',
+  posMapping: 'M4 6h6v6H4zM14 12h6v6h-6zM10 9h4M12 9v6',
+  salesImport: 'M12 21V9M8 13l4-4 4 4M4 5h16',
+  setup: 'M12 3l2.1 4.4 4.9.6-3.6 3.4.9 4.8L12 14l-4.3 2.2.9-4.8L5 8l4.9-.6z',
+  settings: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z',
+};
+
+const NavIcon = ({ name }: { name: string }) => {
+  const path = ICONS[name];
+  if (!path) return null;
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="size-4.5 shrink-0"
+    >
+      <path d={path} />
+    </svg>
+  );
+};
+
+const NAV_GROUPS: { label: string; items: { href: string; label: string; icon: string }[] }[] = [
   {
     label: 'Watch',
     items: [
-      { href: '/dashboard', label: 'Overview' },
-      { href: '/first-finding-report', label: 'First finding' },
-      { href: '/dashboard/manager', label: 'Manager view' },
-      { href: '/purchase-orders/variance-queue', label: 'Variance queue' },
-      { href: '/assistant', label: 'Assistant' },
-      { href: '/notifications', label: 'Notifications' },
+      { href: '/dashboard', label: 'Overview', icon: 'overview' },
+      { href: '/first-finding-report', label: 'First finding', icon: 'finding' },
+      { href: '/dashboard/manager', label: 'Manager view', icon: 'manager' },
+      { href: '/purchase-orders/variance-queue', label: 'Variance queue', icon: 'variance' },
+      { href: '/assistant', label: 'Assistant', icon: 'assistant' },
+      { href: '/notifications', label: 'Notifications', icon: 'notifications' },
     ],
   },
   {
     label: 'Catalogue',
     items: [
-      { href: '/products', label: 'Products' },
-      { href: '/categories', label: 'Categories' },
-      { href: '/recipes', label: 'Recipes' },
-      { href: '/suppliers', label: 'Suppliers' },
+      { href: '/products', label: 'Products', icon: 'products' },
+      { href: '/categories', label: 'Categories', icon: 'categories' },
+      { href: '/recipes', label: 'Recipes', icon: 'recipes' },
+      { href: '/suppliers', label: 'Suppliers', icon: 'suppliers' },
+      { href: '/import-templates', label: 'Import templates', icon: 'import' },
     ],
   },
   {
     label: 'Movement',
     items: [
-      { href: '/inventory', label: 'Inventory' },
-      { href: '/documents', label: 'Documents' },
-      { href: '/purchase-orders', label: 'Purchase orders' },
-      { href: '/purchase-orders/suggestions', label: 'Reorder suggestions' },
-      { href: '/purchase-orders/supplier-scorecard', label: 'Supplier scorecard' },
+      { href: '/inventory', label: 'Inventory', icon: 'inventory' },
+      { href: '/documents', label: 'Documents', icon: 'documents' },
+      { href: '/purchase-orders', label: 'Purchase orders', icon: 'purchaseOrders' },
+      { href: '/purchase-orders/suggestions', label: 'Reorder suggestions', icon: 'reorder' },
+      { href: '/purchase-orders/supplier-scorecard', label: 'Supplier scorecard', icon: 'scorecard' },
     ],
   },
   {
     label: 'Connections',
     items: [
-      { href: '/integrations', label: 'Integrations' },
-      { href: '/pos-items', label: 'POS mapping' },
-      { href: '/sales-import', label: 'Sales import' },
+      { href: '/integrations', label: 'Integrations', icon: 'integrations' },
+      { href: '/pos-items', label: 'POS mapping', icon: 'posMapping' },
+      { href: '/sales-import', label: 'Sales import', icon: 'salesImport' },
     ],
   },
 ];
@@ -141,6 +197,7 @@ const SEGMENT_LABELS: Record<string, string> = {
   onboarding: 'Get set up',
   'confirm-detected': 'Confirm detected',
   'first-finding-report': 'First finding',
+  'import-templates': 'Import templates',
 };
 
 /**
@@ -251,13 +308,8 @@ const NavLinks = ({
                       : 'border-l-transparent text-content-muted hover:bg-surface-sunken hover:text-content'
                   )}
                 >
-                  {collapsed ? (
-                    <span aria-hidden="true" className="font-mono text-xs font-semibold">
-                      {item.label.slice(0, 2)}
-                    </span>
-                  ) : (
-                    item.label
-                  )}
+                  <NavIcon name={item.icon} />
+                  {!collapsed && item.label}
                   {collapsed && <span className="sr-only">{item.label}</span>}
                 </Link>
               </li>
@@ -354,6 +406,9 @@ export const AppShell = ({
   };
 
   const settingsActive = isActive('/settings', pathname);
+  // `/confirm-detected` is a real step OF the setup flow (the wizard links straight to it), so it
+  // keeps the "Get set up" entry highlighted rather than leaving the user with no active nav item.
+  const onboardingActive = isActive('/onboarding', pathname) || isActive('/confirm-detected', pathname);
 
   return (
     <div className="min-h-screen lg:flex">
@@ -391,6 +446,28 @@ export const AppShell = ({
         <NavLinks pathname={pathname} collapsed={collapsed} onNavigate={() => setDrawerOpen(false)} />
 
         <div className="shrink-0 border-t border-border px-2 py-2">
+          {/* Deliberately in the footer utility strip, not in one of the four operational groups
+              above: "Get set up" is a first-run task, not something an operator does every shift,
+              so it doesn't sit as a peer of "Overview" or "Inventory". Before this existed, both
+              /onboarding and /confirm-detected were genuinely UNREACHABLE — they linked only to
+              each other, so a user who finished signup could never find the guided setup wizard at
+              all. Breadcrumb labels for both already existed, which is what made the gap invisible. */}
+          <Link
+            href="/onboarding"
+            title={collapsed ? 'Get set up' : undefined}
+            aria-current={onboardingActive ? 'page' : undefined}
+            className={cx(
+              'flex items-center gap-2.5 rounded-control border-l-2 py-1.5 text-sm transition-colors',
+              collapsed ? 'justify-center px-2' : 'px-2.5',
+              onboardingActive
+                ? 'border-l-accent bg-accent-soft font-semibold text-content'
+                : 'border-l-transparent text-content-muted hover:bg-surface-sunken hover:text-content'
+            )}
+          >
+            <NavIcon name="setup" />
+            {!collapsed && 'Get set up'}
+            {collapsed && <span className="sr-only">Get set up</span>}
+          </Link>
           <Link
             href="/settings"
             title={collapsed ? 'Settings' : undefined}
@@ -403,16 +480,9 @@ export const AppShell = ({
                 : 'border-l-transparent text-content-muted hover:bg-surface-sunken hover:text-content'
             )}
           >
-            {collapsed ? (
-              <>
-                <span aria-hidden="true" className="font-mono text-xs font-semibold">
-                  Se
-                </span>
-                <span className="sr-only">Settings</span>
-              </>
-            ) : (
-              'Settings'
-            )}
+            <NavIcon name="settings" />
+            {!collapsed && 'Settings'}
+            {collapsed && <span className="sr-only">Settings</span>}
           </Link>
           <button
             type="button"

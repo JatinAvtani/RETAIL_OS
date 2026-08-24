@@ -344,6 +344,20 @@
       "when": 1789900000000,
       "tag": "0049_document_upload_batches",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1790000000000,
+      "tag": "0050_catalog_csv_imports",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1790100000000,
+      "tag": "0051_catalog_csv_import_recipe_type",
+      "breakpoints": true
     }
   ]
 }

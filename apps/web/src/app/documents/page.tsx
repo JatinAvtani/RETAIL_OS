@@ -36,7 +36,7 @@ const statusLabel: Record<DocumentRow['status'], string> = {
 const DOCUMENT_TYPES = ['INVOICE', 'DELIVERY_NOTE', 'CREDIT_NOTE', 'QUOTE', 'CONTRACT', 'CERTIFICATE', 'OTHER'] as const;
 
 /**
- * 012-02: real, scoped progress for one bulk-upload session — "47 of 90 processed" (plan.md's own
+ * real, scoped progress for one bulk-upload session — "47 of 90 processed" (the plan's own
  * wording), never a fabricated fraction. `uploadedCount` can legitimately sit below `expectedCount`
  * while files are still mid-upload; a document reaching REVIEW_REQUIRED/AUTO_APPROVED/APPROVED
  * counts as "processed" (extraction has genuinely run), UPLOADED/PROCESSING do not yet.
@@ -202,10 +202,10 @@ export default function DocumentsPage() {
   };
 
   /**
-   * 012-02: a real `document_upload_batches` row is created FIRST, with the real client-known
+   * a real `document_upload_batches` row is created FIRST, with the real client-known
    * file count — but only when there's actually more than one file. A single ad-hoc drop stays
    * exactly as before (no batch, no progress panel) — the batch/progress UI exists for the case
-   * plan.md actually names ("upload 90 days of invoices"), not every single upload.
+   * the plan actually names ("upload 90 days of invoices"), not every single upload.
    */
   const uploadFiles = async (fileList: FileList | File[]) => {
     const files = Array.from(fileList);
@@ -281,7 +281,10 @@ export default function DocumentsPage() {
 
       {!storesLoading && stores.length === 0 && (
         <Card>
-          <EmptyState title="No stores available." />
+          <EmptyState
+            title="No stores available."
+            hint="Every workspace gets a store when it's created, so this usually means your account isn't linked to one yet. Contact your workspace owner if this doesn't resolve after signing out and back in."
+          />
         </Card>
       )}
 

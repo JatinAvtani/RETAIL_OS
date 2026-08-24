@@ -6,8 +6,8 @@ import { useRouter } from 'next/navigation';
 import { TRPCClientError } from '@trpc/client';
 import { trpc } from '@/lib/trpc';
 import { Button, Card, ErrorNotice, Field, Input } from '@/components/ui';
-import { LogoMark } from '@/components/logo';
-import { ThemeToggle } from '@/components/theme-toggle';
+import { LogoLockup } from '@/components/logo';
+import { AuthPage } from '@/components/auth-page';
 
 /**
  * `auth.requestPasswordReset` had zero UI entry point — a locked-out user had no self-service
@@ -41,14 +41,10 @@ export default function ForgotPasswordPage() {
   };
 
   return (
-    <main className="grid min-h-screen place-items-center px-6 py-12">
-      <div className="absolute right-6 top-6">
-        <ThemeToggle />
-      </div>
-
+    <AuthPage>
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <LogoMark className="mx-auto mb-5 size-11 text-content" />
+          <LogoLockup className="mb-7 flex w-full items-center" />
           <h1 className="text-xl font-semibold tracking-tight text-content">Reset your password</h1>
           <p className="mt-1 text-sm text-content-muted">
             Enter your email and we&rsquo;ll send a link to reset your password.
@@ -82,6 +78,6 @@ export default function ForgotPasswordPage() {
           </Link>
         </p>
       </div>
-    </main>
+    </AuthPage>
   );
 }

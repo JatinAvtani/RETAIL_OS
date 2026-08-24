@@ -10,6 +10,10 @@ export const buildProductImageKey = (organizationId: string, productId: string, 
 export const buildCsvImportKey = (organizationId: string, importId: string): string =>
   `org/${organizationId}/sales-csv-imports/${importId}.csv`;
 
+/** product/supplier catalog CSV import — a separate key namespace from `buildCsvImportKey`'s sales imports, same tenant-prefix reasoning. */
+export const buildCatalogCsvImportKey = (organizationId: string, importId: string): string =>
+  `org/${organizationId}/catalog-csv-imports/${importId}.csv`;
+
 /** `extension` is derived server-side from the verified magic bytes (see `detectDocumentFormat`), never from a client-supplied filename. */
 export const buildDocumentKey = (organizationId: string, documentId: string, extension: string): string =>
   `org/${organizationId}/documents/${documentId}.${extension}`;

@@ -115,7 +115,12 @@ export default function PosItemsPage() {
 
       <Card>
         {(loading || storesLoading) && <SkeletonRows columns={4} />}
-        {!storesLoading && stores.length === 0 && <EmptyState title="No stores available." />}
+        {!storesLoading && stores.length === 0 && (
+          <EmptyState
+            title="No stores available."
+            hint="Every workspace gets a store when it's created, so this usually means your account isn't linked to one yet. Contact your workspace owner if this doesn't resolve after signing out and back in."
+          />
+        )}
         {!loading && !error && stores.length > 0 && items.length === 0 && (
           <EmptyState
             title="Everything's mapped"

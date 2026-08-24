@@ -150,13 +150,79 @@ export const addDecimal = (a: string, b: string): string | null => {
   return fromScaled(na + nb, scale);
 };
 
-export const formatMoney = (amount: string | number, currency?: string | null): string => {
-  const [intPart, fracRaw = ''] = String(amount).split('.');
-  const grouped = intPart!.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  // Trailing zeros go, but never below two places — and real sub-cent precision (a 0.0010 unit
-  // cost) is kept rather than rounded into a different number.
-  const fracTrimmed = fracRaw.replace(/0+$/, '');
-  const frac = (fracTrimmed + '00').slice(0, Math.max(2, fracTrimmed.length));
+/**
+ * Digit grouping for the integer part, in the convention the CURRENCY's own readers use.
+ *
+ * INR uses the Indian system: the last three digits group normally, then every TWO digits after
+ * that — 2304715 reads as `23,04,715` (twenty-three lakh four thousand...), not `2,304,715`. To an
+ * Indian operator the Western grouping is not a style preference; it makes a familiar number
+ * genuinely hard to read at a glance, which is the whole purpose of grouping.
+ *
+ * Grouping is applied to the STRING, never via `Number.toLocaleString`, because these amounts carry
+ * up to 4 decimal places and can exceed `Number.MAX_SAFE_INTEGER` in minor units — converting to a
+ * float to format it would reintroduce exactly the precision loss the rest of this file avoids.
+ */
+const groupDigits = (intPart: string, currency?: string | null): string => {
+  const negative = intPart.startsWith('-');
+  const digits = negative ? intPart.slice(1) : intPart;
+
+  const grouped =
+    currency === 'INR'
+      ? // Last 3 digits, then pairs. Below 1,000 there is nothing to group.
+        digits.length <= 3
+        ? digits
+        : `${digits.slice(0, -3).replace(/\B(?=(\d{2})+(?!\d))/g, ',')},${digits.slice(-3)}`
+      : digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+
+  return negative ? `-${grouped}` : grouped;
+};
+
+/**
+ * Two genuinely different display needs, so the caller states which one it has:
+ *
+ *  - A UNIT COST is meaningful below a paisa (atta at INR 0.0568/g). Rounding it to 2dp shows a
+ *    different number from the one the ledger actually used, so extra precision is KEPT. Default.
+ *  - A TOTAL — revenue, stock value, a line's contribution — is a currency amount someone reads as
+ *    money. `INR 1,62,469.7036` is noise; it should read `INR 1,62,469.70`.
+ *
+ * Rounding is half-up on the STRING, never via a float: these values routinely exceed
+ * `Number.MAX_SAFE_INTEGER` in minor units, and `Number(x).toFixed(2)` would quietly lose precision
+ * before it ever got to rounding.
+ */
+export const formatMoney = (
+  amount: string | number,
+  currency?: string | null,
+  options?: { precision?: 'exact' | 'currency' }
+): string => {
+  const raw = String(amount);
+  const negative = raw.startsWith('-');
+  const [intRaw = '0', fracRaw = ''] = (negative ? raw.slice(1) : raw).split('.');
+
+  let intPart = intRaw;
+  let frac: string;
+
+  if (options?.precision === 'currency') {
+    // Half-up to 2dp, carrying into the integer part when the third decimal rounds up.
+    const twoDp = fracRaw.padEnd(3, '0').slice(0, 2);
+    const nextDigit = Number(fracRaw.padEnd(3, '0')[2]);
+    if (nextDigit >= 5) {
+      const carried = (BigInt(intPart + twoDp) + 1n).toString().padStart(3, '0');
+      intPart = carried.slice(0, -2);
+      frac = carried.slice(-2);
+    } else {
+      frac = twoDp;
+    }
+  } else {
+    // Trailing zeros go, but never below two places — real sub-paisa precision is preserved.
+    const fracTrimmed = fracRaw.replace(/0+$/, '');
+    frac = (fracTrimmed + '00').slice(0, Math.max(2, fracTrimmed.length));
+  }
+
+  const grouped = groupDigits((negative ? '-' : '') + intPart, currency);
   const display = `${grouped}.${frac}`;
   return currency ? `${currency} ${display}` : display;
 };
+
+/** A currency amount someone reads as money — always exactly 2dp. */
+export const formatMoneyTotal = (amount: string | number, currency?: string | null): string =>
+  formatMoney(amount, currency, { precision: 'currency' });

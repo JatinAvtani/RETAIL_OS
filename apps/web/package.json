@@ -7,7 +7,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@retailos/domain": "workspace:*",
@@ -26,6 +27,7 @@
     "@types/react-dom": "^19.0.2",
     "postcss": "^8.5.25",
     "tailwindcss": "^4.3.3",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.8"
   }
 }

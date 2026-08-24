@@ -6,8 +6,8 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { TRPCClientError } from '@trpc/client';
 import { trpc } from '@/lib/trpc';
 import { Button, Card, ErrorNotice } from '@/components/ui';
-import { LogoMark } from '@/components/logo';
-import { ThemeToggle } from '@/components/theme-toggle';
+import { LogoLockup } from '@/components/logo';
+import { AuthPage } from '@/components/auth-page';
 
 type Status = 'checking-session' | 'needs-login' | 'accepting' | 'done' | 'error' | 'no-token';
 
@@ -57,7 +57,7 @@ const AcceptInvitationContent = () => {
 
   return (
     <>
-      <LogoMark className="mx-auto mb-5 size-11 text-content" />
+      <LogoLockup className="mb-7 flex w-full items-center" />
       <Card className="p-6 text-center">
       {status === 'no-token' && <ErrorNotice>This invitation link is missing its token.</ErrorNotice>}
       {status === 'checking-session' && <p className="text-sm text-content-muted">Checking your session…</p>}
@@ -92,15 +92,12 @@ const AcceptInvitationContent = () => {
 
 export default function AcceptInvitationPage() {
   return (
-    <main className="grid min-h-screen place-items-center px-6 py-12">
-      <div className="absolute right-6 top-6">
-        <ThemeToggle />
-      </div>
+    <AuthPage>
       <div className="w-full max-w-sm">
         <Suspense fallback={<Card className="p-6 text-center text-sm text-content-muted">Loading…</Card>}>
           <AcceptInvitationContent />
         </Suspense>
       </div>
-    </main>
+    </AuthPage>
   );
 }

@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, lte, ne, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { generateId } from '@retailos/domain';
 import * as schema from '../schema/index';
@@ -42,7 +42,7 @@ export class DocumentRepository extends TenantScopedRepository<typeof documents>
     sizeBytes: number;
     supersedesId?: string;
     uploadedByUserId?: string;
-    // 012-02: optionally attaches this document to a bulk-upload batch (document_upload_batches),
+    // optionally attaches this document to a bulk-upload batch (document_upload_batches),
     // so DocumentUploadBatchRepository.getProgress can count it. Absent for a plain ad-hoc upload.
     uploadBatchId?: string;
   }): Promise<{ id: string }> {
@@ -332,7 +332,7 @@ export class DocumentRepository extends TenantScopedRepository<typeof documents>
   }
 
   /**
-   * 012-03: real invoice line data for auto-detection — deliberately restricted to documents at
+   * real invoice line data for auto-detection — deliberately restricted to documents at
    * `APPROVED`/`AUTO_APPROVED`/`POSTED`, never `REVIEW_REQUIRED` or earlier. A line a human hasn't
    * confirmed yet (or the model failed to extract cleanly) is not trustworthy evidence to propose a
    * new product from (I7) — detection only ever reasons about lines a human has already, at
@@ -367,13 +367,13 @@ export class DocumentRepository extends TenantScopedRepository<typeof documents>
   }
 
   /**
-   * 012-10: real approved-invoice headers for one store since a given date — the first-finding
+   * real approved-invoice headers for one store since a given date — the first-finding
    * report's duplicate-detection input. Same `APPROVED`/`AUTO_APPROVED`/`POSTED`-only restriction
    * as `findApprovedExtractionsForStore` (I7: an unreviewed document's own extracted total isn't
    * trustworthy evidence yet), but returns `contentHash` (from `documents`, not the extraction) and
    * the extracted `total`/`documentNumber`/`supplier` fields the report actually needs — a
    * deliberately separate method from `findApprovedExtractionsForStore` rather than widening that
-   * one, since 012-03/012-04 (its only other callers) have no use for `contentHash`.
+   * one, since earlier work (its only other callers) have no use for `contentHash`.
    */
   async findApprovedInvoiceHeadersForStoreSince(storeId: string, since: Date) {
     return this.runScoped((db, scopedWhere) =>
@@ -410,6 +410,34 @@ export class DocumentRepository extends TenantScopedRepository<typeof documents>
    * `computeValidationIssueFrequency` (packages/metrics) — this method only fetches raw rows, never
    * computes the rate itself (I2).
    */
+  /**
+   * "does this org have real invoice history from >= N days ago" — org-wide (matching
+   * `listExtractionsSince`'s own org-wide precedent, since a health score is a tenant-level view,
+   * not per-store). Deliberately measures upload AGE (`documents.createdAt <= before`), not the
+   * invoice's own extracted date — this codebase has no reliable extracted-date range query, and a
+   * bulk historical backfill uploaded all in one sitting would trivially pass a true
+   * date-coverage check while genuinely having zero real "time since onboarding started" signal,
+   * which is what this check actually needs to answer honestly.
+   */
+  async hasApprovedInvoiceCreatedBefore(before: Date): Promise<boolean> {
+    const rows = await this.runScoped((db, scopedWhere) =>
+      db
+        .select({ id: documents.id })
+        .from(documents)
+        .where(
+          scopedWhere(
+            and(
+              eq(documents.type, 'INVOICE'),
+              lte(documents.createdAt, before),
+              sql`${documents.status} IN ('APPROVED', 'AUTO_APPROVED', 'POSTED')`
+            )
+          )
+        )
+        .limit(1)
+    );
+    return rows.length > 0;
+  }
+
   async listExtractionsSince(since: Date) {
     return this.runScoped((db) =>
       db

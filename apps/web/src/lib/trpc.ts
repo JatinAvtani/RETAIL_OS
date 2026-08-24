@@ -1,7 +1,13 @@
 import { createTRPCClient, httpBatchLink } from '@trpc/client';
 import type { AppRouter } from '@retailos/api';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+/**
+ * Exported because OAuth is not a tRPC call: `/auth/google` is a plain browser redirect on the API
+ * origin, so the sign-in and sign-up screens need the same base URL this client uses. Duplicating
+ * the `?? 'http://localhost:3001'` fallback in a component would silently diverge the day the real
+ * deployment sets NEXT_PUBLIC_API_URL.
+ */
+export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
 /**
  * Direct browser -> API calls (not a Next.js proxy) — apps/api has CORS configured for exactly

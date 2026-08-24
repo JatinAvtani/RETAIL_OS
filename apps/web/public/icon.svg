@@ -3,14 +3,22 @@
     The Vyapaar mark as a favicon. Deliberately NOT a copy of components/logo.tsx: browser chrome
     gives a favicon no theme context it can trust (prefers-color-scheme inside an SVG favicon is
     evaluated inconsistently across browsers, and often against the page rather than the tab bar),
-    so this file commits to one opaque design that reads on any tab strip — a filled brass square
-    (--color-accent's literal hex, #8A6A1F; keep in sync with globals.css) with light bars. Bars
-    are 7px wide in a 40px viewBox (~3px at a real 16px tab size) — the logo's finer 5px bars
-    dissolve into mush at that scale, which is why the favicon variant is thicker on purpose.
+    so this file commits to one opaque design that reads on any tab strip — a filled brass tile
+    with light bars.
+
+    TWO bars, not the logo's four. A favicon is drawn at 16px: the logo's four 5px bars land at
+    ~2px each with ~1px gaps, which no display resolves — they merge into a single smudge, which is
+    exactly how the four-bar version read on a real tab. Dropping to two bars doubles both the bar
+    width and the gap while keeping the mark's actual argument intact: one quiet figure, one raised
+    figure in the light. That contrast is the only thing legible at this size, so it is the only
+    thing drawn.
+
+    Brass is #82641d, matching --color-accent in globals.css. The previous value here was #8A6A1F,
+    left stale when the token was darkened to meet WCAG AA — the drift this comment's predecessor
+    warned about, and it went unnoticed because nothing typechecks a hex in an SVG. If the accent
+    token changes again, change it here too.
   -->
-  <rect x="0" y="0" width="40" height="40" rx="9" fill="#8A6A1F" />
-  <rect x="3.5" y="26" width="7" height="10" rx="2.5" fill="#EFE6D2" />
-  <rect x="12.5" y="23" width="7" height="13" rx="2.5" fill="#EFE6D2" />
-  <rect x="21.5" y="8" width="7" height="28" rx="2.5" fill="#FFFDF6" />
-  <rect x="30.5" y="24" width="7" height="12" rx="2.5" fill="#EFE6D2" />
+  <rect x="0" y="0" width="40" height="40" rx="9" fill="#82641d" />
+  <rect x="7" y="22" width="11" height="12" rx="4" fill="#E8DBBC" />
+  <rect x="22" y="7" width="11" height="27" rx="4" fill="#FFFDF6" />
 </svg>

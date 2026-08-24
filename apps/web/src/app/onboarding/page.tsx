@@ -16,16 +16,18 @@ import {
   StepRail,
   WorkflowFooter,
 } from '@/components/ui';
+import { OnboardingHealthPanel } from '@/components/onboarding-health';
 
 type Progress = Awaited<ReturnType<typeof trpc.onboarding.getProgress.query>>;
 type Product = Awaited<ReturnType<typeof trpc.products.list.query>>[number];
+type ExistingParLevel = Awaited<ReturnType<typeof trpc.parLevels.listForStore.query>>[number];
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
 const STEP_LABELS = ['Connect sales', 'Upload invoices', 'Confirm detected', 'Set par levels', 'Done'];
 
 /**
- * Steps 1-2 of the wizard (create organisation, create first store — plan.md's own Phase 1) are
+ * Steps 1-2 of the wizard (create organisation, create first store — the plan's own Phase 1) are
  * already handled by `auth.signup` (earlier work), so a caller only ever reaches this page already
  * having both — this page picks up at "connect sales." Every step deep-links to its already-real
  * feature (Square OAuth, CSV import, document upload) rather than reimplementing it (I2) — this
@@ -96,6 +98,8 @@ export default function OnboardingPage() {
         description="Connect your sales, upload invoices, and we'll show you where your margin went — usually within 48 hours."
       />
       <StepRail steps={STEP_LABELS} current={stepIndex} />
+
+      <OnboardingHealthPanel />
 
       <div className="space-y-4">
         <ConnectSalesStep
@@ -238,14 +242,14 @@ type DetectedProductCandidate = Awaited<ReturnType<typeof trpc.productDetection.
 type DetectedSupplierCandidate = Awaited<ReturnType<typeof trpc.productDetection.detectSuppliers.query>>[number];
 
 /**
- * 012-03/012-04 detect and propose real product/supplier candidates from invoice lines and headers
+ * earlier work detect and propose real product/supplier candidates from invoice lines and headers
  * (clustered by supplier SKU / name / description similarity, every proposed field read verbatim
  * from real text, never guessed — I7). Bulk CONFIRMING a proposal into a real product/supplier row
- * is 012-05's separate, human-gated scope (I9) — this step is read-only, showing what was found and
+ * is separate, human-gated scope (I9) — this step is read-only, showing what was found and
  * linking to manual catalog entry for now, matching the wizard's own "every step skippable,
  * resumable" design. Supplier detection deliberately has no pack-size/tax-ID/lead-time fields to
- * show — plan.md names them, but neither is buildable from real extracted data today (confirmed
- * before building 012-04), so the UI shows only what's real: a name and its evidence count.
+ * show — the plan names them, but neither is buildable from real extracted data today (confirmed
+ * before building earlier work), so the UI shows only what's real: a name and its evidence count.
  */
 const ConfirmDetectedStep = ({
   storeId,
@@ -358,6 +362,7 @@ const ParLevelsStep = ({
   const [reorderPoint, setReorderPoint] = useState('');
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [existing, setExisting] = useState<ExistingParLevel[]>([]);
 
   useEffect(() => {
     if (status !== 'PENDING') return;
@@ -370,6 +375,16 @@ const ParLevelsStep = ({
       })
       .finally(() => setProductsLoading(false));
   }, [status]);
+
+  // Reading back what's already set — without this the step was genuinely write-only: a user could
+  // save a par level and get no confirmation it landed, then have no way to see it again or notice
+  // they'd already set one for that product.
+  const refreshExisting = useCallback(() => {
+    if (!storeId) return;
+    trpc.parLevels.listForStore.query({ storeId }).then(setExisting).catch(() => setExisting([]));
+  }, [storeId]);
+
+  useEffect(refreshExisting, [refreshExisting]);
 
   const save = async () => {
     if (!storeId || !productId) return;
@@ -388,6 +403,9 @@ const ParLevelsStep = ({
         ...(parLevel ? { parLevel } : {}),
         ...(reorderPoint ? { reorderPoint } : {}),
       });
+      setParLevel('');
+      setReorderPoint('');
+      refreshExisting();
       onDone();
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Could not save this par level.');
@@ -395,6 +413,8 @@ const ParLevelsStep = ({
       setSaving(false);
     }
   };
+
+  const productNameById = new Map(products.map((product) => [product.id, product.name]));
 
   return (
     <StepCard
@@ -422,10 +442,10 @@ const ParLevelsStep = ({
               ))}
             </select>
           </Field>
-          <Field label="Par level">
+          <Field label="Par level" hint="How much should be on hand at a glance">
             <Input value={parLevel} onChange={(e) => setParLevel(e.target.value)} placeholder="e.g. 20" className="w-28" />
           </Field>
-          <Field label="Reorder point">
+          <Field label="Reorder point" hint="The threshold that should trigger a reorder">
             <Input value={reorderPoint} onChange={(e) => setReorderPoint(e.target.value)} placeholder="e.g. 10" className="w-28" />
           </Field>
           <Button variant="primary" onClick={save} disabled={saving || (!parLevel && !reorderPoint)}>
@@ -435,6 +455,25 @@ const ParLevelsStep = ({
       )}
       {saveError && <p className="mt-2 text-xs text-danger">{saveError}</p>}
       {!storeId && <p className="mt-2 text-xs text-content-subtle">Select a store above to set par levels.</p>}
+
+      {existing.length > 0 && (
+        <div className="mt-4 border-t border-border pt-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-content-subtle">Already set</p>
+          <ul className="mt-2 space-y-1">
+            {existing.map((row) => (
+              <li key={`${row.productId}-${row.variantId}`} className="flex flex-wrap gap-x-3 text-sm text-content-muted">
+                {/* A par level set for a product that isn't in the current product list (deleted,
+                    or simply not loaded) still shows honestly by id rather than vanishing. */}
+                <span className="font-medium text-content">
+                  {productNameById.get(row.productId) ?? `Product ${row.productId.slice(0, 8)}…`}
+                </span>
+                <span>par {row.parLevel ?? '—'}</span>
+                <span>reorder at {row.reorderPoint ?? '—'}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </StepCard>
   );
 };

@@ -154,7 +154,7 @@ export default function EditSupplierPage() {
                 Add contact
               </Button>
             </div>
-            {contacts.length === 0 && <p className="text-sm text-content-subtle">No contacts yet.</p>}
+            {contacts.length === 0 && <p className="text-sm text-content-subtle">No contacts yet — add one above.</p>}
             <div className="space-y-3">
               {contacts.map((contact, index) => (
                 <div key={index} className="grid gap-3 rounded-card border border-border p-3 sm:grid-cols-[1fr_1fr_1fr_1fr_auto]">

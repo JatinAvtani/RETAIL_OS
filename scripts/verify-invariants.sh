@@ -19,7 +19,7 @@ BLOCKING=0; HIGH=0; ADVISORY=0
 
 EXCLUDES=(--exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.git
           --exclude-dir=.next --exclude-dir=coverage --exclude-dir=fixtures
-          --exclude-dir=.claude --exclude-dir=.ai --exclude-dir=docs
+          --exclude-dir=.claude --exclude-dir=.ai --exclude-dir=.backups --exclude-dir=docs
           --exclude-dir=.turbo --exclude-dir=drizzle --exclude-dir=spikes
           --exclude='*.test.ts' --exclude='*.spec.ts' --exclude='*.type-test.ts'
           --exclude='verify-invariants.sh' --exclude='*.md' --exclude='CLAUDE.md'
@@ -231,7 +231,16 @@ report HIGH I3 "Mutation of an append-only table" \
 # briefing-schedule-poll-processor.ts excluded for the identical reason: `{ registered, total }` is a
 # plain COUNT of active stores processed in one schedule-poll tick (how many stores' cron schedules
 # were successfully re-registered vs. how many active stores exist), never a monetary value.
-r=$(search '[A-Za-z_]*([Pp]rice|[Cc]ost|[Aa]mount|[Tt]otal|[Rr]evenue|[Mm]argin|[Qq]uantity|[Qq]ty)[A-Za-z_]*[[:space:]]*:[[:space:]]*number\b' 'apps/api/src/integrations/csv-import\.ts|packages/db/src/repositories/csv-import-repository\.ts|packages/metrics/src/margin/margin\.ts|packages/metrics/src/inventory/inventory\.ts|packages/metrics/src/purchasing/purchasing\.ts|packages/assistant/src/action-draft\.ts|packages/assistant/src/eval/types\.ts|packages/assistant/src/citations\.ts|apps/worker/src/relay-poll-processor\.ts|apps/worker/src/start\.ts|apps/worker/src/briefing-schedule-poll-processor\.ts' '*.ts')
+# catalog-csv-import.ts (both apps/api/src/integrations and packages/db/src/repositories) excluded
+# for the identical reason as csv-import.ts above: totalRowCount/importedRowCount/skippedRowCount
+# are ROW COUNTS from a product/supplier catalog CSV import, not a money or quantity value - same
+# field names, same meaning, same false-positive-on-"Total"-as-a-substring cause.
+# seed-demo.mts + mock-data/generate/ excluded: the matches are `qty: number` / `quantity: number`
+# on CORPUS ROW SHAPES — a whole-unit count of items sold (3 dosas), never a money value. Every
+# money field in those same interfaces is already correctly a decimal STRING (unitPrice, lineTotal,
+# subtotal, cgst, sgst, total), which is the thing this check exists to protect. The generator does
+# all money arithmetic in scaled BigInt (mock-data/generate/money.mts), never in float.
+r=$(search '[A-Za-z_]*([Pp]rice|[Cc]ost|[Aa]mount|[Tt]otal|[Rr]evenue|[Mm]argin|[Qq]uantity|[Qq]ty)[A-Za-z_]*[[:space:]]*:[[:space:]]*number\b' 'apps/api/src/integrations/csv-import\.ts|packages/db/src/repositories/csv-import-repository\.ts|apps/api/src/integrations/catalog-csv-import\.ts|packages/db/src/repositories/catalog-csv-import-repository\.ts|packages/metrics/src/margin/margin\.ts|packages/metrics/src/inventory/inventory\.ts|packages/metrics/src/purchasing/purchasing\.ts|packages/assistant/src/action-draft\.ts|packages/assistant/src/eval/types\.ts|packages/assistant/src/citations\.ts|apps/worker/src/relay-poll-processor\.ts|apps/worker/src/start\.ts|apps/worker/src/briefing-schedule-poll-processor\.ts|seed-demo\.mts|mock-data/generate/' '*.ts')
 report HIGH I5 "Money or quantity typed as \`number\`" \
   "Float arithmetic on money loses precision silently. Use Money / Quantity<Unit>." "$r"
 
@@ -272,7 +281,19 @@ report HIGH I5 "Float column in a monetary/quantity path" \
 # from lots.remaining_quantity * lots.unit_cost); it only decides at-risk classification, and a
 # zero-consumption lot is deliberately treated as AT RISK - the opposite of the "looks safe" failure
 # this check exists to catch.
-r=$(search '(\?\?|\|\|)[[:space:]]*0\b|COALESCE\([^,]+,[[:space:]]*0\)' 'format|display|/ui/|reconciliation\.ts|expiry-queue\.ts|reorder-suggestions\.ts|goods-receipt-repository\.ts|stock-level-repository\.ts' '' \
+# seed-demo.mts / seed-demo-operations.mts excluded: both matches are QUANTITY accumulators or
+# lookups, never a cost. seed-demo.mts's `(demandByStoreAndSku.get(key) ?? 0) + ...` initialises a
+# running demand total — "no entry yet" genuinely means zero accumulated so far.
+# seed-demo-operations.mts's `onHandByKey.get(...) ?? 0` reads stock on hand to pick an outlet that
+# actually holds the product; a missing stock_levels row genuinely means that outlet holds none,
+# which is a real zero rather than an unknown. Neither value reaches a cost, price or margin.
+# The genuine COSTING sites in these same files were FIXED rather than excluded: the lot
+# value-at-risk path and the stocktake theoretical-quantity snapshot now skip and warn on null,
+# because a zero there would have understated exposure and written stock off as shrinkage.
+# mock-data/generate/findings.mts excluded: its `?? 0` is inside a MARKDOWN TEMPLATE STRING that
+# prints the planted creep target for documentation. A supplier with no planted creep has a target
+# of genuinely zero, and the sentence is prose in a generated file — no cost is computed from it.
+r=$(search '(\?\?|\|\|)[[:space:]]*0\b|COALESCE\([^,]+,[[:space:]]*0\)' 'format|display|/ui/|reconciliation\.ts|expiry-queue\.ts|reorder-suggestions\.ts|goods-receipt-repository\.ts|stock-level-repository\.ts|seed-demo\.mts|seed-demo-operations\.mts|mock-data/generate/findings\.mts' '' \
    | grep -Ei 'cost|price|margin|revenue|cogs|consumption|qty|quantity|yield' || true)
 report HIGH I7 "Null-to-zero coercion in a costing path" \
   "\`?? 0\` looks defensive; in costing it silently inflates margin to 100%. Degrade to unknown." "$r"

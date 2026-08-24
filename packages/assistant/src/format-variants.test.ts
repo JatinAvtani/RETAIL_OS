@@ -58,4 +58,35 @@ describe('formatVariants', () => {
     const variants = formatVariants('-150.25', 'CURRENCY');
     expect(variants).toContain('-150.25');
   });
+
+  /**
+   * These pin the ALLOWLIST, not a formatter. Without an Indian-grouped variant the validator would
+   * reject a correctly-written rupee figure as ungrounded, so the model falls back to the raw bundle
+   * value and the briefing reads "your dead stock value is 407619.3100".
+   */
+  it('allows Indian (lakh/crore) grouping so a rupee figure can be written readably', () => {
+    const variants = formatVariants('407619.3100', 'CURRENCY');
+    expect(variants).toContain('4,07,619.31');
+    expect(variants).toContain('407619.3100');
+  });
+
+  it('allows BOTH grouping conventions — the bundle carries no currency code to choose between them', () => {
+    const variants = formatVariants('2304715.00', 'CURRENCY');
+    expect(variants).toContain('23,04,715.00');
+    expect(variants).toContain('2,304,715.00');
+  });
+
+  it('groups at crore scale', () => {
+    expect(formatVariants('10000000.00', 'CURRENCY')).toContain('1,00,00,000.00');
+  });
+
+  it('leaves values below one thousand ungrouped in both conventions', () => {
+    const variants = formatVariants('999.00', 'CURRENCY');
+    expect(variants).toContain('999.00');
+    expect(variants.some((v) => v.includes(',') && v.startsWith('999'))).toBe(false);
+  });
+
+  it('keeps the minus sign outside Indian grouping', () => {
+    expect(formatVariants('-2304715.00', 'CURRENCY')).toContain('-23,04,715.00');
+  });
 });

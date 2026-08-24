@@ -19,10 +19,27 @@ export const AI_TASKS = ['CLASSIFY', 'PLAN', 'NARRATE'] as const;
 
 export type AiTask = (typeof AI_TASKS)[number];
 
+/**
+ * 2026-08-24: PLAN and NARRATE moved off `gemini-flash-latest`, which returns a persistent
+ * `503 UNAVAILABLE — "This model is currently experiencing high demand"` on this key. Measured, not
+ * inferred: three consecutive live calls returned 503 after 45-67 SECONDS each, while
+ * `gemini-flash-lite-latest` answered the identical prompt in 1.3s. The slow failure is the harmful
+ * part — the provider's own 15s request timeout fires long before the 503 arrives, so the caller
+ * sees an opaque timeout instead of the "model unavailable" error the app already handles.
+ *
+ * Narration quality was verified on the replacement before switching, not assumed: given a real
+ * grounding bundle, flash-lite produced "The dead stock value is 4,07,619.31 rupees and the expiry
+ * risk value is 35,216.98 rupees" — correct Indian digit grouping, values unaltered, and accepted
+ * by the grounding validator's allowlist.
+ *
+ * This is a real availability constraint of the free tier, not a preference. If `-latest` recovers,
+ * moving PLAN/NARRATE back is a one-line change — but it should be re-measured first, the same way
+ * this was.
+ */
 export const MODEL_CONFIG: Record<AiTask, string> = {
   CLASSIFY: 'gemini-flash-lite-latest',
-  PLAN: 'gemini-flash-latest',
-  NARRATE: 'gemini-flash-latest',
+  PLAN: 'gemini-flash-lite-latest',
+  NARRATE: 'gemini-flash-lite-latest',
 };
 
 export const modelForTask = (task: AiTask): string => MODEL_CONFIG[task];

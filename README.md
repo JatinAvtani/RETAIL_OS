@@ -130,6 +130,18 @@ source-level (which tables, how many rows, as of when), not per-line-item. When 
 answered — a missing permission, an unknowable metric — the answer says which part and why,
 rather than narrating around the gap.
 
+**Notifications, computed not polled** — alerts come from a rule engine evaluating real state
+(stock against par levels, lots against expiry dates), so a rule that does not fire produces no
+alert rather than a reassuring empty list. Each alert carries a deduplication key, so a persistent
+problem updates in place instead of arriving daily, and resolves itself when the condition clears.
+Severity, recipients, and channels are per-rule configuration; delivery is tracked per recipient
+per channel.
+
+**Guided onboarding** — a setup flow that tracks real recorded progress rather than inferring
+"looks empty": connect sales, upload invoices, confirm detected products and suppliers, set par
+levels. Each step is independently skippable, and a skipped step is a decision the system
+remembers rather than a gap it keeps prompting about.
+
 ---
 
 ## Architecture
@@ -232,6 +244,44 @@ pnpm --filter @retailos/web dev    # :3000
 pnpm typecheck && pnpm lint && pnpm boundaries && pnpm test
 ```
 
+### Demo data
+
+The repository contains a **generator**, not a dataset. `mock-data/generate/` is committed; the
+corpus it produces is gitignored, so a fresh clone reproduces it rather than downloading it:
+
+```bash
+pnpm --filter @retailos/api exec tsx ../../mock-data/generate/generate.mts   # write the corpus
+pnpm --filter @retailos/api exec tsx src/scripts/seed-demo.mts               # catalog + sales
+pnpm --filter @retailos/api exec tsx src/scripts/seed-demo-invoices.mts      # GST invoices
+pnpm --filter @retailos/api exec tsx src/scripts/seed-demo-operations.mts    # POs, receipts, waste
+pnpm --filter @retailos/api exec tsx src/scripts/seed-demo-engagement.mts    # alerts, history
+```
+
+A three-outlet Bengaluru café chain: 180 days of history, ~50k sales transactions, ~455k stock
+movements, 75 GST tax invoices with real GSTIN/HSN/CGST-SGST across four distinct supplier layouts.
+
+Three properties make it worth more than a fixture:
+
+**It is deterministic.** Every draw comes from a seeded PRNG, and each store-day derives its own
+stream from `(seed, store, date)` rather than sharing one sequential generator — so a day's data is
+a pure function of its own key, independent of how many days were generated before it. Two runs
+produce byte-identical output.
+
+**Nothing is inserted directly.** Every row is written through the same repositories and services
+the application uses: sales run recipe explosion → FEFO draw → movement posting; invoices go
+through the real upload → confirm → approve pipeline; notifications come from calling the actual
+rule engine and only firing where it returns `fires: true` (114 stock candidates evaluated, 2
+fired). Stock levels are a genuine projection of the ledger — verified, not asserted.
+
+**It contains deliberate imperfection.** One ingredient is left permanently unpriced, so a real menu
+item reports **unknown** cost on screen and period-wide theoretical COGS honestly cannot be
+computed. A supplier's on-time rate degrades from 100% to 57% across the window. Prices creep 13% on
+one supplier's staples. A demo where every figure resolves proves nothing about the one rule this
+system is built around.
+
+`mock-data/findings/` documents each planted narrative with the figure it should produce, measured
+from the generated corpus rather than hand-written.
+
 ---
 
 ## Scope boundaries
@@ -247,8 +297,11 @@ number is **contribution margin**, and it's labelled as such.
 
 ## Roadmap
 
-Not yet built: proactive notifications built on the same
-metric catalog. A guided onboarding flow. A background relay for the transactional outbox — state
-changes and their events already commit atomically (the part that cannot be retrofitted); shipping
-those recorded events to downstream consumers is deferred until a consumer needs replay, with
-today's background work triggered directly at the point of state change.
+Not yet built: multi-organization login (an accountant with several clients gets an explicit
+"not yet supported" error rather than a silently-picked tenant), per-channel notification retry and
+dead-lettering, and a public REST API for integrations.
+
+Deliberately deferred rather than missing: **email delivery is recorded but not sent** — a
+notification fans out to real per-recipient, per-channel delivery rows, and the in-app channel is
+marked delivered while email stays `PENDING`, because claiming a send that never happened is the
+same class of lie as a fabricated number.

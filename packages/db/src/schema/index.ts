@@ -21,6 +21,7 @@ export * from './outbox-events';
 export * from './unmapped-sales';
 export * from './stock-par-levels';
 export * from './document-upload-batches';
+export * from './catalog-csv-imports';
 export * from './stock-counts';
 export * from './stock-transfers';
 export * from './sales';

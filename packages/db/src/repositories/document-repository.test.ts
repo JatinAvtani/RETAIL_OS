@@ -481,6 +481,105 @@ describe('DocumentRepository', () => {
     expect(() => new DocumentRepository(createScopedDb(client), '')).toThrow();
   });
 
+  describe('hasApprovedInvoiceCreatedBefore', () => {
+    it('returns false when no invoice document exists at all', async () => {
+      const repo = new DocumentRepository(createScopedDb(client), organizationId);
+      const result = await repo.hasApprovedInvoiceCreatedBefore(new Date());
+      expect(result).toBe(false);
+    });
+
+    it('returns false when the only approved invoice is NEWER than the cutoff', async () => {
+      const repo = new DocumentRepository(createScopedDb(client), organizationId);
+      const created = await repo.create({
+        storeId,
+        type: 'INVOICE',
+        source: 'UPLOAD',
+        storageKey: `${organizationId}/recent-invoice.pdf`,
+        contentHash: 'hash-recent',
+        mimeType: 'application/pdf',
+        sizeBytes: 1,
+      });
+      await repo.updateStatus(created.id, 'APPROVED');
+
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+      const result = await repo.hasApprovedInvoiceCreatedBefore(oneHourAgo);
+      expect(result).toBe(false);
+    });
+
+    it('returns true once a real approved invoice was created before the cutoff', async () => {
+      const repo = new DocumentRepository(createScopedDb(client), organizationId);
+      const adminDb = drizzle(adminClient, { schema });
+
+      const fortyDaysAgo = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
+      const oldDocumentId = generateId();
+      await adminDb.insert(documents).values({
+        id: oldDocumentId,
+        organizationId,
+        storeId,
+        type: 'INVOICE',
+        source: 'UPLOAD',
+        storageKey: `${organizationId}/old-invoice.pdf`,
+        contentHash: 'hash-old',
+        mimeType: 'application/pdf',
+        sizeBytes: 1,
+        status: 'APPROVED',
+        createdAt: fortyDaysAgo,
+      });
+
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const result = await repo.hasApprovedInvoiceCreatedBefore(thirtyDaysAgo);
+      expect(result).toBe(true);
+    });
+
+    it('ignores a non-INVOICE document type, even if old and approved', async () => {
+      const repo = new DocumentRepository(createScopedDb(client), organizationId);
+      const adminDb = drizzle(adminClient, { schema });
+
+      const fortyDaysAgo = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
+      await adminDb.insert(documents).values({
+        id: generateId(),
+        organizationId,
+        storeId,
+        type: 'OTHER',
+        source: 'UPLOAD',
+        storageKey: `${organizationId}/old-other.pdf`,
+        contentHash: 'hash-old-other',
+        mimeType: 'application/pdf',
+        sizeBytes: 1,
+        status: 'APPROVED',
+        createdAt: fortyDaysAgo,
+      });
+
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const result = await repo.hasApprovedInvoiceCreatedBefore(thirtyDaysAgo);
+      expect(result).toBe(false);
+    });
+
+    it('ignores an old invoice that is not yet approved (still UPLOADED)', async () => {
+      const repo = new DocumentRepository(createScopedDb(client), organizationId);
+      const adminDb = drizzle(adminClient, { schema });
+
+      const fortyDaysAgo = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
+      await adminDb.insert(documents).values({
+        id: generateId(),
+        organizationId,
+        storeId,
+        type: 'INVOICE',
+        source: 'UPLOAD',
+        storageKey: `${organizationId}/old-unreviewed.pdf`,
+        contentHash: 'hash-old-unreviewed',
+        mimeType: 'application/pdf',
+        sizeBytes: 1,
+        status: 'UPLOADED',
+        createdAt: fortyDaysAgo,
+      });
+
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const result = await repo.hasApprovedInvoiceCreatedBefore(thirtyDaysAgo);
+      expect(result).toBe(false);
+    });
+  });
+
   describe('cross-tenant', () => {
     let fixture: TwoTenantFixture;
 
