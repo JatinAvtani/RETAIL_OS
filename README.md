@@ -258,7 +258,7 @@ pnpm --filter @retailos/worker dev    # extraction, embeddings, notifications
 The worker is not optional for the full experience — document extraction, embeddings, and
 notification delivery are all driven by it.
 
-Scripts load `.env.local` themselves (`packages/db/src/load-env.ts`), so no manual `export` step is
+Scripts load `.env.local` themselves (`packages/config`), so no manual `export` step is
 needed. Real environment variables always take precedence, which is why CI — which sets them
 explicitly and ships no `.env.local` — is unaffected.
 
