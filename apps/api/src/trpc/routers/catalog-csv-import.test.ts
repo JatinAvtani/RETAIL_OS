@@ -220,11 +220,17 @@ describe('catalogCsvImport router', () => {
       payload: { importId },
       cookies: { '__Host-session': sessionCookie },
     });
-    // Asserting on the BODY too, not just the status: a bare `expected 400 to be 200` says a
-    // request failed but not why, and the commit path has several distinct 400s (wrong status,
-    // wrong import type, a parse failure). Including the body puts the real reason straight into
-    // the CI annotation instead of requiring a reproduction to find it.
-    expect({ status: commitResponse.statusCode, body: commitResponse.body.slice(0, 300) }).toMatchObject({ status: 200 });
+    /**
+     * The failure MESSAGE carries the real reason, not just the status. A bare
+     * `expected 400 to be 200` says a request failed but not why, and the commit path returns 400
+     * for several distinct reasons (wrong import status, wrong import type, a CSV parse failure).
+     *
+     * `toMatchObject` was tried first and is the wrong tool here: it diffs only the keys being
+     * asserted, so it printed "1 matching property omitted from actual" and hid the body entirely.
+     */
+    if (commitResponse.statusCode !== 200) {
+      throw new Error(`commit failed with ${commitResponse.statusCode}: ${commitResponse.body}`);
+    }
     const result = asSuccess(commitResponse.json()) as { totalRowCount: number; importedRowCount: number; skippedRowCount: number };
     expect(result.totalRowCount).toBe(2);
     expect(result.importedRowCount).toBe(1);
@@ -268,11 +274,17 @@ describe('catalogCsvImport router', () => {
       payload: { importId },
       cookies: { '__Host-session': sessionCookie },
     });
-    // Asserting on the BODY too, not just the status: a bare `expected 400 to be 200` says a
-    // request failed but not why, and the commit path has several distinct 400s (wrong status,
-    // wrong import type, a parse failure). Including the body puts the real reason straight into
-    // the CI annotation instead of requiring a reproduction to find it.
-    expect({ status: commitResponse.statusCode, body: commitResponse.body.slice(0, 300) }).toMatchObject({ status: 200 });
+    /**
+     * The failure MESSAGE carries the real reason, not just the status. A bare
+     * `expected 400 to be 200` says a request failed but not why, and the commit path returns 400
+     * for several distinct reasons (wrong import status, wrong import type, a CSV parse failure).
+     *
+     * `toMatchObject` was tried first and is the wrong tool here: it diffs only the keys being
+     * asserted, so it printed "1 matching property omitted from actual" and hid the body entirely.
+     */
+    if (commitResponse.statusCode !== 200) {
+      throw new Error(`commit failed with ${commitResponse.statusCode}: ${commitResponse.body}`);
+    }
 
     const [category] = await db.select().from(categories).where(eq(categories.organizationId, organizationId));
     expect(category?.name).toBe('Dry goods');
@@ -309,11 +321,17 @@ describe('catalogCsvImport router', () => {
       payload: { importId },
       cookies: { '__Host-session': sessionCookie },
     });
-    // Asserting on the BODY too, not just the status: a bare `expected 400 to be 200` says a
-    // request failed but not why, and the commit path has several distinct 400s (wrong status,
-    // wrong import type, a parse failure). Including the body puts the real reason straight into
-    // the CI annotation instead of requiring a reproduction to find it.
-    expect({ status: commitResponse.statusCode, body: commitResponse.body.slice(0, 300) }).toMatchObject({ status: 200 });
+    /**
+     * The failure MESSAGE carries the real reason, not just the status. A bare
+     * `expected 400 to be 200` says a request failed but not why, and the commit path returns 400
+     * for several distinct reasons (wrong import status, wrong import type, a CSV parse failure).
+     *
+     * `toMatchObject` was tried first and is the wrong tool here: it diffs only the keys being
+     * asserted, so it printed "1 matching property omitted from actual" and hid the body entirely.
+     */
+    if (commitResponse.statusCode !== 200) {
+      throw new Error(`commit failed with ${commitResponse.statusCode}: ${commitResponse.body}`);
+    }
     const result = asSuccess(commitResponse.json()) as { importedRowCount: number };
     expect(result.importedRowCount).toBe(1);
 
@@ -413,11 +431,17 @@ describe('catalogCsvImport router', () => {
         payload: { importId },
         cookies: { '__Host-session': sessionCookie },
       });
-      // Asserting on the BODY too, not just the status: a bare `expected 400 to be 200` says a
-    // request failed but not why, and the commit path has several distinct 400s (wrong status,
-    // wrong import type, a parse failure). Including the body puts the real reason straight into
-    // the CI annotation instead of requiring a reproduction to find it.
-    expect({ status: commitResponse.statusCode, body: commitResponse.body.slice(0, 300) }).toMatchObject({ status: 200 });
+      /**
+     * The failure MESSAGE carries the real reason, not just the status. A bare
+     * `expected 400 to be 200` says a request failed but not why, and the commit path returns 400
+     * for several distinct reasons (wrong import status, wrong import type, a CSV parse failure).
+     *
+     * `toMatchObject` was tried first and is the wrong tool here: it diffs only the keys being
+     * asserted, so it printed "1 matching property omitted from actual" and hid the body entirely.
+     */
+    if (commitResponse.statusCode !== 200) {
+      throw new Error(`commit failed with ${commitResponse.statusCode}: ${commitResponse.body}`);
+    }
       const result = asSuccess(commitResponse.json()) as { importedRowCount: number; skippedRowCount: number; skippedGroups: unknown[] };
       expect(result.importedRowCount).toBe(1);
       expect(result.skippedRowCount).toBe(0);
