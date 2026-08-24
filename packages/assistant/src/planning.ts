@@ -81,7 +81,7 @@ const describeTool = (tool: MetricToolDefinition): string =>
 
 const describeStore = (store: AccessibleStore): string => `- ${store.id}: ${store.name}`;
 
-const buildPrompt = (question: string, tools: MetricToolDefinition[], accessibleStores: AccessibleStore[]): string =>
+const buildPrompt = (question: string, tools: MetricToolDefinition[], accessibleStores: AccessibleStore[], today: Date): string =>
   `You are planning how to answer a business question by selecting metric functions to call. You do NOT compute any number yourself — you only choose which metric(s) to call and with what parameters. A question may need one metric or several.
 
 Available metrics:
@@ -90,10 +90,13 @@ ${tools.map(describeTool).join('\n')}
 Stores this user can access (use these EXACT ids for any storeId parameter):
 ${accessibleStores.length > 0 ? accessibleStores.map(describeStore).join('\n') : '- (none)'}
 
+Today's date is ${today.toISOString().slice(0, 10)}. Resolve every relative period against it: "the last 7 days" ends today, "last month" is the calendar month before this one.
+
 Rules:
 - Only select metricId values from the list above. Never invent one.
 - Provide every parameter each selected metric's own schema requires.
 - A storeId MUST be copied exactly from the store list above. Never invent, guess, or construct a storeId — if the question names a store, use that store's id; if it names none and there is exactly one store, use it.
+- Date parameters MUST be resolved against today's date given above. Never guess a year or month from memory.
 - If the question genuinely doesn't need any of these metrics, return an empty selections array — do not force a selection that doesn't fit.
 - ${UNTRUSTED_DATA_INSTRUCTION}
 
@@ -157,10 +160,15 @@ export const planMetricSelections = async (
   provider: ChatProvider,
   question: string,
   model: string,
-  accessibleStores: AccessibleStore[]
+  accessibleStores: AccessibleStore[],
+  // Injected rather than read from the clock inside `buildPrompt` so a test can pin it. The model
+  // has no idea what day it is: without this, "the last 7 days" resolved to a window six months
+  // stale, which then reported a real 0.00 over a period with no rows — the same I7 failure the
+  // storeId check closes, reached through the dates instead of the store.
+  today: Date = new Date()
 ): Promise<PlanResult> => {
   const tools = buildMetricToolSurface();
-  const result = await provider.generateStructured(buildPrompt(question, tools, accessibleStores), model, PLAN_RESPONSE_SCHEMA);
+  const result = await provider.generateStructured(buildPrompt(question, tools, accessibleStores, today), model, PLAN_RESPONSE_SCHEMA);
 
   if (result.error) {
     return { selections: [], rejected: [], error: result.error };

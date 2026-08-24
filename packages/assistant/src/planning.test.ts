@@ -73,6 +73,19 @@ describe('planMetricSelections', () => {
     expect(prompt).toContain('Never invent, guess, or construct a storeId');
   });
 
+  it("states today's date in the prompt, so a relative period is not guessed from the model's training data", async () => {
+    const generateStructured = vi.fn().mockResolvedValue(ok({ selections: [] }));
+    const provider: ChatProvider = { name: 'fake', generate: vi.fn(), generateStructured };
+
+    await planMetricSelections(provider, 'revenue in the last 7 days', 'fake-model', STORES, new Date('2026-08-24T10:00:00Z'));
+
+    const [prompt] = generateStructured.mock.calls[0] as [string, string, unknown];
+    // Without this the model had no idea what day it was: a live run resolved "the last 7 days"
+    // to 2026-02-18..2026-02-25, six months stale, then reported the empty window as a real 0.00.
+    expect(prompt).toContain("Today's date is 2026-08-24");
+    expect(prompt).toContain('Never guess a year or month from memory');
+  });
+
   it('fills an omitted storeId when the caller has exactly ONE store — the unambiguous case', async () => {
     const provider = fakeProvider(
       ok({ selections: [{ metricId: 'net_revenue', paramsJson: JSON.stringify({ from: '2026-08-01', to: '2026-08-31' }) }] })
