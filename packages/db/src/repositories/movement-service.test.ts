@@ -228,6 +228,55 @@ describe('MovementService', () => {
     });
   });
 
+  describe('consumeFefo concurrency (I3)', () => {
+    it('two concurrent consumers of the same lot cannot drive it negative — one succeeds, the other is refused', async () => {
+      const lotRepo = new LotRepository(createScopedDb(client), organizationId);
+      const lot = await lotRepo.receive({
+        id: generateId(),
+        storeId,
+        productId,
+        variantId,
+        receivedAt: new Date('2026-08-01T00:00:00Z'),
+        initialQuantity: '10.000000',
+        unitCost: '1.0000',
+        currency: 'USD',
+      });
+
+      // Two SEPARATE connections — a single pooled client would serialise these itself and prove
+      // nothing about row locking. Each draws 8 from a lot holding 10: exactly one can succeed.
+      const clientA = postgres(APP_CONNECTION_STRING);
+      const clientB = postgres(APP_CONNECTION_STRING);
+      try {
+        const draw = (c: ReturnType<typeof postgres>) =>
+          new MovementService(createScopedDb(c), organizationId).consumeFefo({
+            storeId,
+            productId,
+            variantId,
+            requiredQuantity: '8.000000',
+            unit: 'g',
+            occurredAt: new Date(),
+            sourceType: 'pos-sync',
+          });
+
+        const outcomes = await Promise.allSettled([draw(clientA), draw(clientB)]);
+        const fulfilled = outcomes.filter((o) => o.status === 'fulfilled');
+        const rejected = outcomes.filter((o) => o.status === 'rejected');
+
+        // Before the FOR UPDATE + quantity guard, BOTH succeeded and left the lot at -6.000000 —
+        // verified directly against Postgres with two concurrent psql sessions.
+        expect(fulfilled).toHaveLength(1);
+        expect(rejected).toHaveLength(1);
+
+        const finalLot = await lotRepo.findById(lot.id);
+        expect(Number(finalLot?.remainingQuantity)).toBeGreaterThanOrEqual(0);
+        expect(finalLot?.remainingQuantity).toBe('2.000000');
+      } finally {
+        await clientA.end();
+        await clientB.end();
+      }
+    });
+  });
+
   describe('consumeFefo', () => {
     it('allocates from the earliest-expiring lot, draws it down, and posts a SALE_CONSUMPTION movement at that lot\'s cost', async () => {
       const lotRepo = new LotRepository(createScopedDb(client), organizationId);

@@ -78,7 +78,19 @@ export class TransferService {
               eq(lots.status, 'ACTIVE')
             )
           )
-          .orderBy(sql`${lots.expiryDate} ASC NULLS LAST`, lots.receivedAt);
+          .orderBy(sql`${lots.expiryDate} ASC NULLS LAST`, lots.receivedAt)
+      // Row-lock the candidate lots for the rest of this transaction (I3). Without it, two
+      // concurrent consumers both read the same `remaining_quantity`, both pass `allocateFefo`'s
+      // sufficiency check, and both draw — driving the lot negative and breaking the
+      // ledger-projection identity. Verified against real Postgres: unlocked, two sessions drawing
+      // 8 from a lot of 10 both succeeded and left it at -6.000000; with FOR UPDATE the second
+      // session blocked, then read the committed 2.000000 and correctly refused.
+      //
+      // Plain FOR UPDATE, deliberately NOT SKIP LOCKED: skipping a locked lot would silently draw
+      // from a LATER-expiring one, quietly violating FEFO ordering and costing the draw at the
+      // wrong lot's unit cost. Waiting is correct here — the contended lot is the one FEFO says
+      // to use.
+      .for('update');
 
         const candidates: Lot[] = candidateRows
           .filter((row) => Number(row.remainingQuantity) > 0)

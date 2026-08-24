@@ -347,11 +347,14 @@ export class MovementService {
         if (!lotRow) {
           throw new Error(`Cannot draw from lot '${input.lotId}' — not found, not ACTIVE, or not in this organization.`);
         }
-        if (Number(input.quantity) > Number(lotRow.remainingQuantity)) {
-          throw new InsufficientStockError(
-            (Number(input.quantity) - Number(lotRow.remainingQuantity)).toString(),
-            'lot'
-          );
+        // Decimal (I5): this guards an over-draw of a lot, and the shortfall it reports is a real
+        // quantity shown to the caller. Float subtraction of two NUMERIC(19,6) values produces
+        // artefacts like `0.30000000000000004` in the message, and near the boundary the
+        // comparison itself can round the wrong way.
+        const requested = new Decimal(input.quantity);
+        const available = new Decimal(lotRow.remainingQuantity);
+        if (requested.greaterThan(available)) {
+          throw new InsufficientStockError(requested.minus(available).toFixed(6), 'lot');
         }
 
         const drawnRows = await tx
@@ -423,7 +426,19 @@ export class MovementService {
           eq(lots.status, 'ACTIVE')
         )
       )
-      .orderBy(sql`${lots.expiryDate} ASC NULLS LAST`, lots.receivedAt);
+      .orderBy(sql`${lots.expiryDate} ASC NULLS LAST`, lots.receivedAt)
+      // Row-lock the candidate lots for the rest of this transaction (I3). Without it, two
+      // concurrent consumers both read the same `remaining_quantity`, both pass `allocateFefo`'s
+      // sufficiency check, and both draw — driving the lot negative and breaking the
+      // ledger-projection identity. Verified against real Postgres: unlocked, two sessions drawing
+      // 8 from a lot of 10 both succeeded and left it at -6.000000; with FOR UPDATE the second
+      // session blocked, then read the committed 2.000000 and correctly refused.
+      //
+      // Plain FOR UPDATE, deliberately NOT SKIP LOCKED: skipping a locked lot would silently draw
+      // from a LATER-expiring one, quietly violating FEFO ordering and costing the draw at the
+      // wrong lot's unit cost. Waiting is correct here — the contended lot is the one FEFO says
+      // to use.
+      .for('update');
 
     const candidates: Lot[] = candidateRows
       .filter((row) => Number(row.remainingQuantity) > 0)
@@ -453,11 +468,24 @@ export class MovementService {
           status: sql`CASE WHEN ${lots.remainingQuantity} - ${allocation.quantity.amount.toString()} <= 0 THEN 'DEPLETED'::lot_status ELSE ${lots.status} END`,
         })
         .where(
-          and(eq(lots.id, allocation.lotId), eq(lots.organizationId, this.organizationId), eq(lots.status, 'ACTIVE'))
+          and(
+            eq(lots.id, allocation.lotId),
+            eq(lots.organizationId, this.organizationId),
+            eq(lots.status, 'ACTIVE'),
+            // Defence in depth alongside the FOR UPDATE above (I3): the row lock serialises
+            // concurrent draws, and this predicate makes an over-draw match ZERO rows instead of
+            // writing a negative remaining_quantity. Without it the UPDATE checks only
+            // id/org/status and would happily subtract past zero. Proven against real Postgres:
+            // the guarded UPDATE returned `UPDATE 0` for a draw the lot could not cover.
+            sql`${lots.remainingQuantity} >= ${allocation.quantity.amount.toString()}`
+          )
         )
         .returning();
       if (!drawnRows[0]) {
-        throw new Error(`Cannot draw from lot '${allocation.lotId}' — not found, not ACTIVE, or not in this organization.`);
+        // Reached when the lock released and the lot no longer covers this allocation — a real
+        // concurrent draw, not a missing row. Surfaced as insufficient stock rather than a generic
+        // failure, and never silently written as a negative balance.
+        throw new InsufficientStockError(allocation.quantity.amount.toString(), input.unit);
       }
 
       const posted = await this.postMovementInTx(tx, {
