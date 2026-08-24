@@ -137,7 +137,9 @@ describe('narrateAndValidate — the fail-closed wrapper', () => {
 
     const result = await narrateAndValidate(provider, bundle, [], [], [], 'fake-model');
 
-    expect(result).toEqual({ text: null, grounded: false, violationLog: [] });
+    // `providerError` carries the real cause, so a caller (and the golden-eval report) can tell a
+    // failed model call apart from prose the validator rejected — both are `grounded: false`.
+    expect(result).toEqual({ text: null, grounded: false, violationLog: [], providerError: '503 Service Unavailable' });
     expect(generate).toHaveBeenCalledTimes(1);
   });
 

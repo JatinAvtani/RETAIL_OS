@@ -49,7 +49,15 @@ const runCase = async (evalCase: EvalCase, provider: ChatProvider, deps: EvalRun
     checks.push(check('value-shape', valueCheck, valueCheck ? 'every selected metric resolved as expected' : 'a metric expected to resolve to a real value came back unknown'));
 
     const result = await narrateAndValidate(provider, bundle, denied, failed, rejected, deps.narrateModel);
-    checks.push(check('grounded', result.grounded, result.grounded ? 'narration passed the grounding validator' : `narration was discarded — ${result.violationLog.length} violation(s) logged`));
+    // A provider failure and a grounding rejection are both `grounded: false`, but they mean
+    // opposite things: one is the safety gate working, the other is the model never answering.
+    // Reporting them identically once attributed four rate-limit 429s to the validator.
+    const groundedDetail = result.grounded
+      ? 'narration passed the grounding validator'
+      : result.providerError !== undefined
+        ? `no narration produced — the model call itself failed (${result.providerError.slice(0, 120)})`
+        : `narration was discarded by the validator — ${result.violationLog.length} violation(s) logged`;
+    checks.push(check('grounded', result.grounded, groundedDetail));
 
     const passed = intentMatches && selectionMatches && valueCheck && result.grounded;
     return { caseId: evalCase.id, question: evalCase.question, passed, checks, finalText: result.text };
@@ -84,9 +92,37 @@ const runCase = async (evalCase: EvalCase, provider: ChatProvider, deps: EvalRun
   return { caseId: evalCase.id, question: evalCase.question, passed, checks, finalText: result?.text ?? null };
 };
 
-export const runEvalSuite = async (cases: EvalCase[], provider: ChatProvider, deps: EvalRunDeps): Promise<EvalSummary> => {
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Paced, not fired back-to-back.
+ *
+ * The free tier's limit is **15 requests per MINUTE per model**, and each case makes two to three
+ * model calls (classify, plan, and usually narrate). An unpaced 18-case run therefore exhausts the
+ * window part-way through and every remaining case fails with a 429 that looks like a real result —
+ * a first full run reported 6/18 with all four REFUSAL and all four INJECTION cases "failing", none
+ * of which had actually executed. That is worse than not running it: it reports a passing rate for
+ * a suite that never ran.
+ *
+ * The gap is derived from the limit rather than guessed, with headroom for the per-case call count.
+ * A suite that takes several minutes is the correct trade for results that are real.
+ *
+ * Overridable so tests can pass 0: a fake provider has no rate limit, and real sleeps there would
+ * only make the suite slow enough to hit vitest's own timeout.
+ */
+const CALLS_PER_CASE = 3;
+const FREE_TIER_RPM = 15;
+const PACING_MS = Math.ceil((60_000 / FREE_TIER_RPM) * CALLS_PER_CASE);
+
+export const runEvalSuite = async (
+  cases: EvalCase[],
+  provider: ChatProvider,
+  deps: EvalRunDeps,
+  pacingMs: number = PACING_MS
+): Promise<EvalSummary> => {
   const results: EvalCaseResult[] = [];
-  for (const c of cases) {
+  for (const [index, c] of cases.entries()) {
+    if (index > 0 && pacingMs > 0) await sleep(pacingMs);
     results.push(await runCase(c, provider, deps));
   }
 

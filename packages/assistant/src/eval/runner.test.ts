@@ -68,7 +68,7 @@ describe('runEvalSuite', () => {
     };
     mockExecuteMetric.mockResolvedValue(metricResult);
 
-    const summary = await runEvalSuite(cases, provider, deps);
+    const summary = await runEvalSuite(cases, provider, deps, 0);
 
     expect(summary.total).toBe(1);
     expect(summary.passed).toBe(1);
@@ -88,7 +88,7 @@ describe('runEvalSuite', () => {
       [generateOk("I don't have enough information to answer that.")] // still narrates the honest empty-bundle case (matches narrate's real, established behavior for a legitimately-empty plan)
     );
 
-    const summary = await runEvalSuite(cases, provider, deps);
+    const summary = await runEvalSuite(cases, provider, deps, 0);
 
     expect(summary.passed).toBe(0);
     expect(summary.failed).toBe(1);
@@ -102,7 +102,7 @@ describe('runEvalSuite', () => {
     ];
     const provider = sequencedProvider([structuredOk({ intent: 'UNSUPPORTED', confidence: 0.9 })]);
 
-    const summary = await runEvalSuite(cases, provider, deps);
+    const summary = await runEvalSuite(cases, provider, deps, 0);
 
     expect(summary.passed).toBe(0);
     const intentCheck = summary.results[0]!.checks.find((c) => c.name === 'intent');
@@ -115,7 +115,7 @@ describe('runEvalSuite', () => {
     ];
     const provider = sequencedProvider([structuredOk({ intent: 'UNSUPPORTED', confidence: 0.9 })]);
 
-    const summary = await runEvalSuite(cases, provider, deps);
+    const summary = await runEvalSuite(cases, provider, deps, 0);
 
     expect(summary.passed).toBe(1);
     expect(summary.byCategory.REFUSAL).toEqual({ total: 1, passed: 1 });
@@ -144,7 +144,7 @@ describe('runEvalSuite', () => {
     };
     mockExecuteMetric.mockResolvedValue(metricResult);
 
-    const summary = await runEvalSuite(cases, provider, deps);
+    const summary = await runEvalSuite(cases, provider, deps, 0);
 
     expect(summary.passed).toBe(0);
     const refusedCheck = summary.results[0]!.checks.find((c) => c.name === 'refused');
@@ -169,7 +169,7 @@ describe('runEvalSuite', () => {
     const realMetricsModule = await vi.importActual<typeof import('@retailos/metrics')>('@retailos/metrics');
     mockExecuteMetric.mockRejectedValue(new realMetricsModule.MetricPermissionDeniedError('cogs_actual', 'financial:read'));
 
-    const summary = await runEvalSuite(cases, provider, deps);
+    const summary = await runEvalSuite(cases, provider, deps, 0);
 
     expect(summary.passed).toBe(1); // a real permission_denied gap was produced, because the OVERRIDDEN role/permissions genuinely lack financial:read — the suite-default auth (deps.auth) DOES have it, proving the override, not the default, was what executeSelections actually saw
     mockExecuteMetric.mockReset();
@@ -184,7 +184,7 @@ describe('runEvalSuite', () => {
       structuredOk({ selections: [] }), // a well-behaved model finds no real selection for the injected demand
     ]);
 
-    const summary = await runEvalSuite(cases, provider, deps);
+    const summary = await runEvalSuite(cases, provider, deps, 0);
 
     expect(summary.passed).toBe(1);
     expect(summary.byCategory.INJECTION).toEqual({ total: 1, passed: 1 });
@@ -200,7 +200,7 @@ describe('runEvalSuite', () => {
       generateStructured: vi.fn().mockResolvedValue({ provider: 'fake', modelVersion: 'fake-model', latencyMs: 1, error: '503 Service Unavailable', data: null }),
     };
 
-    const summary = await runEvalSuite(cases, provider, deps);
+    const summary = await runEvalSuite(cases, provider, deps, 0);
 
     expect(summary.passed).toBe(0);
     expect(summary.results[0]!.checks[0]!.name).toBe('pipeline');
@@ -231,7 +231,7 @@ describe('runEvalSuite', () => {
     };
     mockExecuteMetric.mockResolvedValue(metricResult);
 
-    const summary = await runEvalSuite(cases, provider, deps);
+    const summary = await runEvalSuite(cases, provider, deps, 0);
 
     expect(summary.total).toBe(2);
     expect(summary.byCategory.METRIC).toEqual({ total: 1, passed: 1 });

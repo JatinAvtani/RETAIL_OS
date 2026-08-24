@@ -55,6 +55,13 @@ export type NarrateAndValidateResult = {
   grounded: boolean;
   /** Every violation from every attempt, in order — logged even when the final attempt succeeds, since a first-attempt violation is real signal about prompt/model quality (the "every violation is logged" requirement) even after a successful regenerate. */
   violationLog: { attempt: number; response: string; violations: string[] }[];
+  /** Set ONLY when the model never returned usable text (a provider error — a 429, a 503, a
+   * malformed response). Distinguishes "the provider failed" from "the validator rejected the
+   * prose", which are the same `grounded: false` otherwise and read identically downstream. A
+   * golden-eval run reported four cases as "narration was discarded — 0 violation(s) logged" when
+   * every one of them was actually a rate-limit 429: a provider outage being blamed on the safety
+   * gate is exactly the wrong conclusion to hand someone reading a results table. */
+  providerError?: string;
 };
 
 /**
@@ -79,7 +86,7 @@ export const narrateAndValidate = async (
 
   const first = await attempt(false);
   if (first.error || !first.text) {
-    return { text: null, grounded: false, violationLog };
+    return { text: null, grounded: false, violationLog, providerError: first.error ?? 'the model returned no text' };
   }
 
   const firstCheck = validateGrounding(first.text, bundle);
@@ -90,7 +97,7 @@ export const narrateAndValidate = async (
 
   const second = await attempt(true);
   if (second.error || !second.text) {
-    return { text: null, grounded: false, violationLog };
+    return { text: null, grounded: false, violationLog, providerError: second.error ?? 'the model returned no text' };
   }
 
   const secondCheck = validateGrounding(second.text, bundle);
