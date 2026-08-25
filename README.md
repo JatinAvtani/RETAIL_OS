@@ -74,7 +74,7 @@ reconciliation sweep that catches missed webhooks without disturbing the increme
 CSV import with per-row content-hash idempotency, and a POS-item-to-menu-item mapping surface with
 fuzzy suggestions that a human always confirms.
 
-**Metrics & dashboards** — a registered catalog of ~60 business-number functions (sales, cost,
+**Metrics & dashboards** — a registered catalog of 67 business-number functions (sales, cost,
 margin and attribution, inventory, waste/shrinkage, purchasing, supplier performance, document
 health, anomaly detection) — every dashboard figure and every future AI answer reads through the
 same single code path, `executeMetric`, never a second ad-hoc query. Owner and manager dashboards
@@ -228,7 +228,13 @@ and the adjacent accepted case — before any code depends on them.
 The assistant carries its own golden evaluation set — metric-routing, honest-refusal, and
 prompt-injection cases that run through the real pipeline against the live model
 (`pnpm --filter @retailos/api eval`), because injection resistance is a claim about a model, not
-about code, and only a real run turns it into a measurement.
+about code, and only a real run says anything about it at all.
+
+Its pass rate is **not yet a quality metric, and is not quoted as one.** The runner does not
+distinguish a network failure from a real one, so a transient `fetch failed` is scored identically
+to a wrong answer. Model sampling was also unpinned until recently, which made scores move between
+runs with no code change. Temperature is now fixed at zero; separating infrastructure failure from
+logic failure is the remaining work before any number here means something.
 
 ---
 
