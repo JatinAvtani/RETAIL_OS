@@ -281,8 +281,13 @@ pnpm --filter @retailos/api exec tsx src/scripts/seed-demo-operations.mts    # P
 pnpm --filter @retailos/api exec tsx src/scripts/seed-demo-engagement.mts    # alerts, history
 ```
 
-Stop the worker before `seed-demo-invoices.mts` — it will otherwise pick up the extraction jobs and
-re-extract over the seeded rows.
+Run them in the order listed: each builds on the one before, and `seed-demo.mts` wipes the demo org
+before rebuilding it. Stop the worker before `seed-demo-invoices.mts` — it will otherwise pick up the
+extraction jobs and re-extract over the seeded rows.
+
+**Do not regenerate the corpus against a database already seeded from it.** Generated dates anchor to
+generation time, so a regenerated corpus describes a different dataset than the one already in the
+database, and the two can only be reconciled by re-running the whole seed.
 
 A three-outlet Bengaluru café chain: 180 days of history, ~50k sales transactions, ~455k stock
 movements, 75 GST tax invoices with real GSTIN/HSN/CGST-SGST across four distinct supplier layouts.

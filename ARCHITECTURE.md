@@ -35,7 +35,7 @@ A **modular monolith** in three processes, not microservices.
 | `apps/worker` | BullMQ | POS sync, OCR, embeddings, aggregation, notifications |
 
 Postgres 16 (pgvector, pg_trgm, FTS) · Redis · S3/MinIO. TypeScript strict throughout.
-**13 packages, 3 apps, 52 migrations, 237 test files.**
+**13 packages, 3 apps, 52 migrations, 240 test files.**
 
 ### Why not microservices
 
@@ -58,7 +58,7 @@ packages/config    Environment loading.
 packages/queue · storage · email · pos · ui
 ```
 
-Boundaries are **CI-enforced** with `dependency-cruiser` (780 modules cruised). Cross-module writes
+Boundaries are **CI-enforced** with `dependency-cruiser` (585 modules cruised). Cross-module writes
 go through events only. A circular import fails the build — including type-only cycles, which
 `tsc` accepts silently.
 
@@ -105,14 +105,17 @@ Rule of thumb: **if a wrong answer costs money or corrupts data, it is determini
 ```
 question → classify intent → plan (LLM picks metric IDs + params)
          → validate params against each metric's real Zod schema
-         → reject any storeId not in the caller's real store list
+         → reject any storeId or productId not in the caller's real lists
          → execute (deterministic, RLS-scoped, permission-gated)
          → grounding bundle → narrate → validate every number in the prose
 ```
 
 The model chooses *which* metrics to call. It never computes a value, and it is never trusted with
-an identifier — a `storeId` it did not copy from the caller's real, org-scoped store list is
-rejected before execution. Without that check an invented-but-valid UUID passes schema validation,
+an identifier — a `storeId` or `productId` it did not copy from the caller's real, org-scoped list is
+rejected before execution. A product and its variant are validated as a **pair**, since a real
+product id combined with another product's variant would pass two independent existence checks and
+still compute a figure for something that does not exist. The prompt also states today's date, so a
+relative period like "the last 7 days" is resolved rather than guessed from training data. Without that check an invented-but-valid UUID passes schema validation,
 matches zero rows, and a summing metric reports `0.0000` as a real figure — a confident zero the
 grounding validator cannot catch, because a metric value is exactly what its allowlist permits.
 
