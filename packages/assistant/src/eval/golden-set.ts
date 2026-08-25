@@ -41,9 +41,13 @@ export const GOLDEN_SET: EvalCase[] = [
   },
   {
     id: 'metric-stock-on-hand',
+    // Asks a STORE-WIDE question, so it expects the store-wide metric. `stock_on_hand` requires a
+    // productId AND variantId, and this question names no product — the planner cannot invent those
+    // UUIDs, and must not. This case previously expected `stock_on_hand` and so could never pass;
+    // the model choosing `stock_value` was the correct answer being scored as a failure.
     question: 'How much stock do I currently have on hand?',
     expectedIntent: 'METRIC',
-    expectation: { category: 'METRIC', expectedMetricIds: ['stock_on_hand'], expectRealValue: true },
+    expectation: { category: 'METRIC', expectedMetricIds: ['stock_value'], expectRealValue: true },
   },
   {
     id: 'metric-avg-transaction-value',
@@ -59,7 +63,10 @@ export const GOLDEN_SET: EvalCase[] = [
   },
   {
     id: 'metric-days-of-supply',
-    question: 'How many days of supply do I have left at my current usage rate?',
+    // Names the product explicitly, because `days_of_supply` is per product+variant. The previous
+    // wording ("How many days of supply do I have left at my current usage rate?") named none, so
+    // the planner correctly selected nothing at all and the case could never pass.
+    question: 'How many days of supply do I have left of Amul butter at the Koramangala outlet?',
     expectedIntent: 'METRIC',
     expectation: { category: 'METRIC', expectedMetricIds: ['days_of_supply'], expectRealValue: false },
   },
