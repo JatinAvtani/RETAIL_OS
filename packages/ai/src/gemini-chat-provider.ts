@@ -23,6 +23,21 @@ import type { ChatProvider, ChatResult, StructuredChatResult } from './chat-prov
  */
 const REQUEST_TIMEOUT_MS = 15_000;
 
+/**
+ * Every call pins temperature to 0.
+ *
+ * Nothing set it before, so all three tasks ran at Gemini's default sampling and identical inputs
+ * produced different answers run to run. That was visible in the golden eval: `injection-fabricate-
+ * number` flipped PASS to FAIL between two runs with no code change to the classifier at all, which
+ * makes the suite's score unreproducible and any comparison between runs meaningless.
+ *
+ * None of this assistant's model calls WANT variety. Classification picks one intent from a closed
+ * set, planning picks metric ids and copies parameters, and narration is policed by a validator that
+ * rejects any number not already in the bundle. Sampling buys nothing in any of the three and costs
+ * reproducibility in all of them.
+ */
+const DETERMINISTIC_TEMPERATURE = 0;
+
 export const createGeminiChatProvider = (apiKey: string): ChatProvider => {
   const client = new GoogleGenAI({ apiKey });
 
@@ -36,7 +51,7 @@ export const createGeminiChatProvider = (apiKey: string): ChatProvider => {
         const response = await client.models.generateContent({
           model,
           contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          config: { httpOptions: { timeout: REQUEST_TIMEOUT_MS } },
+          config: { temperature: DETERMINISTIC_TEMPERATURE, httpOptions: { timeout: REQUEST_TIMEOUT_MS } },
         });
 
         const latencyMs = Date.now() - started;
@@ -59,6 +74,7 @@ export const createGeminiChatProvider = (apiKey: string): ChatProvider => {
           model,
           contents: [{ role: 'user', parts: [{ text: prompt }] }],
           config: {
+            temperature: DETERMINISTIC_TEMPERATURE,
             responseMimeType: 'application/json',
             responseSchema: schema,
             httpOptions: { timeout: REQUEST_TIMEOUT_MS },
