@@ -36,6 +36,25 @@ describe('buildRefusal', () => {
     expect(buildRefusal(bundle, [], [], [])).toBeNull();
   });
 
+  it('a METRIC question the catalog cannot answer at all produces a real refusal, not silence', () => {
+    const bundle: GroundingBundle = { metrics: [], passages: [], entities: [] };
+
+    // "What is my customer lifetime value?" — the planner correctly selects NOTHING, so there is no
+    // denial, failure, or rejection to report. Without this the caller got an empty bundle and no
+    // explanation, which reads as "the number is zero" rather than "we do not compute that".
+    const refusal = buildRefusal(bundle, [], [], [], true);
+
+    expect(refusal).not.toBeNull();
+    expect(refusal?.fullyUnanswerable).toBe(true);
+    expect(refusal?.items[0]?.category).toBe('invalid_selection');
+    expect(refusal?.items[0]?.reason).toContain('No metric in the catalog computes this');
+  });
+
+  it('an empty bundle from a RETRIEVAL question still returns null — only a metric question refuses this way', () => {
+    const bundle: GroundingBundle = { metrics: [], passages: [], entities: [] };
+    expect(buildRefusal(bundle, [], [], [], false)).toBeNull();
+  });
+
   it('a fully-unknown bundle is fullyUnanswerable, with the real unknownReason and a matching remedy — the spec\'s own "no recipe" example', () => {
     const bundle: GroundingBundle = { metrics: [unknownMetric('The linked recipe has no fully-resolvable unit cost.')], passages: [], entities: [] };
 

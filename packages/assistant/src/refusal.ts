@@ -88,7 +88,11 @@ export const buildRefusal = (
   bundle: GroundingBundle,
   denied: DeniedSelection[],
   failed: FailedSelection[],
-  rejected: RejectedSelection[]
+  rejected: RejectedSelection[],
+  /** True when the question was classified as needing a metric. Lets an unanswerable METRIC
+   * question produce a real refusal without changing the empty-bundle contract for every other
+   * caller. */
+  expectedMetrics = false
 ): RefusalInfo | null => {
   const answeredCount = bundle.metrics.filter((m) => m.value !== 'unknown').length;
 
@@ -98,6 +102,28 @@ export const buildRefusal = (
     ...failed.map((f) => item(f.metricId, 'execution_failed', f.reason)),
     ...rejected.map((r) => item(r.metricId, 'invalid_selection', r.reason)),
   ];
+
+  // A METRIC question the planner could not map onto ANY catalog metric — asking for customer
+  // lifetime value, say, which this product does not compute. Nothing is denied, failed, or
+  // rejected because nothing was ever selected, so without this the caller gets a silently empty
+  // bundle and no explanation. Saying "there is no metric for this" is the honest answer; saying
+  // nothing invites the reader to assume the figure is zero or the data is missing.
+  //
+  // Gated on `expectedMetrics` rather than on emptiness alone: an empty bundle is also the NORMAL
+  // shape for a retrieval question that found no passages, and for a caller that deliberately
+  // requested nothing. Only the caller knows the question was meant to produce a metric.
+  if (expectedMetrics && items.length === 0 && bundle.metrics.length === 0 && bundle.passages.length === 0) {
+    return {
+      fullyUnanswerable: true,
+      items: [
+        item(
+          'none',
+          'invalid_selection',
+          'No metric in the catalog computes this, so there is no figure to report.'
+        ),
+      ],
+    };
+  }
 
   if (items.length === 0) {
     return null;
