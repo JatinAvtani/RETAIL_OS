@@ -88,6 +88,52 @@ describe('resolveStoreParams', () => {
   });
 });
 
+describe('resolveStoreParams — product params', () => {
+  const PRODUCT = '44444444-4444-4444-8444-444444444444';
+  const VARIANT = '55555555-5555-4555-8555-555555555555';
+  const productList = [{ id: PRODUCT, name: 'Amul butter', variantId: VARIANT }];
+  const productSelection = (params: Record<string, unknown>): ValidatedSelection => ({ metricId: 'days_of_supply', params });
+
+  it('passes through a real productId with its own variantId', () => {
+    const result = resolveStoreParams([productSelection({ storeId: KORAMANGALA, productId: PRODUCT, variantId: VARIANT })], stores, productList);
+
+    expect(result.rejected).toEqual([]);
+    expect(result.resolved).toHaveLength(1);
+  });
+
+  it('rejects a productId the caller cannot access', () => {
+    const result = resolveStoreParams([productSelection({ storeId: KORAMANGALA, productId: INVENTED })], stores, productList);
+
+    expect(result.resolved).toEqual([]);
+    expect(result.rejected[0]?.reason).toContain('not a product this account can access');
+  });
+
+  it("rejects a variantId belonging to a DIFFERENT product — two independent existence checks would both pass", () => {
+    const result = resolveStoreParams(
+      [productSelection({ storeId: KORAMANGALA, productId: PRODUCT, variantId: '66666666-6666-4666-8666-666666666666' })],
+      stores,
+      productList
+    );
+
+    expect(result.resolved).toEqual([]);
+    expect(result.rejected[0]?.reason).toContain('does not belong to product');
+  });
+
+  it('rejects a product-scoped selection when no product list is available, rather than executing it', () => {
+    const result = resolveStoreParams([productSelection({ storeId: KORAMANGALA, productId: PRODUCT })], stores, []);
+
+    expect(result.resolved).toEqual([]);
+    expect(result.rejected[0]?.reason).toContain('No product list is available');
+  });
+
+  it('leaves a metric with no product params untouched', () => {
+    const result = resolveStoreParams([selection({ storeId: KORAMANGALA })], stores, productList);
+
+    expect(result.rejected).toEqual([]);
+    expect(result.resolved).toHaveLength(1);
+  });
+});
+
 describe('applyDefaultStore', () => {
   it('fills an omitted storeId when there is exactly one accessible store — no ambiguity to resolve', () => {
     const result = applyDefaultStore({ from: '2026-08-01' }, [stores[0]!]);

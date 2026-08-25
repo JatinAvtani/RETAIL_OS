@@ -43,6 +43,22 @@ export type AccessibleStore = {
   name: string;
 };
 
+/**
+ * A product the planner may name, with the default variant a product-scoped metric also requires.
+ *
+ * `stock_on_hand` and `days_of_supply` take `productId` AND `variantId`, and nothing gave the
+ * planner either — no resolver metric existed and the prompt listed no products, so BOTH metrics
+ * were unreachable through the assistant no matter how a question was worded. Asking "how much
+ * stock do I have on hand" made the model fall back to the store-wide `stock_value`; asking about
+ * days of supply made it select nothing at all. Same shape as the storeId gap: the model needs the
+ * real id, and inventing one is forbidden.
+ */
+export type AccessibleProduct = {
+  id: string;
+  name: string;
+  variantId: string;
+};
+
 export type StoreResolution = {
   /** Selections whose `storeId` is real, accessible, and now explicitly present. Safe to execute. */
   resolved: ValidatedSelection[];
@@ -53,12 +69,35 @@ export type StoreResolution = {
 
 /** Mirrors each metric's own `storeId` param name. A metric with no `storeId` is org-scoped and passes through untouched. */
 const STORE_PARAM = 'storeId';
+const PRODUCT_PARAM = 'productId';
+const VARIANT_PARAM = 'variantId';
 
 const nameList = (stores: AccessibleStore[]): string => stores.map((s) => s.name).join(', ');
 
+/** Returns a rejection reason, or null when the selection's product params are real and consistent. */
+const checkProduct = (selection: ValidatedSelection, products: AccessibleProduct[]): string | null => {
+  const productId = selection.params[PRODUCT_PARAM];
+  if (productId === undefined) return null;
+  if (typeof productId !== 'string') return `'${PRODUCT_PARAM}' was not a string.`;
+
+  const product = products.find((p) => p.id === productId);
+  if (!product) {
+    return products.length === 0
+      ? 'No product list is available to this account, so a product-scoped metric cannot be computed.'
+      : `'${productId}' is not a product this account can access.`;
+  }
+
+  const variantId = selection.params[VARIANT_PARAM];
+  if (variantId !== undefined && variantId !== product.variantId) {
+    return `the variantId does not belong to product '${product.name}'.`;
+  }
+  return null;
+};
+
 export const resolveStoreParams = (
   selections: ValidatedSelection[],
-  accessibleStores: AccessibleStore[]
+  accessibleStores: AccessibleStore[],
+  accessibleProducts: AccessibleProduct[] = []
 ): StoreResolution => {
   const resolved: ValidatedSelection[] = [];
   const rejected: { metricId: string; reason: string }[] = [];
@@ -68,8 +107,13 @@ export const resolveStoreParams = (
   for (const selection of selections) {
     const raw = selection.params[STORE_PARAM];
 
-    // Org-scoped metric — nothing to resolve.
+    // Org-scoped metric — no store to resolve, but it may still carry product params.
     if (raw === undefined) {
+      const productCheck = checkProduct(selection, accessibleProducts);
+      if (productCheck !== null) {
+        rejected.push({ metricId: selection.metricId, reason: productCheck });
+        continue;
+      }
       resolved.push(selection);
       continue;
     }
@@ -80,6 +124,14 @@ export const resolveStoreParams = (
     }
 
     if (byId.has(raw)) {
+      // A product-scoped metric needs its productId/variantId checked the same way, and as a
+      // MATCHING PAIR: a real product id combined with another product's variant id would pass two
+      // independent existence checks and still compute a figure for a thing that does not exist.
+      const productCheck = checkProduct(selection, accessibleProducts);
+      if (productCheck !== null) {
+        rejected.push({ metricId: selection.metricId, reason: productCheck });
+        continue;
+      }
       resolved.push(selection);
       continue;
     }

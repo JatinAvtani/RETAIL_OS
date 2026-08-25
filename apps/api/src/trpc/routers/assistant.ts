@@ -4,6 +4,7 @@ import {
   ConversationRepository,
   MessageRepository,
   SearchRepository,
+  ProductRepository,
   StoreRepository,
 } from '@retailos/db';
 import { createGeminiChatProvider, modelForTask } from '@retailos/ai';
@@ -134,7 +135,11 @@ export const assistantRouter = router({
       .filter((store) => canAccessStore(ctx.session, store.id))
       .map((store) => ({ id: store.id, name: store.name }));
 
-    const outcome = await runPipeline(input.question, provider, modelForTask('CLASSIFY'), modelForTask('PLAN'), auth, metricCtx, accessibleStores);
+    // Products, for the metrics that need a productId/variantId pair. Same discipline as stores:
+    // the planner is GIVEN the real list and never trusted with an id it did not copy from it.
+    const accessibleProducts = await new ProductRepository(ctx.db, organizationId).findAllWithDefaultVariant();
+
+    const outcome = await runPipeline(input.question, provider, modelForTask('CLASSIFY'), modelForTask('PLAN'), auth, metricCtx, accessibleStores, accessibleProducts);
 
     if (outcome.kind === 'error') {
       // `outcome.reason` is the RAW provider error (a Gemini 429/503 JSON body, etc.) — diagnostic,
@@ -158,7 +163,7 @@ export const assistantRouter = router({
     }
 
     const { bundle, denied, failed, rejected } = outcome;
-    const refusal = buildRefusal(bundle, denied, failed, rejected);
+    const refusal = buildRefusal(bundle, denied, failed, rejected, outcome.intent === 'METRIC' || outcome.intent === 'HYBRID');
     const narrated = await narrateAndValidate(provider, bundle, denied, failed, rejected, modelForTask('NARRATE'));
 
     await messageRepository.create({

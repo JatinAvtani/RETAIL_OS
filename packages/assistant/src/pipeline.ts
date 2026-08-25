@@ -5,7 +5,7 @@ import type { MetricContext } from '@retailos/metrics';
 import type { SearchRepository } from '@retailos/db';
 import { planMetricSelections, type RejectedSelection } from './planning';
 import { executeSelections, type DeniedSelection, type FailedSelection } from './execute-selections';
-import { resolveStoreParams, type AccessibleStore } from './resolve-store-params';
+import { resolveStoreParams, type AccessibleProduct, type AccessibleStore } from './resolve-store-params';
 import { retrievePassages } from './retrieval';
 import type { GroundingBundle } from './grounding-bundle';
 
@@ -61,7 +61,10 @@ export const runPipeline = async (
   planModel: string,
   auth: AuthContext,
   ctx: MetricContext & { searchRepository?: SearchRepository; geminiApiKey?: string },
-  accessibleStores: AccessibleStore[]
+  accessibleStores: AccessibleStore[],
+  /** Real products of this org, so the planner can fill productId/variantId for the metrics that
+   * require them. Empty means those metrics stay unreachable, which is the honest outcome. */
+  products: AccessibleProduct[] = []
 ): Promise<PipelineOutcome> => {
   const classification = await classifyIntent(provider, question, classifyModel);
   if (classification.error) {
@@ -85,7 +88,7 @@ export const runPipeline = async (
   let rejected: RejectedSelection[] = [];
 
   if (intent === 'METRIC' || intent === 'HYBRID') {
-    const plan = await planMetricSelections(provider, question, planModel, accessibleStores);
+    const plan = await planMetricSelections(provider, question, planModel, accessibleStores, new Date(), products);
     if (plan.error) {
       return { kind: 'error', reason: plan.error };
     }
@@ -95,7 +98,7 @@ export const runPipeline = async (
     // rows under the org-scoped repositories, and a summing metric reports "0.0000" as a real
     // business number — an I7 violation the grounding validator cannot catch, because a metric
     // value is exactly what its allowlist permits.
-    const storeCheck = resolveStoreParams(plan.selections, accessibleStores);
+    const storeCheck = resolveStoreParams(plan.selections, accessibleStores, products);
     const execution = await executeSelections(
       storeCheck.resolved,
       auth,

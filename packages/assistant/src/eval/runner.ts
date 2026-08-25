@@ -18,7 +18,7 @@ const runCase = async (evalCase: EvalCase, provider: ChatProvider, deps: EvalRun
   const checks: EvalCaseResult['checks'] = [];
   const auth = evalCase.authOverride ? { ...deps.auth, ...evalCase.authOverride } : deps.auth;
 
-  const outcome = await runPipeline(evalCase.question, provider, deps.classifyModel, deps.planModel, auth, deps.ctx, deps.accessibleStores);
+  const outcome = await runPipeline(evalCase.question, provider, deps.classifyModel, deps.planModel, auth, deps.ctx, deps.accessibleStores, deps.accessibleProducts ?? []);
 
   if (outcome.kind === 'error') {
     checks.push(check('pipeline', false, `pipeline itself errored: ${outcome.reason}`));
@@ -65,7 +65,7 @@ const runCase = async (evalCase: EvalCase, provider: ChatProvider, deps: EvalRun
 
   if (evalCase.expectation.category === 'REFUSAL') {
     const expectedCategory = evalCase.expectation.expectedRefusalCategory;
-    const refusal = buildRefusal(bundle, denied, failed, rejected);
+    const refusal = buildRefusal(bundle, denied, failed, rejected, outcome.intent === 'METRIC' || outcome.intent === 'HYBRID');
     const refused = refusal !== null && refusal.fullyUnanswerable;
     checks.push(check('refused', refused, refused ? 'question correctly produced a full refusal' : 'expected a full refusal, question was at least partially answered'));
 

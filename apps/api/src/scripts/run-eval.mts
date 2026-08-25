@@ -14,7 +14,7 @@ import '@retailos/config/auto';
  * daily quota — a partial run stops with a clear per-case error rather than fabricating results):
  *   pnpm --filter @retailos/api eval
  */
-import { createDb, users, memberships, SearchRepository, MenuItemRepository, RecipeRepository, StoreRepository } from '@retailos/db';
+import { createDb, users, memberships, SearchRepository, MenuItemRepository, RecipeRepository, StoreRepository, ProductRepository } from '@retailos/db';
 import { createGeminiChatProvider, modelForTask } from '@retailos/ai';
 import { runEvalSuite, GOLDEN_SET, type EvalRunDeps } from '@retailos/assistant';
 import { permissionsForRole, type AuthContext } from '@retailos/authz';
@@ -70,8 +70,11 @@ const accessibleStores = (await new StoreRepository(db, demoUser.organizationId)
   name: store.name,
 }));
 
+const accessibleProducts = await new ProductRepository(db, demoUser.organizationId).findAllWithDefaultVariant();
+
 const deps: EvalRunDeps = {
   auth,
+  accessibleProducts,
   ctx: ctx as unknown as MetricContext,
   accessibleStores,
   classifyModel: modelForTask('CLASSIFY'),

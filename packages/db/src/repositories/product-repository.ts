@@ -28,6 +28,24 @@ export class ProductRepository extends TenantScopedRepository<typeof products> {
     );
   }
 
+  /**
+   * Each live product with its DEFAULT variant id, for the assistant's planner.
+   *
+   * `stock_on_hand` and `days_of_supply` require a productId AND variantId, and the planner has no
+   * way to resolve a product name to either — so without this list both metrics are unreachable
+   * through the assistant no matter how the question is worded. Returns the pair together so a
+   * caller cannot mix one product's id with another's variant.
+   */
+  async findAllWithDefaultVariant() {
+    return this.runScoped((db, scopedWhere) =>
+      db
+        .select({ id: products.id, name: products.name, variantId: productVariants.id })
+        .from(products)
+        .innerJoin(productVariants, and(eq(productVariants.productId, products.id), eq(productVariants.isDefault, true)))
+        .where(scopedWhere(isNull(products.deletedAt)))
+    );
+  }
+
   async findById(id: string) {
     const rows = await this.runScoped((db, scopedWhere) =>
       db

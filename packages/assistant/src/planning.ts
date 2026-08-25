@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { getMetric } from '@retailos/metrics';
 import { delimitUntrustedText, UNTRUSTED_DATA_INSTRUCTION, type ChatProvider } from '@retailos/ai';
 import { buildMetricToolSurface, type MetricToolDefinition } from './tool-surface';
-import { applyDefaultStore, type AccessibleStore } from './resolve-store-params';
+import { applyDefaultStore, type AccessibleProduct, type AccessibleStore } from './resolve-store-params';
 import type { RejectedSelection, ValidatedSelection } from './selection';
 
 // Re-exported so existing importers of these types from './planning' keep working; they are
@@ -81,7 +81,9 @@ const describeTool = (tool: MetricToolDefinition): string =>
 
 const describeStore = (store: AccessibleStore): string => `- ${store.id}: ${store.name}`;
 
-const buildPrompt = (question: string, tools: MetricToolDefinition[], accessibleStores: AccessibleStore[], today: Date): string =>
+const describeProduct = (p: AccessibleProduct): string => `- ${p.name}: productId=${p.id} variantId=${p.variantId}`;
+
+const buildPrompt = (question: string, tools: MetricToolDefinition[], accessibleStores: AccessibleStore[], today: Date, products: AccessibleProduct[]): string =>
   `You are planning how to answer a business question by selecting metric functions to call. You do NOT compute any number yourself — you only choose which metric(s) to call and with what parameters. A question may need one metric or several.
 
 Available metrics:
@@ -92,10 +94,17 @@ ${accessibleStores.length > 0 ? accessibleStores.map(describeStore).join('\n') :
 
 Today's date is ${today.toISOString().slice(0, 10)}. Resolve every relative period against it: "the last 7 days" ends today, "last month" is the calendar month before this one.
 
+${
+  products.length > 0
+    ? `Products, for any metric needing productId and variantId (use these EXACT ids):\n${products.map(describeProduct).join('\n')}`
+    : 'No product list is available, so do not select a metric that requires a productId.'
+}
+
 Rules:
 - Only select metricId values from the list above. Never invent one.
 - Provide every parameter each selected metric's own schema requires.
 - A storeId MUST be copied exactly from the store list above. Never invent, guess, or construct a storeId — if the question names a store, use that store's id; if it names none and there is exactly one store, use it.
+- A productId and variantId MUST likewise be copied exactly from the product list above, as a matching pair from the SAME line. If the question names no product and a metric requires one, do not select that metric — prefer a store-wide metric if one fits, otherwise select nothing.
 - Date parameters MUST be resolved against today's date given above. Never guess a year or month from memory.
 - If the question genuinely doesn't need any of these metrics, return an empty selections array — do not force a selection that doesn't fit.
 - ${UNTRUSTED_DATA_INSTRUCTION}
@@ -165,10 +174,11 @@ export const planMetricSelections = async (
   // has no idea what day it is: without this, "the last 7 days" resolved to a window six months
   // stale, which then reported a real 0.00 over a period with no rows — the same I7 failure the
   // storeId check closes, reached through the dates instead of the store.
-  today: Date = new Date()
+  today: Date = new Date(),
+  products: AccessibleProduct[] = []
 ): Promise<PlanResult> => {
   const tools = buildMetricToolSurface();
-  const result = await provider.generateStructured(buildPrompt(question, tools, accessibleStores, today), model, PLAN_RESPONSE_SCHEMA);
+  const result = await provider.generateStructured(buildPrompt(question, tools, accessibleStores, today, products), model, PLAN_RESPONSE_SCHEMA);
 
   if (result.error) {
     return { selections: [], rejected: [], error: result.error };

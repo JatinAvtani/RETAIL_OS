@@ -1,5 +1,5 @@
 import type { AuthContext } from '@retailos/authz';
-import type { AccessibleStore } from '../resolve-store-params';
+import type { AccessibleProduct, AccessibleStore } from '../resolve-store-params';
 import type { MetricContext } from '@retailos/metrics';
 import type { IntentType } from '@retailos/ai';
 
@@ -117,4 +117,7 @@ export type EvalRunDeps = {
    * resolution production does — a suite that skipped it would pass while the live assistant
    * fabricated a storeId, which is exactly the gap this list closes. */
   accessibleStores: AccessibleStore[];
+  /** Real products of the org this suite runs against — without them the product-scoped metrics are
+   * unreachable and their cases can never pass, which is exactly how they failed before. */
+  accessibleProducts?: AccessibleProduct[];
 };
