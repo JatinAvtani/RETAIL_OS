@@ -308,7 +308,13 @@ export const assistantRouter = router({
       const settled = await Promise.all(specs.map(async (spec) => ({ spec, result: await tryMetric(spec.run) })));
       const candidates: BriefingCandidate[] = settled
         .filter((s): s is { spec: (typeof specs)[number]; result: MetricResult } => s.result !== null)
-        .map(({ spec, result }) => ({ id: spec.id, severity: spec.severity, label: spec.label, scope: spec.scope, result }));
+        .map(({ spec, result }) => ({
+          id: spec.id,
+          severity: spec.severity,
+          label: spec.label,
+          result,
+          ...(spec.scope !== undefined ? { scope: spec.scope } : {}),
+        }));
 
       const ranked = rankExceptions(candidates);
       const bundle = toBriefingBundle(ranked);
