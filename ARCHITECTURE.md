@@ -32,10 +32,10 @@ A **modular monolith** in three processes, not microservices.
 |---|---|---|
 | `apps/web` | Next.js 15 (App Router) | SSR dashboards |
 | `apps/api` | Fastify + tRPC | All reads and writes |
-| `apps/worker` | BullMQ | POS sync, OCR, embeddings, aggregation, notifications |
+| `apps/worker` | BullMQ (9 workers) | POS sync, OCR, embeddings, aggregation, notifications, briefings |
 
 Postgres 16 (pgvector, pg_trgm, FTS) · Redis · S3/MinIO. TypeScript strict throughout.
-**13 packages, 3 apps, 52 migrations, 240 test files.**
+**14 packages, 3 apps, 52 migrations, 243 test files.**
 
 ### Why not microservices
 
@@ -55,10 +55,13 @@ packages/assistant Classify → plan → execute → ground → narrate.
 packages/authz     Roles, permissions, AuthContext.
 packages/session   Redis-backed opaque tokens, revocation, permission-change invalidation.
 packages/config    Environment loading.
+packages/integrations  Vendor sync ORCHESTRATION (composes packages/db + packages/pos) — shared
+                        between apps/api (manual trigger, webhook) and apps/worker (the real job),
+                        since apps cannot import each other.
 packages/queue · storage · email · pos · ui
 ```
 
-Boundaries are **CI-enforced** with `dependency-cruiser` (585 modules cruised). Cross-module writes
+Boundaries are **CI-enforced** with `dependency-cruiser` (589 modules cruised). Cross-module writes
 go through events only. A circular import fails the build — including type-only cycles, which
 `tsc` accepts silently.
 
@@ -135,7 +138,7 @@ convention: a superuser **silently bypasses RLS regardless of ENABLE/FORCE**, so
 would turn every policy into decoration. CI sets `APP_DATABASE_URL` to the scoped role for exactly
 this reason.
 
-A cross-tenant merge-gate suite covers **101 registered procedures**, asserting each denies another
+A cross-tenant merge-gate suite covers **102 registered procedures**, asserting each denies another
 tenant's resource while still reaching a genuine success on its own — the own-resource half matters
 as much as the denial, because a procedure that 404s for everyone would pass a denial-only test.
 
@@ -174,6 +177,46 @@ FEFO never over-allocates a lot, margin components sum exactly to the total.
 Concurrency bugs are proven against real Postgres before being fixed — two sessions each drawing 8
 from a lot of 10 both succeeded and left it at **−6.000000** until `FOR UPDATE` plus a quantity
 guard was added.
+
+---
+
+## Razorpay-native sources
+
+No Razorpay integration is built or planned for this submission — Open Track asks for "a real
+problem, a working product, meaningful use of AI, and evidence that it creates value," not a vendor
+integration. This section maps Razorpay's own API surface onto the canonical model above, without
+writing a line of adapter code, to show the design already generalizes to a payments-first data
+source the same way it already generalizes across Square (a full working adapter, `packages/pos`)
+and manual CSV upload.
+
+| Razorpay object | Real fields (documented) | Maps to |
+|---|---|---|
+| **Items** (`/items`) | `name`, `amount`, `description` — no confirmed SKU/HSN field | `pos_items`, `mapping_status: 'UNMAPPED'` — same as a fresh Square catalog sync |
+| **Invoice `line_items`** (`/invoices`) | `name`, `amount`, `quantity` — a real per-line array, up to 50 lines | `sales_transaction_lines` — the one Razorpay object with genuine item-level detail |
+| **Payment** (`/payments`) | `amount`, `currency`, `method`, `status`, `order_id`; `description`/`notes` are free text, **no item-level breakdown at all** | `unmapped_sales` — quarantined by design, not degraded to a guess |
+
+The Payment row is the interesting case, not the easy one. A UPI QR scan or a card-present payment
+carries an amount and nothing else — no line items, no product reference. Feeding it through the
+same pipeline as an itemized Invoice would either invent consumption for a sale with no known
+composition, or silently drop real revenue. Neither is acceptable under I7 ("missing data degrades
+to unknown, never to zero or a guess"): an amount-only Payment becomes a real `sales_transactions`
+row with genuine revenue, and its lines land in `unmapped_sales` exactly like an unrecognized POS
+SKU today — visible on the completeness tile, not silently absorbed into COGS. **This is the same
+rule the rest of the system already lives by, applied to a data source that happens to be
+Razorpay's rather than Square's — nothing about the architecture changes to accommodate it.**
+
+**Why not build against the Razorpay MCP server directly?** It would hand the assistant raw
+payment rows to reason over — exactly the boundary I1/I2 exist to hold. The whole point of the
+metric catalog is that a business number has exactly one path to existing: a registered function,
+computed deterministically, cited by id. A tool that lets the model read a table and narrate over
+it collapses that path back to "the LLM computed something," which is the one failure mode this
+architecture is built to make structurally impossible, not just discouraged.
+
+**Why not integrate Razorpay POS instead of a payments API?** It is a device SDK issuing
+POS-team-scoped keys with dashboard-only CSV export — not a merchant-pull API a backend service can
+call on a schedule the way `syncSquareOrders`/`syncSquareCatalog` do today. The ingestion model this
+system is built around (a scheduled pull plus a webhook, both idempotent, both retriable) doesn't
+have an equivalent surface to attach to there.
 
 ---
 
