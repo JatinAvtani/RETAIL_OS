@@ -34,6 +34,7 @@ const EVENT_TYPE_BY_TRANSITION: Record<PurchaseOrderEvent, string> = {
   RECEIVE_PARTIAL: 'po.partially_received',
   RECEIVE_FULL: 'po.received',
   CANCEL: 'po.cancelled',
+  CLOSE_SHORT: 'po.closed_short',
 };
 
 export type { PurchaseOrderStatus, PurchaseOrderEvent };
@@ -453,6 +454,12 @@ export class PurchaseOrderRepository extends TenantScopedRepository<typeof purch
         eventColumns.cancelledAt = now;
         if (actorUserId !== undefined) eventColumns.cancelledByUserId = actorUserId;
         if (reason !== undefined) eventColumns.cancellationReason = reason;
+      } else if (event === 'CLOSE_SHORT') {
+        // No dedicated actor/reason columns exist for this event (matching RECEIVE_PARTIAL/
+        // RECEIVE_FULL's own precedent below) — the outbox event payload and audit log (both
+        // written unconditionally further down) already carry actorUserId/reason, so "who closed
+        // this short and why" stays answerable without a schema change for a genuinely rare action.
+        eventColumns.closedAt = now;
       }
 
       const result = await db

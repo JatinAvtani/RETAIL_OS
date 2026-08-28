@@ -187,9 +187,15 @@ importers:
       '@retailos/email':
         specifier: workspace:*
         version: link:../../packages/email
+      '@retailos/integrations':
+        specifier: workspace:*
+        version: link:../../packages/integrations
       '@retailos/metrics':
         specifier: workspace:*
         version: link:../../packages/metrics
+      '@retailos/pos':
+        specifier: workspace:*
+        version: link:../../packages/pos
       '@retailos/queue':
         specifier: workspace:*
         version: link:../../packages/queue
@@ -366,6 +372,34 @@ importers:
         version: 2.1.9(@types/node@22.20.1)(lightningcss@1.32.0)
 
   packages/email:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.1
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)(lightningcss@1.32.0)
+
+  packages/integrations:
+    dependencies:
+      '@retailos/db':
+        specifier: workspace:*
+        version: link:../db
+      '@retailos/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@retailos/pos':
+        specifier: workspace:*
+        version: link:../pos
+      decimal.js:
+        specifier: ^10.4.3
+        version: 10.6.0
+      drizzle-orm:
+        specifier: ^0.36.4
+        version: 0.36.4(@types/react@19.2.18)(postgres@3.4.9)(react@19.2.8)
     devDependencies:
       '@types/node':
         specifier: ^22.10.2

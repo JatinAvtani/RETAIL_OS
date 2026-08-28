@@ -6,11 +6,22 @@
  *                         reject                                 receive(partial)
  *                            v                                          v
  *                      DRAFT/CANCELLED                        PARTIALLY_RECEIVED
- *                                                                        |
- *                                                                   receive(rest)
- *                                                                        v
- *                                                                    RECEIVED --> CLOSED
+ *                                                                    |       |
+ *                                                          receive(rest)  close_short
+ *                                                                    v       v
+ *                                                                RECEIVED  CLOSED
+ *                                                                    |
+ *                                                                 close
+ *                                                                    v
+ *                                                                CLOSED
  *   (CANCELLED reachable from DRAFT, PENDING_APPROVAL, APPROVED, SENT)
+ *
+ * `PARTIALLY_RECEIVED --close_short--> CLOSED` is an addition beyond the design's original literal
+ * diagram, not a spec deviation to the RECEIVE/CANCEL semantics: the design showed
+ * `RECEIVED --> CLOSED` but drew no exit at all from `PARTIALLY_RECEIVED` other than receiving the
+ * rest — meaning a supplier who short-ships and never delivers the remaining balance (the single
+ * most common real purchasing outcome) left the PO stuck in `PARTIALLY_RECEIVED` forever, the one
+ * state with no way out. `CLOSE_SHORT` is deliberately NOT `CANCEL` — see that field's own comment.
  *
  * A pure function, not scattered `if (status ===...)` checks in repository/route code — the same
  * discipline `decideDocumentRouting` (packages/domain/src/documents/routing.ts) established: an
@@ -29,7 +40,7 @@ export type PurchaseOrderStatus =
   | 'CLOSED'
   | 'CANCELLED';
 
-export type PurchaseOrderEvent = 'SUBMIT' | 'APPROVE' | 'REJECT' | 'SEND' | 'RECEIVE_PARTIAL' | 'RECEIVE_FULL' | 'CANCEL';
+export type PurchaseOrderEvent = 'SUBMIT' | 'APPROVE' | 'REJECT' | 'SEND' | 'RECEIVE_PARTIAL' | 'RECEIVE_FULL' | 'CANCEL' | 'CLOSE_SHORT';
 
 export type PoTransitionResult =
   | { readonly allowed: true; readonly nextStatus: PurchaseOrderStatus }
@@ -64,6 +75,16 @@ const TRANSITIONS: Record<PurchaseOrderStatus, Partial<Record<PurchaseOrderEvent
   PARTIALLY_RECEIVED: {
     RECEIVE_PARTIAL: 'PARTIALLY_RECEIVED',
     RECEIVE_FULL: 'RECEIVED',
+    // Deliberately NOT `CANCEL: 'CANCELLED'` — real goods have already arrived and been posted as
+    // real stock via RECEIVE_PARTIAL, so "cancelled" would misdescribe an order that partly,
+    // genuinely happened (this is the existing, deliberate reasoning the diagram/tests already
+    // encode: "once physical goods have arrived, cancelling the order is meaningless"). But the
+    // most common real purchasing outcome — a supplier short-ships and never delivers the
+    // remaining balance — used to leave a PO stuck HERE permanently: every other pre-terminal
+    // state has SOME exit, this one had none, with no legal transition out short of a manual DB
+    // fix. CLOSE_SHORT is a real, honestly-named exit: "stop expecting the rest, keep what
+    // arrived" — administratively closed, not cancelled.
+    CLOSE_SHORT: 'CLOSED',
   },
   RECEIVED: {},
   CLOSED: {},

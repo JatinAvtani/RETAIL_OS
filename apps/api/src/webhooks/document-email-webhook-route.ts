@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { FastifyInstance, FastifyPluginCallback } from 'fastify';
 import { DocumentEmailIntakeRepository, DocumentRepository, StoreRepository, SupplierRepository } from '@retailos/db';
-import { extractOrganizationSlugFromRecipient, parsePostmarkInboundPayload, PostmarkParseError, verifyPostmarkBasicAuth } from '@retailos/email';
+import { extractOrganizationSlugFromRecipient, parsePostmarkInboundPayload, PostmarkParseError, senderAuthenticationPassed, verifyPostmarkBasicAuth } from '@retailos/email';
 import { buildEmailQuarantineAttachmentKey, documentFormatToMimeType, ensureBucketExists, putObjectBytes, validateDocumentUpload } from '@retailos/storage';
 import { classifyDocument } from '@retailos/ai';
 import { enqueueExtractionJob } from '@retailos/queue';
@@ -120,8 +120,12 @@ export const registerDocumentEmailWebhookRoute: FastifyPluginCallback = (app: Fa
     const suppliers = await supplierRepository.findAll();
     const knownSenderEmails = new Set(suppliers.flatMap((s) => extractSupplierContactEmails(s.contacts)));
     const isKnownSender = knownSenderEmails.has(senderEmail);
+    // The allowlist match alone only proves the forgeable `From` header claims a known address — a
+    // spoofed From that clears this check must still not reach AUTO_APPROVED with no human (I9).
+    // DKIM is the one signal Postmark's payload actually authenticates.
+    const isAuthenticated = senderAuthenticationPassed(parsed.Headers);
 
-    if (!isKnownSender) {
+    if (!isKnownSender || !isAuthenticated) {
       const { id: intakeId } = await intakeRepository.record({
         organizationId: organization.id,
         status: 'QUARANTINED_UNKNOWN_SENDER',

@@ -72,9 +72,21 @@ export const executeSelections = async (
       if (e instanceof MetricPermissionDeniedError) {
         denied.push({ metricId, reason: e.message });
       } else if (e instanceof UnknownMetricError) {
+        // A designed, safe error whose message is just "no metric with id X" — nothing
+        // data-derived, so it's fine to relay verbatim (unlike the branch below).
         failed.push({ metricId, reason: e.message });
       } else {
-        failed.push({ metricId, reason: (e as Error).message });
+        // An UNEXPECTED error — could be a raw Postgres driver error carrying SQL text, column
+        // names, or param values. `FailedSelection.reason` is prose the model is explicitly
+        // ALLOWED to relay to the user verbatim (narration.ts's own formatGaps), so putting a raw
+        // exception message here would leak internals through the assistant. It also risks an
+        // outage: if the model echoes a number from that leaked message, the grounding validator
+        // has no allowlist entry for it (denied/failed reason numbers are deliberately excluded —
+        // validate-grounding.ts's own doc comment) and discards the whole narration. Log the real
+        // error server-side where an operator can see it; the user gets a stable, honest,
+        // non-leaking phrase instead.
+        console.error(`executeSelections: metric '${metricId}' failed with an unexpected error`, e);
+        failed.push({ metricId, reason: 'An internal error occurred while computing this.' });
       }
     }
   }

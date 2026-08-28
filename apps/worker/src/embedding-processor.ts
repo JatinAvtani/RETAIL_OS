@@ -74,18 +74,29 @@ export const createEmbeddingProcessor = (config: {
 
     const chunks = chunkDocument(extraction.fields as ExtractedFields, (extraction.lines as ExtractedLine[]) ?? []);
     if (chunks.length > 0) {
-      // Each chunk's embed call is independently fault-tolerant — one bad chunk (a transient
-      // provider error) must not discard every OTHER chunk that embedded successfully; a
-      // document with 9 of 10 real chunk embeddings is strictly more useful to retrieval than
-      // zero, matching upsertChunks' own "the caller decides the full set to write" contract.
+      // Each chunk's embed call is independently attempted — one bad chunk (a transient provider
+      // error) must not prevent every OTHER chunk from being embedded in this same pass. But
+      // `upsertChunks` below is delete-then-insert-ALL (see its own doc comment) — a PARTIAL
+      // failure would silently replace a complete prior chunk set with a smaller one, under-indexing
+      // the document with no signal anywhere. So any failure here must fail the whole job, not just
+      // skip the bad chunk: BullMQ's `attempts: 3` (embedding-queue.ts) then retries the full
+      // document, which is idempotent (re-embeds everything) and can genuinely succeed on retry for
+      // a transient provider error.
       const embeddedChunks: { chunkKey: string; chunkType: 'header' | 'line_item'; order: number; model: string; sourceText: string; values: number[] }[] = [];
+      const failedChunkKeys: string[] = [];
       for (const chunk of chunks) {
         try {
           const embedding = await embed(config.geminiApiKey!, chunk.text);
           embeddedChunks.push({ chunkKey: chunk.chunkKey, chunkType: chunk.chunkType, order: chunk.order, model: embedding.model, sourceText: chunk.text, values: embedding.values });
-        } catch {
-          // A real provider failure for this one chunk — skip it, never a fabricated embedding.
+        } catch (error) {
+          failedChunkKeys.push(chunk.chunkKey);
+          console.error(`Embedding job: chunk ${chunk.chunkKey} failed for document ${documentId}`, error);
         }
+      }
+      if (failedChunkKeys.length > 0) {
+        throw new Error(
+          `Embedding job for document ${documentId}: ${failedChunkKeys.length}/${chunks.length} chunk(s) failed (${failedChunkKeys.join(', ')}) — not writing a partial chunk set.`
+        );
       }
       if (embeddedChunks.length > 0) {
         const chunkRepository = new DocumentChunkEmbeddingRepository(db, organizationId);

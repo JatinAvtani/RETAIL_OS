@@ -433,6 +433,58 @@ describe('extraction processor', () => {
     await adminDb.delete(suppliers).where(eq(suppliers.id, supplierId));
   });
 
+  it('an extracted supplier name that resolves to zero known suppliers produces PRICE_CHECK_UNAVAILABLE, not a silent skip', async () => {
+    documentId = await seedDocument();
+    const unresolvedSupplierProvider: ExtractionProvider = {
+      name: 'fake-unresolved-supplier',
+      async extract(): Promise<ExtractionResult> {
+        return {
+          provider: 'fake-unresolved-supplier',
+          modelVersion: 'fake-v1',
+          latencyMs: 1,
+          error: null,
+          fields: {
+            // No supplier with this name exists in the org at all — findByExactName returns null,
+            // and the price-anomaly gate must say so rather than silently producing zero issues.
+            supplier: { value: 'A Supplier Name That Was Never Registered', confidence: 0.9 },
+            documentNumber: { value: 'INV-UNRESOLVED', confidence: 0.9 },
+            documentDate: { value: '2026-01-01', confidence: 0.9 },
+            currency: { value: 'USD', confidence: 1 },
+            subtotal: { value: '10.00', confidence: 0.9 },
+            tax: { value: '0', confidence: 0.9 },
+            discount: { value: null, confidence: null },
+            total: { value: '10.00', confidence: 0.9 },
+          },
+          lines: [
+            {
+              sku: { value: 'SOME-SKU', confidence: 0.9 },
+              description: { value: 'Some Widget', confidence: 0.9 },
+              quantity: { value: '1', confidence: 0.9 },
+              unit: { value: 'ea', confidence: 0.9 },
+              unitPrice: { value: '10.00', confidence: 0.9 },
+              lineTotal: { value: '10.00', confidence: 0.9 },
+            },
+          ],
+          overallConfidence: 0.9,
+        };
+      },
+    };
+
+    const processor = createExtractionProcessor({
+      databaseUrl: APP_CONNECTION_STRING,
+      geminiApiKey: 'unused-because-provider-is-injected',
+      storage: { endpoint: process.env.S3_ENDPOINT ?? 'http://localhost:9000', accessKeyId: 'minioadmin', secretAccessKey: 'minioadmin', bucket: BUCKET },
+      provider: unresolvedSupplierProvider,
+    });
+    await processor(asJob({ documentId, organizationId, storageKey: 'test-invoice.pdf', mimeType: 'application/pdf' }));
+
+    const [extraction] = await adminDb.select().from(documentExtractions).where(eq(documentExtractions.documentId, documentId));
+    const validation = extraction?.validation as { issues: { code: string; severity: string }[]; canAutoApprove: boolean };
+    const unavailableIssue = validation.issues.find((issue) => issue.code === 'PRICE_CHECK_UNAVAILABLE');
+    expect(unavailableIssue).toBeDefined();
+    expect(unavailableIssue?.severity).toBe('WARN');
+  });
+
   it('with no provider configured (no API key, no injected provider), the document is left at PROCESSING and no extraction row is created', async () => {
     documentId = await seedDocument();
 

@@ -9,12 +9,14 @@ import {
   NOTIFICATION_DELIVERY_QUEUE_NAME,
   BRIEFING_QUEUE_NAME,
   BRIEFING_SCHEDULE_POLL_QUEUE_NAME,
+  SQUARE_SYNC_QUEUE_NAME,
   type ExtractionJobData,
   type FactAggregationJobData,
   type EmbeddingJobData,
   type RelayJobData,
   type NotificationDeliveryJobData,
   type BriefingJobData,
+  type SquareSyncJobData,
 } from '@retailos/queue';
 import { createMockNotificationEmailSender } from '@retailos/email';
 import { createExtractionProcessor } from './extraction-processor';
@@ -25,6 +27,7 @@ import { createRuleEvaluationProcessor } from './rule-evaluation-processor';
 import { createNotificationDeliveryProcessor } from './notification-delivery-processor';
 import { createBriefingSchedulePollProcessor } from './briefing-schedule-poll-processor';
 import { createBriefingProcessor } from './briefing-processor';
+import { createSquareSyncProcessor } from './square-sync-processor';
 
 /**
  * Factory, not a side-effecting module — mirrors `apps/api`'s `server.ts`/`start.ts` split so this
@@ -151,4 +154,17 @@ export const buildBriefingWorker = (config: { redisUrl: string; databaseUrl: str
   const processor = createBriefingProcessor({ databaseUrl: config.databaseUrl, redisUrl: config.redisUrl, geminiApiKey: config.geminiApiKey });
 
   return new Worker<BriefingJobData>(BRIEFING_QUEUE_NAME, processor, { connection, concurrency: 2 });
+};
+
+/**
+ * The ninth real `Worker` in this process — consumes the Square sync job (`square-sync-queue.ts`),
+ * moved off the request path from both the webhook route and the two manual-trigger tRPC
+ * mutations. Concurrency 2, matching the extraction worker's own reasoning: a real, external,
+ * rate-limited vendor API call, not a predictable local computation.
+ */
+export const buildSquareSyncWorker = (config: { redisUrl: string; databaseUrl: string }): Worker<SquareSyncJobData> => {
+  const connection = createQueueRedisConnection(config.redisUrl);
+  const processor = createSquareSyncProcessor({ databaseUrl: config.databaseUrl });
+
+  return new Worker<SquareSyncJobData>(SQUARE_SYNC_QUEUE_NAME, processor, { connection, concurrency: 2 });
 };

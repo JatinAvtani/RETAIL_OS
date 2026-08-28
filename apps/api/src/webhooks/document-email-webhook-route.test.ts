@@ -17,11 +17,20 @@ const basicAuthHeader = `Basic ${Buffer.from(`${USERNAME}:${PASSWORD}`).toString
 
 const REAL_PDF_BASE64 = Buffer.from('%PDF-1.4\n%%EOF').toString('base64');
 
-const buildPayload = (overrides: Partial<{ recipientEmail: string; senderEmail: string; senderName: string; attachments: unknown[] }> = {}) => ({
+const DKIM_PASS_HEADERS = [{ Name: 'X-Spam-Tests', Value: 'DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,SPF_PASS' }];
+const DKIM_FAIL_HEADERS = [{ Name: 'X-Spam-Tests', Value: 'SPF_PASS' }];
+
+const buildPayload = (
+  overrides: Partial<{ recipientEmail: string; senderEmail: string; senderName: string; attachments: unknown[]; headers: unknown[] }> = {}
+) => ({
   FromFull: { Email: overrides.senderEmail ?? 'billing@realsupplier.example', Name: overrides.senderName ?? 'Real Supplier', MailboxHash: '' },
   ToFull: [{ Email: overrides.recipientEmail ?? 'invoices@replace-me.retailos.app', Name: '', MailboxHash: '' }],
   Subject: 'Invoice #1',
   Attachments: overrides.attachments ?? [{ Name: 'invoice.pdf', Content: REAL_PDF_BASE64, ContentType: 'application/pdf', ContentLength: 15 }],
+  // Defaults to a passing DKIM verdict so every existing "accepted sender" test still represents a
+  // genuinely authenticated message — a test that only forged the allowlisted From address would no
+  // longer prove what it claims to prove now that authentication is also required.
+  Headers: overrides.headers ?? DKIM_PASS_HEADERS,
 });
 
 /**
@@ -156,6 +165,48 @@ describe('POST /webhooks/inbound-email', () => {
 
     const attachmentRows = await db.select().from(documentEmailIntakeAttachments).where(eq(documentEmailIntakeAttachments.intakeId, intakeRows[0]!.id));
     expect(attachmentRows).toHaveLength(1);
+  });
+
+  it('quarantines a known-sender email that fails DKIM — a forged From header must not reach AUTO_APPROVED', async () => {
+    const { organizationId, slug } = await setUpOrgWithSupplier('billing@realsupplier.example');
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/webhooks/inbound-email',
+      headers: { authorization: basicAuthHeader },
+      payload: buildPayload({
+        recipientEmail: `invoices@${slug}.retailos.app`,
+        senderEmail: 'billing@realsupplier.example', // on the allowlist — the forged half of the attack
+        headers: DKIM_FAIL_HEADERS, // but DKIM never validated — the actual signal that should block it
+      }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ received: true, quarantined: true });
+
+    const intakeRows = await db.select().from(documentEmailIntake).where(eq(documentEmailIntake.organizationId, organizationId));
+    expect(intakeRows).toHaveLength(1);
+    expect(intakeRows[0]?.status).toBe('QUARANTINED_UNKNOWN_SENDER');
+
+    const documentRows = await db.select().from(documents).where(eq(documents.organizationId, organizationId));
+    expect(documentRows).toHaveLength(0);
+  });
+
+  it('quarantines a known-sender email with no X-Spam-Tests header at all — absence of a signal is not a pass', async () => {
+    const { organizationId, slug } = await setUpOrgWithSupplier('billing@realsupplier.example');
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/webhooks/inbound-email',
+      headers: { authorization: basicAuthHeader },
+      payload: buildPayload({ recipientEmail: `invoices@${slug}.retailos.app`, senderEmail: 'billing@realsupplier.example', headers: [] }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ received: true, quarantined: true });
+
+    const documentRows = await db.select().from(documents).where(eq(documents.organizationId, organizationId));
+    expect(documentRows).toHaveLength(0);
   });
 
   it('accepts an email from a sender IN the org\'s supplier contacts and creates a real documents row', async () => {

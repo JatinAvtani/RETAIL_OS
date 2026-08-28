@@ -32,6 +32,7 @@ const emptyLine = (): RawLine => ({
 const baseContext = (overrides: Partial<ValidationContext> = {}): ValidationContext => ({
   duplicateCandidates: [],
   trailingPricesByLineIndex: new Map(),
+  supplierResolved: true,
   today: new Date('2026-08-07T00:00:00Z'),
   ...overrides,
 });
@@ -233,6 +234,34 @@ describe('validateExtraction — price anomaly (PRICE_ANOMALY)', () => {
     });
     const result = validateExtraction(emptyFields(), [line], context);
     expect(result.issues).toEqual([expect.objectContaining({ code: 'PRICE_ANOMALY' })]);
+  });
+});
+
+describe('validateExtraction — price check unavailable (PRICE_CHECK_UNAVAILABLE)', () => {
+  it('WARNs, per line with a SKU, when the supplier never resolved — the gate did not run, this is not a pass', () => {
+    const lineWithSku = { ...emptyLine(), sku: field('SKU-1'), unitPrice: field('45.00') };
+    const lineWithoutSku = { ...emptyLine(), unitPrice: field('10.00') }; // no SKU — nothing to check either way, no issue expected for it
+    const context = baseContext({ supplierResolved: false });
+
+    const result = validateExtraction(emptyFields(), [lineWithSku, lineWithoutSku], context);
+
+    expect(result.issues).toEqual([
+      expect.objectContaining({ severity: 'WARN', code: 'PRICE_CHECK_UNAVAILABLE', field: 'lines[0].unitPrice' }),
+    ]);
+  });
+
+  it('an unresolved supplier does not block auto-approval on its own — WARN, not BLOCK', () => {
+    const line = { ...emptyLine(), sku: field('SKU-1'), unitPrice: field('45.00') };
+    const context = baseContext({ supplierResolved: false });
+    const result = validateExtraction(emptyFields(), [line], context);
+    expect(result.canAutoApprove).toBe(true);
+  });
+
+  it('a resolved supplier with genuinely no trailing history produces no PRICE_CHECK_UNAVAILABLE issue — those are different unknowns', () => {
+    const line = { ...emptyLine(), sku: field('SKU-1'), unitPrice: field('45.00') };
+    const context = baseContext({ supplierResolved: true, trailingPricesByLineIndex: new Map() });
+    const result = validateExtraction(emptyFields(), [line], context);
+    expect(result.issues).toHaveLength(0);
   });
 });
 

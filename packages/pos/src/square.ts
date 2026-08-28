@@ -376,13 +376,19 @@ const mapSquareOrder = (wire: SquareOrderWire): ExternalTransaction | null => {
   const status = wire.state ? ORDER_STATE_MAP[wire.state] : undefined;
   if (!wire.id || !wire.location_id || !wire.created_at || !status) return null;
 
-  const currency = (wire.total_money?.currency ?? wire.line_items?.[0]?.base_price_money?.currency ?? 'USD') as ExternalMoney['currency'];
+  const wireCurrency = wire.total_money?.currency ?? wire.line_items?.[0]?.base_price_money?.currency;
+  if (!wireCurrency) return null;
+  const currency = wireCurrency as ExternalMoney['currency'];
   const lines = (wire.line_items ?? []).map((line) => mapOrderLine(line, currency)).filter((l): l is ExternalTransactionLine => l !== null);
 
+  // Square's Orders API `total_money` is tax-in, discount-applied — there is no plain subtotal
+  // field on the order. The only value that means "subtotal" (pre-tax, pre-discount) is the sum of
+  // each line's own `total_money` (already pre-tax per Square's per-line model), not the order total.
+  const subtotalCents = lines.reduce((sum, line) => sum.plus(new Decimal(line.lineTotal.amount)), new Decimal(0));
   const check: ExternalCheck = {
     externalId: wire.id,
     lines,
-    subtotal: toExternalMoney(wire.total_money) ?? ZERO_MONEY(currency),
+    subtotal: { amount: subtotalCents.toFixed(2), currency },
     discount: toExternalMoney(wire.total_discount_money) ?? ZERO_MONEY(currency),
     tax: toExternalMoney(wire.total_tax_money) ?? ZERO_MONEY(currency),
     total: toExternalMoney(wire.total_money) ?? ZERO_MONEY(currency),

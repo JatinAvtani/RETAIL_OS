@@ -1,31 +1,22 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import {
-  createDb,
-  organizations,
-  posConnections,
-  posItems,
-  salesTransactionLines,
-  salesTransactions,
-  outboxEvents,
-  stores,
-  unmappedSales,
-  stockMovements,
-  stockLevels,
-  lots,
-} from '@retailos/db';
+import { createDb, organizations, posConnections, stores } from '@retailos/db';
 import { encryptToken } from '@retailos/pos';
 import { createRedisClient, SessionStore } from '@retailos/session';
 import { generateId } from '@retailos/domain';
 import { buildServer } from '../../server';
+import { squareSyncQueue } from '../context';
 import type { FastifyInstance } from 'fastify';
 
 /**
- * real HTTP verification for `integrations.syncSquareOrders`. `global.fetch` is patched
- * (Square's own host only) — no live Square sandbox app exists yet, same standing limitation as
- * earlier work's catalog sync. This file specifically proves the plan's named top risk: the cursor and
- * watermark only advance together with the order/line writes they gate, inside one transaction, and
- * a re-synced (overlapping) window is genuinely idempotent — no double-counted revenue.
+ * real HTTP verification for `integrations.syncSquareOrders`. The router no longer runs the
+ * sync itself — it does precondition checks (including the linked-location check specific to
+ * orders sync) and enqueues a real BullMQ job onto `squareSyncQueue`, returning `{ enqueued: true }`
+ * immediately. The real sync RESULT (transactionsRecorded, cursor/watermark advancement,
+ * consumption, idempotency, refund handling) is now proven directly against `syncSquareOrders` in
+ * `packages/integrations/src/square-orders-sync.test.ts` — this file's scope shrank to what the
+ * router genuinely still does: auth, tenant isolation, precondition rejections, and a real
+ * assertion that a successful call actually enqueues the right job.
  */
 describe('integrations.syncSquareOrders', () => {
   let app: FastifyInstance;
@@ -36,7 +27,6 @@ describe('integrations.syncSquareOrders', () => {
   const redis = createRedisClient(process.env.REDIS_URL ?? 'redis://localhost:6379');
   const sessionStore = new SessionStore(redis);
   const createdOrgIds: string[] = [];
-  const originalFetch = globalThis.fetch;
 
   beforeAll(async () => {
     originalEnv = {
@@ -56,25 +46,14 @@ describe('integrations.syncSquareOrders', () => {
     await app.ready();
   });
 
-  beforeEach(() => {
-    globalThis.fetch = originalFetch;
-  });
-
   afterEach(async () => {
-    globalThis.fetch = originalFetch;
     for (const orgId of createdOrgIds) {
-      // syncSquareOrders now genuinely triggers consumption for each recorded line
-      // — unmapped_sales (a real menu-item quarantine) and stock_movements/stock_levels/lots (a
-      // real FEFO consumption) are all real write paths now, not hypothetical ones, and each needs
-      // its own cleanup before stores/organizations can be deleted.
-      await db.delete(unmappedSales).where(eq(unmappedSales.organizationId, orgId));
-      await db.delete(outboxEvents).where(eq(outboxEvents.organizationId, orgId));
-      await db.delete(stockMovements).where(eq(stockMovements.organizationId, orgId));
-      await db.delete(stockLevels).where(eq(stockLevels.organizationId, orgId));
-      await db.delete(lots).where(eq(lots.organizationId, orgId));
-      await db.delete(salesTransactionLines).where(eq(salesTransactionLines.organizationId, orgId));
-      await db.delete(salesTransactions).where(eq(salesTransactions.organizationId, orgId));
-      await db.delete(posItems).where(eq(posItems.organizationId, orgId));
+      const jobs = await squareSyncQueue.getJobs(['waiting', 'delayed', 'active', 'completed', 'failed']);
+      for (const job of jobs) {
+        if (job.data.organizationId === orgId) {
+          await job.remove();
+        }
+      }
       await db.delete(posConnections).where(eq(posConnections.organizationId, orgId));
       await db.delete(stores).where(eq(stores.organizationId, orgId));
       await db.delete(organizations).where(eq(organizations.id, orgId));
@@ -127,40 +106,6 @@ describe('integrations.syncSquareOrders', () => {
       status: 'CONNECTED',
     });
   };
-
-  const stubSquareOrdersResponse = (body: unknown): void => {
-    globalThis.fetch = vi.fn(async (input: Parameters<typeof fetch>[0]) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
-      if (url.includes('/v2/orders/search')) {
-        return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      }
-      return originalFetch(input);
-    }) as typeof fetch;
-  };
-
-  const oneCompletedOrder = (externalId: string, catalogObjectId = 'VAR-1') => ({
-    orders: [
-      {
-        id: externalId,
-        location_id: 'LOC-1',
-        created_at: '2026-08-02T12:00:00Z',
-        state: 'COMPLETED',
-        line_items: [
-          {
-            uid: `${externalId}-LINE-1`,
-            catalog_object_id: catalogObjectId,
-            name: 'Cappuccino',
-            quantity: '1',
-            base_price_money: { amount: 450, currency: 'USD' },
-            total_money: { amount: 450, currency: 'USD' },
-          },
-        ],
-        total_money: { amount: 450, currency: 'USD' },
-        total_tax_money: { amount: 36, currency: 'USD' },
-        total_discount_money: { amount: 0, currency: 'USD' },
-      },
-    ],
-  });
 
   it('rejects a request with no session cookie (401)', async () => {
     const { storeId } = await setUpOrgWithStore();
@@ -217,21 +162,13 @@ describe('integrations.syncSquareOrders', () => {
     expect(response.statusCode).toBe(400);
   });
 
-  it('a genuinely connected store syncs a real order into sales_transactions + lines + an outbox event, all in one commit', async () => {
+  it('a genuinely connected store enqueues a real orders sync job and returns immediately', async () => {
     const { organizationId, storeId } = await setUpOrgWithStore();
     await connectSquare(organizationId, storeId);
-    await db.insert(posItems).values({
-      id: generateId(),
-      organizationId,
-      storeId,
-      source: 'square',
-      externalId: 'VAR-1',
-      name: 'Cappuccino',
-      mappingStatus: 'UNMAPPED',
-    });
     const sessionCookie = await issueSession(organizationId, 'ALL');
 
-    stubSquareOrdersResponse(oneCompletedOrder('ORDER-SYNC-1'));
+    const countsBefore = await squareSyncQueue.getJobCounts();
+    const totalBefore = Object.values(countsBefore).reduce((a, b) => a + b, 0);
 
     const response = await app.inject({
       method: 'POST',
@@ -242,107 +179,16 @@ describe('integrations.syncSquareOrders', () => {
 
     expect(response.statusCode).toBe(200);
     const body = JSON.parse(response.body).result.data;
-    expect(body.transactionsRecorded).toBe(1);
-    expect(body.transactionsDuplicate).toBe(0);
+    expect(body).toEqual({ enqueued: true });
 
-    const txRows = await db.select().from(salesTransactions).where(eq(salesTransactions.organizationId, organizationId));
-    expect(txRows).toHaveLength(1);
-    expect(txRows[0]!.externalId).toBe('ORDER-SYNC-1');
-    expect(txRows[0]!.status).toBe('COMPLETED');
-    expect(txRows[0]!.total).toBe('4.5000');
+    const countsAfter = await squareSyncQueue.getJobCounts();
+    const totalAfter = Object.values(countsAfter).reduce((a, b) => a + b, 0);
+    expect(totalAfter).toBe(totalBefore + 1);
 
-    const lineRows = await db.select().from(salesTransactionLines).where(eq(salesTransactionLines.organizationId, organizationId));
-    expect(lineRows).toHaveLength(1);
-    expect(lineRows[0]!.posItemId).not.toBeNull(); // resolved via catalog_object_id -> pos_items.external_id
-
-    const outboxRows = await db.select().from(outboxEvents).where(eq(outboxEvents.organizationId, organizationId));
-    expect(outboxRows).toHaveLength(1);
-    expect(outboxRows[0]!.eventType).toBe('sales.ingested');
-
-    const connectionRows = await db.select().from(posConnections).where(eq(posConnections.organizationId, organizationId));
-    expect(connectionRows[0]!.ordersSyncWatermark).not.toBeNull();
-  });
-
-  it('a line whose catalog_object_id has no matching pos_items row still records the transaction, with posItemId null', async () => {
-    const { organizationId, storeId } = await setUpOrgWithStore();
-    await connectSquare(organizationId, storeId);
-    const sessionCookie = await issueSession(organizationId, 'ALL');
-
-    stubSquareOrdersResponse(oneCompletedOrder('ORDER-UNKNOWN-ITEM', 'VAR-NEVER-SYNCED'));
-
-    const response = await app.inject({
-      method: 'POST',
-      url: '/trpc/integrations.syncSquareOrders',
-      payload: { storeId },
-      cookies: { '__Host-session': sessionCookie },
-    });
-
-    expect(response.statusCode).toBe(200);
-    const lineRows = await db.select().from(salesTransactionLines).where(eq(salesTransactionLines.organizationId, organizationId));
-    expect(lineRows).toHaveLength(1);
-    expect(lineRows[0]!.posItemId).toBeNull();
-  });
-
-  it('re-syncing the same order (an overlapping window) is idempotent — recorded once, counted duplicate the second time', async () => {
-    const { organizationId, storeId } = await setUpOrgWithStore();
-    await connectSquare(organizationId, storeId);
-    const sessionCookie = await issueSession(organizationId, 'ALL');
-
-    stubSquareOrdersResponse(oneCompletedOrder('ORDER-IDEMPOTENT'));
-    const first = await app.inject({
-      method: 'POST',
-      url: '/trpc/integrations.syncSquareOrders',
-      payload: { storeId },
-      cookies: { '__Host-session': sessionCookie },
-    });
-    expect(JSON.parse(first.body).result.data.transactionsRecorded).toBe(1);
-
-    stubSquareOrdersResponse(oneCompletedOrder('ORDER-IDEMPOTENT'));
-    const second = await app.inject({
-      method: 'POST',
-      url: '/trpc/integrations.syncSquareOrders',
-      payload: { storeId },
-      cookies: { '__Host-session': sessionCookie },
-    });
-    expect(second.statusCode).toBe(200);
-    const secondBody = JSON.parse(second.body).result.data;
-    expect(secondBody.transactionsRecorded).toBe(0);
-    expect(secondBody.transactionsDuplicate).toBe(1);
-
-    const txRows = await db.select().from(salesTransactions).where(eq(salesTransactions.organizationId, organizationId));
-    expect(txRows).toHaveLength(1); // no duplicate row, no double-counted revenue
-
-    const outboxRows = await db.select().from(outboxEvents).where(eq(outboxEvents.organizationId, organizationId));
-    expect(outboxRows).toHaveLength(1); // no duplicate event for the duplicate sync
-  });
-
-  it('a CANCELED order maps to sales_transactions.status VOIDED', async () => {
-    const { organizationId, storeId } = await setUpOrgWithStore();
-    await connectSquare(organizationId, storeId);
-    const sessionCookie = await issueSession(organizationId, 'ALL');
-
-    stubSquareOrdersResponse({
-      orders: [
-        {
-          id: 'ORDER-CANCELED',
-          location_id: 'LOC-1',
-          created_at: '2026-08-02T12:00:00Z',
-          state: 'CANCELED',
-          line_items: [],
-          total_money: { amount: 0, currency: 'USD' },
-        },
-      ],
-    });
-
-    const response = await app.inject({
-      method: 'POST',
-      url: '/trpc/integrations.syncSquareOrders',
-      payload: { storeId },
-      cookies: { '__Host-session': sessionCookie },
-    });
-
-    expect(response.statusCode).toBe(200);
-    const txRows = await db.select().from(salesTransactions).where(eq(salesTransactions.organizationId, organizationId));
-    expect(txRows[0]!.status).toBe('VOIDED');
+    const jobs = await squareSyncQueue.getJobs(['waiting', 'delayed', 'active']);
+    const ourJob = jobs.find((job) => job.data.organizationId === organizationId && job.data.storeId === storeId);
+    expect(ourJob).toBeDefined();
+    expect(ourJob!.data.kind).toBe('orders');
+    expect(ourJob!.name).toBe('orders');
   });
 });

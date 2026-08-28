@@ -51,6 +51,7 @@ export const netRevenueTrendMetric = defineMetric<TrendParams>({
       metricId: 'net_revenue_trend',
       value: last.value,
       unit: 'CURRENCY',
+      currency,
       period: { from: params.periods[0]!.from, to: params.periods[params.periods.length - 1]!.to },
       computedAt: now,
       freshness: now,

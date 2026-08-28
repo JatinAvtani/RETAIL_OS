@@ -20,7 +20,7 @@ const ALL_STATUSES: PurchaseOrderStatus[] = [
   'CANCELLED',
 ];
 
-const ALL_EVENTS: PurchaseOrderEvent[] = ['SUBMIT', 'APPROVE', 'REJECT', 'SEND', 'RECEIVE_PARTIAL', 'RECEIVE_FULL', 'CANCEL'];
+const ALL_EVENTS: PurchaseOrderEvent[] = ['SUBMIT', 'APPROVE', 'REJECT', 'SEND', 'RECEIVE_PARTIAL', 'RECEIVE_FULL', 'CANCEL', 'CLOSE_SHORT'];
 
 describe('applyPurchaseOrderTransition — every legal transition from the design\'s diagram', () => {
   it('DRAFT --submit--> PENDING_APPROVAL', () => {
@@ -61,6 +61,10 @@ describe('applyPurchaseOrderTransition — every legal transition from the desig
     expect(applyPurchaseOrderTransition('APPROVED', 'CANCEL')).toEqual({ allowed: true, nextStatus: 'CANCELLED' });
     expect(applyPurchaseOrderTransition('SENT', 'CANCEL')).toEqual({ allowed: true, nextStatus: 'CANCELLED' });
   });
+
+  it('PARTIALLY_RECEIVED --close_short--> CLOSED — the real exit for a supplier that never delivers the remaining balance', () => {
+    expect(applyPurchaseOrderTransition('PARTIALLY_RECEIVED', 'CLOSE_SHORT')).toEqual({ allowed: true, nextStatus: 'CLOSED' });
+  });
 });
 
 describe('applyPurchaseOrderTransition — illegal transitions are rejected, not silently ignored', () => {
@@ -72,6 +76,13 @@ describe('applyPurchaseOrderTransition — illegal transitions are rejected, not
   it('CANCEL is NOT reachable from RECEIVED or CLOSED (terminal states)', () => {
     expect(applyPurchaseOrderTransition('RECEIVED', 'CANCEL').allowed).toBe(false);
     expect(applyPurchaseOrderTransition('CLOSED', 'CANCEL').allowed).toBe(false);
+  });
+
+  it('CLOSE_SHORT is reachable ONLY from PARTIALLY_RECEIVED — every other status rejects it', () => {
+    for (const status of ALL_STATUSES) {
+      if (status === 'PARTIALLY_RECEIVED') continue;
+      expect(applyPurchaseOrderTransition(status, 'CLOSE_SHORT').allowed).toBe(false);
+    }
   });
 
   it('cannot SUBMIT a PO that is not in DRAFT', () => {
@@ -102,7 +113,7 @@ describe('applyPurchaseOrderTransition — illegal transitions are rejected, not
     }
   });
 
-  it('RECEIVED and CLOSED accept no events at all — every one of the 7 named events is rejected', () => {
+  it('RECEIVED and CLOSED accept no events at all — every one of the 8 named events is rejected', () => {
     for (const event of ALL_EVENTS) {
       expect(canTransitionPurchaseOrder('RECEIVED', event)).toBe(false);
       expect(canTransitionPurchaseOrder('CLOSED', event)).toBe(false);

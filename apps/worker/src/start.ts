@@ -4,7 +4,7 @@
 // side-effect-only import here is what actually works.
 import '@retailos/config/auto';
 import { createQueueRedisConnection, createRelayPollQueue, registerRelayPollJob, createBriefingSchedulePollQueue, registerBriefingSchedulePollJob } from '@retailos/queue';
-import { buildExtractionWorker, buildFactAggregationWorker, buildEmbeddingWorker, buildRelayPollWorker, buildRuleEvaluationWorker, buildNotificationDeliveryWorker, buildBriefingSchedulePollWorker, buildBriefingWorker } from './worker';
+import { buildExtractionWorker, buildFactAggregationWorker, buildEmbeddingWorker, buildRelayPollWorker, buildRuleEvaluationWorker, buildNotificationDeliveryWorker, buildBriefingSchedulePollWorker, buildBriefingWorker, buildSquareSyncWorker } from './worker';
 
 const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
 const databaseUrl = process.env.APP_DATABASE_URL ?? process.env.DATABASE_URL ?? 'postgresql://retailos_app:retailos_app_local_only@localhost:5432/retailos';
@@ -113,6 +113,18 @@ briefingWorker.on('failed', (job, err) => {
 
 console.log('Daily briefing schedule-poll + generation workers started.');
 
+const squareSyncWorker = buildSquareSyncWorker({ redisUrl, databaseUrl });
+
+squareSyncWorker.on('completed', (job) => {
+  console.log(`Square sync job ${job.id} (${job.data.kind}) completed for store ${job.data.storeId}.`);
+});
+
+squareSyncWorker.on('failed', (job, err) => {
+  console.error(`Square sync job ${job?.id} (${job?.data.kind}) failed for store ${job?.data.storeId}: ${err.message}`);
+});
+
+console.log('Square sync worker started.');
+
 // Registers (or re-registers, idempotently) the one system-wide relay-poll schedule — safe to
 // call on every worker startup, matching `registerFactAggregationJob`'s own upsert-based
 // idempotency (packages/queue).
@@ -123,3 +135,49 @@ console.log('Outbox relay poll schedule registered (every 15s).');
 const briefingSchedulePollQueue = createBriefingSchedulePollQueue(createQueueRedisConnection(redisUrl));
 await registerBriefingSchedulePollJob(briefingSchedulePollQueue);
 console.log('Daily briefing schedule-poll registered (every 1h).');
+
+/**
+ * Graceful shutdown: BullMQ's own documented contract is that `Worker.close()` stops accepting new
+ * jobs and waits for whatever is currently ACTIVE on that worker to finish before resolving — a
+ * signal-driven `process.exit()` with no `close()` call kills every in-flight job mid-write, which
+ * "the outbox makes this safe" was, until now, a design argument with no real test or shutdown path
+ * behind it (a job that started but never wrote its outbox row leaves no record it ever ran, and
+ * BullMQ's own retry only fires for a job that FAILED, not one whose process vanished mid-run).
+ * `Promise.allSettled` (not `Promise.all`) so one worker's close hanging or throwing does not
+ * prevent the others from getting their own chance to drain.
+ */
+const allWorkers = [
+  extractionWorker,
+  factAggregationWorker,
+  embeddingWorker,
+  relayPollWorker,
+  ruleEvaluationWorker,
+  notificationDeliveryWorker,
+  briefingSchedulePollWorker,
+  briefingWorker,
+  squareSyncWorker,
+];
+
+let shuttingDown = false;
+const shutdown = async (signal: string) => {
+  if (shuttingDown) return; // a second SIGTERM/SIGINT while already draining must not re-enter this
+  shuttingDown = true;
+  console.log(`${signal} received — closing ${allWorkers.length} workers (waiting for active jobs to finish)...`);
+  const results = await Promise.allSettled(allWorkers.map((w) => w.close()));
+  const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+  for (const failure of failures) {
+    console.error('A worker failed to close cleanly:', failure.reason);
+  }
+  console.log('Worker shutdown complete.');
+  process.exit(failures.length > 0 ? 1 : 0);
+};
+
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
+process.on('SIGINT', () => void shutdown('SIGINT'));
+
+// Never silently swallowed and never a silent crash either — logged with full context so a real
+// failure (a promise rejection nothing in this codebase awaited) is visible in whatever collects
+// this process's stderr, matching this file's own established console.error convention.
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection in worker process:', reason);
+});

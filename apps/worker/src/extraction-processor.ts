@@ -155,16 +155,22 @@ const runValidationGates = async (
   const supplierName = rawFields.supplier.value;
   const supplier = supplierName !== null ? await supplierRepository.findByExactName(supplierName) : null;
   if (supplier) {
+    const documentCurrency = rawFields.currency.value ?? undefined;
     for (const [index, line] of rawLines.entries()) {
       if (line.sku.value === null) continue;
-      const rows = await supplierPriceRepository.findConfirmedTrailingPricesBySupplierSku(supplier.id, line.sku.value);
+      const rows = await supplierPriceRepository.findConfirmedTrailingPricesBySupplierSku(supplier.id, line.sku.value, documentCurrency);
       if (rows.length > 0) {
         trailingPricesByLineIndex.set(index, rows.map((row) => ({ unitPrice: new Decimal(row.unitPrice) })));
       }
     }
   }
 
-  return validateExtraction(rawFields, rawLines, { duplicateCandidates, trailingPricesByLineIndex, today: new Date() });
+  return validateExtraction(rawFields, rawLines, {
+    duplicateCandidates,
+    trailingPricesByLineIndex,
+    supplierResolved: supplier !== null,
+    today: new Date(),
+  });
 };
 
 const toRawFields = (fields: ExtractedFields | null): RawFields => ({

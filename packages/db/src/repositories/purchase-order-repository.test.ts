@@ -453,6 +453,38 @@ describe('PurchaseOrderRepository', () => {
       expect(row?.status).toBe('PARTIALLY_RECEIVED');
     });
 
+    it('CLOSE_SHORT closes a PARTIALLY_RECEIVED order to CLOSED and records closedAt — the real exit for a supplier that never delivers the rest', async () => {
+      const adminDb = drizzle(adminClient, { schema });
+      const repo = new PurchaseOrderRepository(createScopedDb(client), organizationId);
+      const created = await repo.create({ storeId, supplierId, poNumber: 'PO-2007', currency: 'USD' });
+      await repo.applyTransition(created.id, 'SUBMIT', 1);
+      await repo.applyTransition(created.id, 'APPROVE', 2);
+      await repo.applyTransition(created.id, 'SEND', 3);
+      await repo.applyTransition(created.id, 'RECEIVE_PARTIAL', 4);
+
+      const result = await repo.applyTransition(created.id, 'CLOSE_SHORT', 5, actorUserId, 'Supplier confirmed remaining balance will not ship');
+      expect(result).toEqual({ ok: true, newStatus: 'CLOSED' });
+
+      const row = await repo.findById(created.id);
+      expect(row?.status).toBe('CLOSED');
+      expect(row?.closedAt).not.toBeNull();
+
+      const events = await adminDb.select().from(outboxEvents).where(eq(outboxEvents.aggregateId, created.id));
+      expect(events.some((e) => e.eventType === 'po.closed_short')).toBe(true);
+    });
+
+    it('CLOSE_SHORT is rejected from every status except PARTIALLY_RECEIVED, matching the domain state machine exactly', async () => {
+      const repo = new PurchaseOrderRepository(createScopedDb(client), organizationId);
+      const created = await repo.create({ storeId, supplierId, poNumber: 'PO-2008', currency: 'USD' });
+
+      // Still DRAFT — never submitted, sent, or received.
+      const result = await repo.applyTransition(created.id, 'CLOSE_SHORT', 1);
+      expect(result.ok).toBe(false);
+
+      const row = await repo.findById(created.id);
+      expect(row?.status).toBe('DRAFT');
+    });
+
     it('applyTransition on a nonexistent purchase order returns a not-found result, never throws', async () => {
       const repo = new PurchaseOrderRepository(createScopedDb(client), organizationId);
       const result = await repo.applyTransition(generateId(), 'SUBMIT', 1);

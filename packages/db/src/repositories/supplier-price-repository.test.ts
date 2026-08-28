@@ -191,6 +191,26 @@ describe('SupplierPriceRepository', () => {
     expect(trailing[1]?.unitPrice).toBe('10.0000');
   });
 
+  it('findConfirmedTrailingPricesBySupplierSku, given a currency, excludes trailing prices recorded in a different currency', async () => {
+    const supplierProductRepo = new SupplierProductRepository(createScopedDb(client), organizationId);
+    await supplierProductRepo.confirm(supplierProductId);
+
+    const repo = new SupplierPriceRepository(createScopedDb(client), organizationId);
+    await repo.recordNewPrice({ id: generateId(), supplierProductId, unitPrice: '10.0000', currency: 'USD', validFrom: new Date('2026-01-01T00:00:00Z') });
+
+    // A USD trailing price must never feed a check against a newly extracted INR price — the
+    // magnitudes aren't comparable at all, currency filtering isn't optional once a currency is known.
+    const trailingInr = await repo.findConfirmedTrailingPricesBySupplierSku(supplierId, 'FLR-PRICE-TEST', 'INR');
+    expect(trailingInr).toHaveLength(0);
+
+    const trailingUsd = await repo.findConfirmedTrailingPricesBySupplierSku(supplierId, 'FLR-PRICE-TEST', 'USD');
+    expect(trailingUsd).toHaveLength(1);
+
+    // Omitting currency entirely (a caller that hasn't resolved one yet) is unfiltered — the old behavior.
+    const trailingUnfiltered = await repo.findConfirmedTrailingPricesBySupplierSku(supplierId, 'FLR-PRICE-TEST');
+    expect(trailingUnfiltered).toHaveLength(1);
+  });
+
   it('findConfirmedTrailingPricesBySupplierSku matches the SKU case-insensitively', async () => {
     const supplierProductRepo = new SupplierProductRepository(createScopedDb(client), organizationId);
     await supplierProductRepo.confirm(supplierProductId);

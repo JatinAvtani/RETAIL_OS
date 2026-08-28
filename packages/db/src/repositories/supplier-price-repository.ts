@@ -59,18 +59,25 @@ export class SupplierPriceRepository {
    * must never silently feed a validation gate that blocks or waves through real
    * invoices. Returns an empty array (never a fabricated single price) when no confirmed mapping
    * exists for this exact SKU string.
+   *
+   * `currency`, when given, restricts trailing prices to the SAME currency as the value being
+   * checked — comparing a ₹450 extracted price against a $4.50 trailing history would flag every
+   * normal invoice as a 100x anomaly (or worse, silently PASS a genuinely wrong price whose
+   * magnitude happens to land back in range by coincidence of the FX ratio). Omitted only by
+   * callers that haven't resolved a currency yet; a real gate call always passes one.
    */
-  async findConfirmedTrailingPricesBySupplierSku(supplierId: string, supplierSku: string, limit = 5) {
+  async findConfirmedTrailingPricesBySupplierSku(supplierId: string, supplierSku: string, currency?: string, limit = 5) {
     return this.runScoped((tx) =>
       tx
-        .select({ unitPrice: supplierPrices.unitPrice, validFrom: supplierPrices.validFrom })
+        .select({ unitPrice: supplierPrices.unitPrice, validFrom: supplierPrices.validFrom, currency: supplierPrices.currency })
         .from(supplierPrices)
         .innerJoin(supplierProducts, eq(supplierProducts.id, supplierPrices.supplierProductId))
         .where(
           and(
             eq(supplierProducts.supplierId, supplierId),
             eq(sql`lower(${supplierProducts.supplierSku})`, supplierSku.trim().toLowerCase()),
-            eq(supplierProducts.isConfirmed, true)
+            eq(supplierProducts.isConfirmed, true),
+            ...(currency !== undefined ? [eq(sql`lower(${supplierPrices.currency})`, currency.trim().toLowerCase())] : [])
           )
         )
         .orderBy(desc(supplierPrices.validFrom))

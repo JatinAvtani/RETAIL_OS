@@ -5,3 +5,4 @@ export * from './embedding-queue';
 export * from './relay-queue';
 export * from './notification-delivery-queue';
 export * from './briefing-queue';
+export * from './square-sync-queue';

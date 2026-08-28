@@ -179,6 +179,59 @@ describe('embedding processor', () => {
     expect(chunkRows).toHaveLength(0);
   });
 
+  it('a partial chunk-embed failure throws (for BullMQ to retry) and does NOT overwrite a prior complete chunk set with a smaller one', async () => {
+    const organizationId = generateId();
+    createdOrgIds.push(organizationId);
+    await db.insert(organizations).values({ id: organizationId, name: 'Embed Partial-Fail Org', slug: `embed-partial-${organizationId}`, baseCurrency: 'USD' });
+    const storeId = generateId();
+    await db.transaction((tx) =>
+      withTenantContext(tx, organizationId, () =>
+        tx.insert(stores).values({ id: storeId, organizationId, name: 'Test Store', timezone: 'UTC' })
+      )
+    );
+
+    const documentRepository = new DocumentRepository(db, organizationId);
+    const doc = await documentRepository.create({
+      storeId, type: 'INVOICE', source: 'UPLOAD',
+      storageKey: `${organizationId}/partial.pdf`, contentHash: `partial-hash-${generateId()}`, mimeType: 'application/pdf', sizeBytes: 1,
+    });
+    await documentRepository.recordExtraction({
+      documentId: doc.id, provider: 'gemini', modelVersion: 'v1', promptVersion: '1',
+      fields: { supplier: { value: 'Partial Co' }, documentNumber: { value: 'INV-9' } },
+      lines: [{ description: { value: 'Line A' } }, { description: { value: 'Line B' } }],
+      validation: { issues: [], canAutoApprove: true },
+    });
+    await documentRepository.updateStatus(doc.id, 'REVIEW_REQUIRED');
+    await documentRepository.approve(doc.id, await seedUser());
+
+    // First run: every chunk embeds successfully — a real, complete 3-chunk set (header + 2 lines).
+    const goodProcessor = createEmbeddingProcessor({ databaseUrl: APP_CONNECTION_STRING, geminiApiKey: 'fake-key', embedFn: fakeEmbed });
+    await goodProcessor(asJob({ documentId: doc.id, organizationId }));
+    const before = await adminDb.select().from(documentChunkEmbeddings).where(eq(documentChunkEmbeddings.documentId, doc.id));
+    expect(before).toHaveLength(3);
+
+    // Second run: one chunk's embed call fails (simulating a transient provider error). Matches the
+    // exact per-line-chunk text shape (`buildLineText`'s "Item: Line B") — NOT a substring match —
+    // so this only trips for that one chunk's own embed call, not the whole-document embed (a
+    // different, longer concatenated string that also happens to mention "Line B").
+    let callCount = 0;
+    const flakyEmbed = async (_apiKey: string, text: string) => {
+      callCount++;
+      if (text.startsWith('Item: Line B')) throw new Error('simulated provider failure');
+      return fakeEmbed(_apiKey, text);
+    };
+    const flakyProcessor = createEmbeddingProcessor({ databaseUrl: APP_CONNECTION_STRING, geminiApiKey: 'fake-key', embedFn: flakyEmbed });
+
+    await expect(flakyProcessor(asJob({ documentId: doc.id, organizationId }))).rejects.toThrow(/chunk\(s\) failed/);
+    expect(callCount).toBeGreaterThan(0);
+
+    // The prior COMPLETE 3-chunk set must still be there, untouched — not replaced by a smaller
+    // partial set. This is the exact bug: upsertChunks deletes-then-inserts, so writing a partial
+    // set here would silently under-index the document with no signal anywhere.
+    const after = await adminDb.select().from(documentChunkEmbeddings).where(eq(documentChunkEmbeddings.documentId, doc.id));
+    expect(after).toHaveLength(3);
+  });
+
   it('skips quietly with no Gemini key configured, never attempting the call', async () => {
     const organizationId = generateId();
     createdOrgIds.push(organizationId);

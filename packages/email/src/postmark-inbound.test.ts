@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractOrganizationSlugFromRecipient, parsePostmarkInboundPayload, PostmarkParseError, verifyPostmarkBasicAuth } from './postmark-inbound';
+import { extractOrganizationSlugFromRecipient, parsePostmarkInboundPayload, PostmarkParseError, senderAuthenticationPassed, verifyPostmarkBasicAuth } from './postmark-inbound';
 
 const realPostmarkPayload = {
   FromName: 'Nova Foods',
@@ -52,6 +52,35 @@ describe('parsePostmarkInboundPayload', () => {
   it('throws PostmarkParseError when an attachment is missing a required field', () => {
     const payload = { ...realPostmarkPayload, Attachments: [{ Name: 'x.pdf' }] };
     expect(() => parsePostmarkInboundPayload(JSON.stringify(payload))).toThrow(PostmarkParseError);
+  });
+
+  it('parses Headers when present, and defaults to an empty array when absent', () => {
+    const withHeaders = { ...realPostmarkPayload, Headers: [{ Name: 'X-Spam-Tests', Value: 'DKIM_VALID,SPF_PASS' }] };
+    expect(parsePostmarkInboundPayload(JSON.stringify(withHeaders)).Headers).toEqual([{ Name: 'X-Spam-Tests', Value: 'DKIM_VALID,SPF_PASS' }]);
+    expect(parsePostmarkInboundPayload(JSON.stringify(realPostmarkPayload)).Headers).toEqual([]);
+  });
+});
+
+describe('senderAuthenticationPassed', () => {
+  it('passes when X-Spam-Tests includes DKIM_VALID', () => {
+    expect(senderAuthenticationPassed([{ Name: 'X-Spam-Tests', Value: 'DKIM_SIGNED,DKIM_VALID,SPF_PASS' }])).toBe(true);
+  });
+
+  it('passes when X-Spam-Tests includes DKIM_VALID_AU (aligned-user variant)', () => {
+    expect(senderAuthenticationPassed([{ Name: 'X-Spam-Tests', Value: 'DKIM_VALID_AU' }])).toBe(true);
+  });
+
+  it('is case-insensitive on the header name', () => {
+    expect(senderAuthenticationPassed([{ Name: 'x-spam-tests', Value: 'DKIM_VALID' }])).toBe(true);
+  });
+
+  it('fails when X-Spam-Tests is present but has no DKIM pass token', () => {
+    expect(senderAuthenticationPassed([{ Name: 'X-Spam-Tests', Value: 'SPF_PASS' }])).toBe(false);
+  });
+
+  it('fails when there is no X-Spam-Tests header at all — absence is not a pass', () => {
+    expect(senderAuthenticationPassed([])).toBe(false);
+    expect(senderAuthenticationPassed([{ Name: 'X-Spam-Status', Value: 'No' }])).toBe(false);
   });
 });
 

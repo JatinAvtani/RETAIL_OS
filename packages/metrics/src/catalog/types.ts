@@ -2,6 +2,7 @@ import type { z } from 'zod';
 import type { Redis } from 'ioredis';
 import type { createDb } from '@retailos/db';
 import type { Permission } from '@retailos/authz';
+import type { CurrencyCode } from '@retailos/domain';
 
 type Db = ReturnType<typeof createDb>['db'];
 
@@ -26,12 +27,14 @@ export type DateRange = { from: Date; to: Date };
 
 /**
  * The minimal execution context a metric needs: which tenant, which stores, and a DB handle to
- * read from. Deliberately NOT `@retailos/authz`'s full `AuthContext` — permission enforcement is
- * the CALLER's job (a tRPC router checks `requiredPermission` before invoking the catalog, exactly
- * as every existing router already gates its own procedures), so this package takes no dependency
- * on session/role machinery. `storeIds` mirrors `AuthContext.storeIds`'s own shape (`'ALL'` or an
- * explicit array) so a caller can pass its session's access scope straight through without
- * translating it.
+ * read from. Deliberately NOT `@retailos/authz`'s full `AuthContext` — a metric's own `execute`
+ * function has no business making an authorization decision (this is one of the strongest
+ * properties in this package: `execute` CANNOT check permissions even if a metric author wanted
+ * to, because this type gives it nothing to check against). Permission enforcement instead happens
+ * unconditionally inside `executeMetric` (`registry.ts`), which takes the full `AuthContext`
+ * separately and checks `requiredPermission` before `execute` is ever called — see that function's
+ * own doc comment. `storeIds` mirrors `AuthContext.storeIds`'s own shape (`'ALL'` or an explicit
+ * array) so a caller can pass its session's access scope straight through without translating it.
  */
 export type MetricContext = {
   db: Db;
@@ -73,6 +76,15 @@ export type MetricResult = {
   provenance: MetricProvenance[];
   /** Present only for `'unknown'` results — WHY it's unknown, not just that it is. */
   unknownReason?: string;
+  /**
+   * Present only when `unit === 'CURRENCY'`. `resolveCurrency` already looks this up correctly
+   * inside several metrics' own `execute` (e.g. `packages/metrics/src/cost/catalog-entries.ts`) —
+   * this field is what carries that real value back out to a caller instead of it being computed
+   * and then discarded at the return boundary. Without it, `packages/assistant/src/narration.ts`
+   * had no currency to cite and rendered "(currency unit not tracked by this metric)" to the user
+   * even when the metric HAD resolved a real one.
+   */
+  currency?: CurrencyCode;
 };
 
 /**

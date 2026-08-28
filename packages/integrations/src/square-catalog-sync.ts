@@ -1,4 +1,5 @@
 import {
+  createDb,
   PosConnectionRepository,
   PosItemRepository,
   type PosConnectionStatus,
@@ -11,7 +12,8 @@ import {
   type SquareOAuthConfig,
 } from '@retailos/pos';
 import { generateId } from '@retailos/domain';
-import type { db as Db } from '../trpc/context';
+
+type Db = ReturnType<typeof createDb>['db'];
 
 export class SquareNotConnectedError extends Error {
   constructor() {
@@ -33,17 +35,19 @@ export type SquareCatalogSyncResult = {
  * row is one priced, orderable SKU (the variation), not the parent grouping, matching how
  * `sales_transaction_lines.posItemId` will need to reference the exact thing that was sold.
  *
- * Lives in `apps/api`, not `packages/pos` or `packages/db` — it composes both (a vendor API client
- * plus a tenant repository), the same layering `square-routes.ts` already established for
- * "compose infrastructure packages into one business operation."
+ * Lives in `packages/integrations`, not `apps/api` or `apps/worker` directly — it composes both a
+ * vendor API client (`@retailos/pos`) and a tenant repository (`@retailos/db`), and BOTH the API
+ * (a manual "sync now" trigger) and the worker (the real async job processor — see
+ * `SQUARE_SYNC_QUEUE_NAME`) need to call the identical function; apps cannot import from other apps
+ * (module-boundary rule), so this had to live in a shared package once the sync moved off the
+ * request path.
  *
  * Refreshes the access token proactively when Square's own `token_expires_at` has passed, mirroring
  * the design's "refresh automatically; alert on refresh failure" — a sync attempt is the natural
- * moment to check, since there is no scheduler in this codebase yet to do so independently (worker
- * package is still a placeholder).
+ * moment to check.
  */
 export const syncSquareCatalog = async (
-  db: typeof Db,
+  db: Db,
   organizationId: string,
   storeId: string,
   config: SquareOAuthConfig,

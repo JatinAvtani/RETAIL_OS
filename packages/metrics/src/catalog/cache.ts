@@ -17,10 +17,32 @@ import type { MetricResult } from './types.js';
 
 export const DEFAULT_METRIC_CACHE_TTL_SECONDS = 600; // 10 minutes — spec's own 5–60 min range
 
-/** Everything a cache key needs to be unique per real, distinguishable request — I4: `organizationId` is ALWAYS part of the key, since a cache hit bypasses RLS entirely (a missing org id here is a real cross-tenant leak, not a cosmetic bug). */
-export const buildMetricCacheKey = (metricId: string, organizationId: string, params: unknown): string => {
-  const paramsJson = JSON.stringify(params, Object.keys(params as Record<string, unknown>).sort());
-  return `metrics:v1:${organizationId}:${metricId}:${paramsJson}`;
+/**
+ * Deterministic JSON serialization: keys sorted at EVERY nesting level, recursively — unlike
+ * `JSON.stringify(value, Object.keys(value).sort())`, which looks like a sort but is actually the
+ * replacer-ARRAY overload (an allowlist, not a comparator), and applies that SAME top-level-only
+ * key list at every nesting level. Proven live: `{filters:{productId:'p1'}}` and
+ * `{filters:{productId:'p2'}}` both serialized to `{"filters":{}}` under the old code — two
+ * different params silently sharing one cache key. This function actually recurses, so nested
+ * params are distinguished (and included at all).
+ */
+const canonicalStringify = (value: unknown): string => {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalStringify).join(',')}]`;
+  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalStringify(v)}`).join(',')}}`;
+};
+
+/**
+ * Everything a cache key needs to be unique per real, distinguishable request — I4:
+ * `organizationId` is ALWAYS part of the key, since a cache hit bypasses RLS entirely (a missing
+ * org id here is a real cross-tenant leak, not a cosmetic bug). `storeIds` is included for the same
+ * reason: a metric that reads `ctx.storeIds` must not serve a cache hit computed for a different
+ * store scope just because `params` happened to match.
+ */
+export const buildMetricCacheKey = (metricId: string, organizationId: string, storeIds: string[] | 'ALL', params: unknown): string => {
+  const storeIdsKey = storeIds === 'ALL' ? 'ALL' : [...storeIds].sort().join(',');
+  return `metrics:v1:${organizationId}:${metricId}:${storeIdsKey}:${canonicalStringify(params)}`;
 };
 
 /**
@@ -105,11 +127,12 @@ export const withMetricCache = async (
   redis: Redis,
   metricId: string,
   organizationId: string,
+  storeIds: string[] | 'ALL',
   params: unknown,
   compute: () => Promise<MetricResult>,
   ttlSeconds: number = DEFAULT_METRIC_CACHE_TTL_SECONDS
 ): Promise<MetricResult> => {
-  const cacheKey = buildMetricCacheKey(metricId, organizationId, params);
+  const cacheKey = buildMetricCacheKey(metricId, organizationId, storeIds, params);
   const cached = await redis.get(cacheKey);
   if (cached !== null) return deserialize(cached);
   return withSingleFlight(redis, cacheKey, organizationId, ttlSeconds, compute);

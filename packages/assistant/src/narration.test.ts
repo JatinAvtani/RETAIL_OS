@@ -83,10 +83,25 @@ describe('narrate', () => {
     expect(prompt).toContain('1234.5600');
   });
 
-  it('a CURRENCY-unit metric never gets a fabricated currency symbol — no currency code exists on MetricResult to invent one from', async () => {
+  it('a CURRENCY-unit metric never gets a fabricated currency SYMBOL — cites the real code from MetricResult.currency instead', async () => {
     const generate = vi.fn().mockResolvedValue(ok('answer'));
     const provider: ChatProvider = { name: 'fake', generate, generateStructured: vi.fn() };
-    const bundle: GroundingBundle = { metrics: [realMetric], passages: [], entities: [] };
+    const bundle: GroundingBundle = { metrics: [{ ...realMetric, currency: 'INR' }], passages: [], entities: [] };
+
+    await narrate(provider, bundle, [], [], [], 'fake-model');
+
+    const [prompt] = generate.mock.calls[0] as [string, string];
+    // No fabricated symbol (a live test caught the earlier bug: guessing "$" for every org
+    // regardless of its real base currency) — the real resolved code is cited instead.
+    expect(prompt).not.toMatch(/[$€£¥]/);
+    expect(prompt).toContain('INR 1234.5600');
+    expect(prompt).not.toContain('currency unit not tracked');
+  });
+
+  it('falls back to the honest placeholder, never a guessed symbol, when a CURRENCY metric genuinely has no currency resolved', async () => {
+    const generate = vi.fn().mockResolvedValue(ok('answer'));
+    const provider: ChatProvider = { name: 'fake', generate, generateStructured: vi.fn() };
+    const bundle: GroundingBundle = { metrics: [realMetric], passages: [], entities: [] }; // realMetric has no `currency` field
 
     await narrate(provider, bundle, [], [], [], 'fake-model');
 

@@ -68,6 +68,7 @@ export const unitCostWeightedAvgMetric = defineMetric<UnitCostWeightedAvgParams>
       metricId: 'unit_cost_weighted_avg',
       value: value === 'unknown' ? 'unknown' : value.amount.toFixed(4),
       unit: 'CURRENCY',
+      currency,
       period: { from: now, to: now }, // a point-in-time valuation, not a period aggregate — from === to signals "as of now"
       computedAt: now,
       freshness: now,
@@ -90,6 +91,7 @@ export const unitCostLatestMetric = defineMetric<UnitCostLatestParams>({
   requiredPermission: 'financial:read',
   sources: ['supplier_prices'],
   async execute(params, ctx: MetricContext): Promise<MetricResult> {
+    const currency = await resolveCurrency(ctx);
     const supplierPriceRepository = new SupplierPriceRepository(ctx.db, ctx.organizationId);
     const current = await supplierPriceRepository.findCurrent(params.supplierProductId);
     const value = resolveUnitCostLatest(
@@ -100,6 +102,7 @@ export const unitCostLatestMetric = defineMetric<UnitCostLatestParams>({
       metricId: 'unit_cost_latest',
       value: value === 'unknown' ? 'unknown' : value.amount.toFixed(4),
       unit: 'CURRENCY',
+      currency,
       period: { from: now, to: now },
       computedAt: now,
       freshness: now,
@@ -130,6 +133,7 @@ export const recipeCostMetric = defineMetric<RecipeCostParams>({
       metricId: 'recipe_cost',
       value: breakdown.total === 'unknown' ? 'unknown' : breakdown.total.amount.toFixed(4),
       unit: 'CURRENCY',
+      currency,
       period: { from: now, to: now },
       computedAt: now,
       freshness: now,
@@ -164,6 +168,7 @@ export const menuItemCostMetric = defineMetric<MenuItemCostParams>({
         metricId: 'menu_item_cost',
         value: 'unknown',
         unit: 'CURRENCY',
+        currency,
         period: { from: now, to: now },
         computedAt: now,
         freshness: now,
@@ -177,6 +182,7 @@ export const menuItemCostMetric = defineMetric<MenuItemCostParams>({
       metricId: 'menu_item_cost',
       value: unitCost === 'unknown' ? 'unknown' : unitCost.amount.toFixed(4),
       unit: 'CURRENCY',
+      currency,
       period: { from: now, to: now },
       computedAt: now,
       freshness: now,

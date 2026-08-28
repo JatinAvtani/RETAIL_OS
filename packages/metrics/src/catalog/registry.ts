@@ -92,7 +92,7 @@ export const executeMetric = async <TParams>(
   const params = definition.parameters.parse(rawParams);
 
   if (ctx.cache) {
-    return withMetricCache(ctx.cache, id, ctx.organizationId, params, () => definition.execute(params, ctx));
+    return withMetricCache(ctx.cache, id, ctx.organizationId, ctx.storeIds, params, () => definition.execute(params, ctx));
   }
   return definition.execute(params, ctx);
 };

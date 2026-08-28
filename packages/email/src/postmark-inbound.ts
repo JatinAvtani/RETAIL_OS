@@ -18,11 +18,23 @@ export interface PostmarkAttachment {
   ContentLength: number;
 }
 
+export interface PostmarkHeader {
+  Name: string;
+  Value: string;
+}
+
 export interface PostmarkInboundPayload {
   FromFull: { Email: string; Name: string; MailboxHash: string };
   ToFull: { Email: string; Name: string; MailboxHash: string }[];
   Subject: string;
   Attachments: PostmarkAttachment[];
+  /**
+   * Raw MIME headers, passed through by Postmark as `{Name, Value}[]` (their own documented
+   * shape). This is where the SpamAssassin-derived `X-Spam-Tests` header lives — see
+   * `senderAuthenticationPassed` below for why that's the field this codebase trusts for a DKIM
+   * verdict, not a bespoke Postmark field (there isn't one).
+   */
+  Headers: PostmarkHeader[];
 }
 
 export class PostmarkParseError extends Error {}
@@ -61,6 +73,17 @@ export const parsePostmarkInboundPayload = (rawBody: string): PostmarkInboundPay
     }
   }
 
+  const headers = p.Headers;
+  if (headers !== undefined && !Array.isArray(headers)) {
+    throw new PostmarkParseError('Headers, when present, must be an array.');
+  }
+  const validatedHeaders: PostmarkHeader[] = (headers ?? [])
+    .filter((h: unknown): h is { Name: string; Value: string } => {
+      const header = h as Record<string, unknown>;
+      return typeof header?.Name === 'string' && typeof header?.Value === 'string';
+    })
+    .map((h: { Name: string; Value: string }) => ({ Name: h.Name, Value: h.Value }));
+
   const attachments = p.Attachments;
   if (attachments !== undefined && !Array.isArray(attachments)) {
     throw new PostmarkParseError('Attachments, when present, must be an array.');
@@ -82,7 +105,28 @@ export const parsePostmarkInboundPayload = (rawBody: string): PostmarkInboundPay
     })),
     Subject: typeof p.Subject === 'string' ? p.Subject : '',
     Attachments: validatedAttachments,
+    Headers: validatedHeaders,
   };
+};
+
+/**
+ * The sender-allowlist match alone (`FromFull.Email` against a supplier's known contacts) is not
+ * proof the message actually came from that address — `From` is trivially forgeable and Postmark
+ * does not authenticate it. Postmark's own docs commit to exactly one authentication signal in the
+ * payload: the SpamAssassin-derived `X-Spam-Tests` header, whose value is a comma-separated list of
+ * test names including `DKIM_VALID`/`DKIM_VALID_AU` (the signing domain aligns with the From
+ * domain) and `SPF_PASS`. There is no dedicated Postmark field and no guaranteed
+ * `Authentication-Results` header — this codebase reads the one signal Postmark actually documents,
+ * rather than parsing a raw MIME header whose presence depends on the sender's own upstream MTA
+ * chain. Requires DKIM specifically (not SPF alone): SPF authenticates the sending server, DKIM
+ * authenticates the message content and its signing domain, which is the property "did this really
+ * come from the supplier's domain" needs.
+ */
+export const senderAuthenticationPassed = (headers: PostmarkHeader[]): boolean => {
+  const spamTests = headers.find((h) => h.Name.toLowerCase() === 'x-spam-tests');
+  if (!spamTests) return false;
+  const tests = spamTests.Value.split(',').map((t) => t.trim().toUpperCase());
+  return tests.includes('DKIM_VALID') || tests.includes('DKIM_VALID_AU');
 };
 
 /**

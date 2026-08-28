@@ -62,6 +62,32 @@ describe('executeSelections', () => {
     expect(result.failed[0]?.metricId).toBe('this_metric_does_not_exist');
   });
 
+  it('a genuinely unexpected error (e.g. a raw DB failure) is sorted into failed with a STABLE, non-leaking reason — never the raw exception message', async () => {
+    // Simulates the real risk the fix closes: an executeMetric call that throws something other
+    // than the two designed error types (MetricPermissionDeniedError/UnknownMetricError) — a raw
+    // Postgres driver error carrying SQL text/column names/param values is exactly this shape. A
+    // `db` object whose query builder throws synchronously reaches the same catch branch a real
+    // driver failure would.
+    const throwingDb = {
+      select: () => {
+        throw new Error('relation "purchase_order_lines_secret_column" does not exist — SQL: SELECT internal_cost_basis FROM ...');
+      },
+    } as never;
+
+    const selections: ValidatedSelection[] = [
+      { metricId: 'total_spend', params: { storeId: REAL_STORE_ID, from: new Date('2026-08-01'), to: new Date('2026-08-31') } },
+    ];
+    const result = await executeSelections(selections, auth(['purchasing:read']), { db: throwingDb, organizationId: ORG_ID, storeIds: 'ALL' });
+
+    expect(result.results).toEqual([]);
+    expect(result.denied).toEqual([]);
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0]?.metricId).toBe('total_spend');
+    expect(result.failed[0]?.reason).toBe('An internal error occurred while computing this.');
+    expect(result.failed[0]?.reason).not.toContain('purchase_order_lines_secret_column');
+    expect(result.failed[0]?.reason).not.toContain('SELECT');
+  });
+
   it('an empty selections list produces an empty, real result — never fabricates a placeholder entry', async () => {
     const result = await executeSelections([], auth(['financial:read']), { db: {} as never, organizationId: ORG_ID, storeIds: 'ALL' });
 

@@ -163,6 +163,10 @@ export const invitationsRouter = router({
     if (!updated) {
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found.' });
     }
+    // A role change must cut over immediately — SessionRecord freezes permissions at login and
+    // `protectedProcedure` never re-reads the DB, so without this a demoted member keeps their old
+    // permissions until the session's own idle/absolute expiry.
+    await ctx.sessionStore.revokeAll(updated.userId);
     return { message: 'Role updated.' };
   }),
 
@@ -183,6 +187,9 @@ export const invitationsRouter = router({
     if (!removed) {
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found.' });
     }
+    // A removed member must lose access immediately, same reasoning as updateRole above — otherwise
+    // they keep their session's organizationId (and everything it grants via RLS) until it expires.
+    await ctx.sessionStore.revokeAll(removed.userId);
     return { message: 'Member removed.' };
   }),
 });

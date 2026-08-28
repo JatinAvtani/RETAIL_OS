@@ -40,13 +40,17 @@ export type NarrationResult = {
 };
 
 /**
- * `MetricResult` carries no currency code — only `unit: 'CURRENCY'` — so this cannot invent a
- * currency symbol (a real, live test caught the awkward "4582.7500 CURRENCY" output this was
- * fixing; adding a fabricated `$` would be worse, a genuinely wrong claim about the org's real
- * currency, not just unpolished prose). `PERCENTAGE`/`RATIO` get real, common suffixes since those
- * units carry no ambiguity the way currency does.
+ * `MetricResult.currency` (present whenever `unit === 'CURRENCY'`, since `resolveCurrency`'s real
+ * org lookup is now threaded all the way out to the result — see `MetricResult`'s own doc comment)
+ * is cited by CODE here, never invented by the model — I1's boundary applies to a currency code
+ * exactly the same as to a number. Falls back to the old honest placeholder only for a
+ * theoretically absent value (a metric that declares `unit: 'CURRENCY'` but was computed before
+ * this field existed, or a bundle built from a stale cached result) — never a guessed symbol like
+ * `$`, which would be a real, wrong claim about the org's currency (a real, live test caught the
+ * awkward "4582.7500 CURRENCY" output this whole mechanism was built to fix). `PERCENTAGE`/`RATIO`
+ * get real, common suffixes since those units carry no ambiguity the way currency does.
  */
-const formatUnit = (value: string, unit: GroundingBundle['metrics'][number]['unit']): string => {
+const formatUnit = (value: string, unit: GroundingBundle['metrics'][number]['unit'], currency: string | undefined): string => {
   switch (unit) {
     case 'PERCENTAGE':
       return `${value}%`;
@@ -57,7 +61,7 @@ const formatUnit = (value: string, unit: GroundingBundle['metrics'][number]['uni
     case 'COUNT':
       return value;
     case 'CURRENCY':
-      return `${value} (currency unit not tracked by this metric)`;
+      return currency !== undefined ? `${currency} ${value}` : `${value} (currency unit not tracked by this metric)`;
   }
 };
 
@@ -69,7 +73,7 @@ const formatMetric = (m: GroundingBundle['metrics'][number], storeName?: string)
   if (m.value === 'unknown') {
     return `- ${m.metricId}${scope}: unknown (${m.unknownReason ?? 'no reason given'}), period ${period}`;
   }
-  return `- ${m.metricId}${scope}: ${formatUnit(m.value, m.unit)}, period ${period}, as of ${m.freshness.toISOString()}`;
+  return `- ${m.metricId}${scope}: ${formatUnit(m.value, m.unit, m.currency)}, period ${period}, as of ${m.freshness.toISOString()}`;
 };
 
 const formatGaps = (denied: DeniedSelection[], failed: FailedSelection[], rejected: RejectedSelection[]): string => {

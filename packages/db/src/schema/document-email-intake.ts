@@ -22,6 +22,10 @@ import { idColumn } from './columns';
  */
 export const documentEmailIntakeStatusEnum = pgEnum('document_email_intake_status', [
   'ACCEPTED',
+  // Covers both "From address isn't a known supplier contact" AND "From address is a known
+  // contact but the message failed DKIM" — the forgeable From header being on the allowlist
+  // proves nothing about who actually sent it, so both cases get identical treatment: quarantined
+  // for the same human review/release path, not distinguished by a separate status.
   'QUARANTINED_UNKNOWN_SENDER',
   'REJECTED_UNKNOWN_ORGANIZATION',
 ]);

@@ -22,7 +22,8 @@ export interface ValidationIssue {
     | 'TOTAL_MISMATCH'
     | 'DUPLICATE'
     | 'DATE_IMPLAUSIBLE'
-    | 'PRICE_ANOMALY';
+    | 'PRICE_ANOMALY'
+    | 'PRICE_CHECK_UNAVAILABLE';
   field: string;
   message: string;
 }
@@ -73,6 +74,15 @@ export interface ValidationContext {
   duplicateCandidates: DuplicateCandidate[];
   /** Confirmed trailing prices for one extracted line's (supplier, sku), keyed by line index. A line with no entry (or an empty array) means no confirmed price history exists — the gate produces no signal for it, never a fabricated anomaly or a fabricated pass. */
   trailingPricesByLineIndex: Map<number, TrailingPrice[]>;
+  /**
+   * Whether the caller was able to resolve the extracted supplier name to a real supplier row at
+   * all — `false` when `findByExactName` found zero or more-than-one match (any OCR variance in
+   * the supplier name silently skips price-anomaly checking otherwise, with zero issues raised, and
+   * the document can reach AUTO_APPROVE having never actually been checked). `trailingPricesByLineIndex`
+   * being empty is genuinely ambiguous on its own — "supplier resolved, no price history yet" and
+   * "supplier never resolved, gate never ran" must not look the same to a human reviewer.
+   */
+  supplierResolved: boolean;
   /** Injected so the date-plausibility gate is deterministic and testable — never `new Date()` inline. */
   today: Date;
 }
@@ -218,8 +228,25 @@ const checkDatePlausibility = (fields: RawFields, today: Date): ValidationIssue[
  * class. A line with no confirmed trailing prices produces no issue at all (not a pass, not a
  * fail) — there being no comparison data is itself an "unknown," not evidence of correctness.
  */
-const checkPriceAnomaly = (lines: RawLine[], trailingPricesByLineIndex: Map<number, TrailingPrice[]>): ValidationIssue[] => {
+const checkPriceAnomaly = (lines: RawLine[], trailingPricesByLineIndex: Map<number, TrailingPrice[]>, supplierResolved: boolean): ValidationIssue[] => {
   const issues: ValidationIssue[] = [];
+
+  // The supplier name never resolved to a real row at all (OCR variance, or a genuinely new
+  // supplier) — every line's price-anomaly check was skipped, not "passed." A WARN per line with a
+  // SKU makes that visible to a human reviewer instead of a silently-clean-looking result.
+  if (!supplierResolved) {
+    lines.forEach((line, index) => {
+      if (line.sku.value === null) return;
+      issues.push({
+        severity: 'WARN',
+        code: 'PRICE_CHECK_UNAVAILABLE',
+        field: `lines[${index}].unitPrice`,
+        message: `Line ${index + 1}: price-anomaly check did not run — the extracted supplier name did not resolve to exactly one known supplier.`,
+      });
+    });
+    return issues;
+  }
+
   lines.forEach((line, index) => {
     const unitPrice = parseDecimal(line.unitPrice.value);
     if (unitPrice === null) return;
@@ -270,7 +297,7 @@ export const validateExtraction = (fields: RawFields, lines: RawLine[], context:
     ...checkDocumentTotal(fields, lines),
     ...checkDuplicate(context.duplicateCandidates),
     ...checkDatePlausibility(fields, context.today),
-    ...checkPriceAnomaly(lines, context.trailingPricesByLineIndex),
+    ...checkPriceAnomaly(lines, context.trailingPricesByLineIndex, context.supplierResolved),
   ];
   return { issues, canAutoApprove: !issues.some((issue) => issue.severity === 'BLOCK') };
 };

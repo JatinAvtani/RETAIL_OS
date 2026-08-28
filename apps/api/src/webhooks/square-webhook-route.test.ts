@@ -1,10 +1,11 @@
 import { createHmac } from 'node:crypto';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { createDb, organizations, posConnections, posItems, salesTransactions, stores, webhookEvents } from '@retailos/db';
 import { encryptToken } from '@retailos/pos';
 import { generateId } from '@retailos/domain';
 import { buildServer } from '../server';
+import { squareSyncQueue } from '../trpc/context';
 import type { FastifyInstance } from 'fastify';
 
 const NOTIFICATION_URL = 'http://localhost:3001/webhooks/square';
@@ -14,9 +15,12 @@ const sign = (rawBody: string): string =>
   createHmac('sha256', SIGNING_KEY).update(NOTIFICATION_URL + rawBody, 'utf8').digest('base64');
 
 /**
- * real HTTP verification for the Square webhook receiver. `global.fetch` is patched
- * (Square's host only) for the tests that let the triggered sync actually run — same standing
- * limitation as related work (no live Square sandbox app exists yet).
+ * real HTTP verification for the Square webhook receiver. The route now ENQUEUES a
+ * `SquareSyncJobData` job instead of running the sync inline (see `square-sync-queue.ts`'s own doc
+ * comment for why) — `apps/worker`'s `square-sync-processor.test.ts` proves the worker side (the
+ * sync actually running, `webhook_events.processedAt`/`processingError` being set once it
+ * finishes); this file proves the ROUTE's own auth/dedup/enqueue behavior, which is everything it
+ * still does synchronously.
  */
 describe('POST /webhooks/square', () => {
   let app: FastifyInstance;
@@ -25,7 +29,6 @@ describe('POST /webhooks/square', () => {
     process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/retailos'
   );
   const createdOrgIds: string[] = [];
-  const originalFetch = globalThis.fetch;
 
   beforeAll(async () => {
     originalEnv = {
@@ -49,12 +52,7 @@ describe('POST /webhooks/square', () => {
     await app.ready();
   });
 
-  beforeEach(() => {
-    globalThis.fetch = originalFetch;
-  });
-
   afterEach(async () => {
-    globalThis.fetch = originalFetch;
     for (const orgId of createdOrgIds) {
       await db.delete(webhookEvents).where(eq(webhookEvents.organizationId, orgId));
       await db.delete(salesTransactions).where(eq(salesTransactions.organizationId, orgId));
@@ -98,19 +96,6 @@ describe('POST /webhooks/square', () => {
       status: 'CONNECTED',
     });
     return { organizationId, storeId, merchantId };
-  };
-
-  const stubSquareEmptyResponse = (): void => {
-    globalThis.fetch = vi.fn(async (input: Parameters<typeof fetch>[0]) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
-      if (url.includes('/v2/orders/search')) {
-        return new Response(JSON.stringify({ orders: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      }
-      if (url.includes('/v2/catalog/search-catalog-objects')) {
-        return new Response(JSON.stringify({ objects: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      }
-      return originalFetch(input);
-    }) as typeof fetch;
   };
 
   const orderEventBody = (merchantId: string, eventId: string): string =>
@@ -170,9 +155,8 @@ describe('POST /webhooks/square', () => {
     expect(rows).toHaveLength(0);
   });
 
-  it('a genuinely valid, known-merchant order event is recorded, triggers the matching sync, and marks itself processed', async () => {
-    const { organizationId, merchantId } = await setUpConnectedOrg();
-    stubSquareEmptyResponse();
+  it('a genuinely valid, known-merchant order event is recorded and enqueues a real orders sync job, still UNPROCESSED at response time', async () => {
+    const { organizationId, storeId, merchantId } = await setUpConnectedOrg();
     const eventId = generateId();
     const body = orderEventBody(merchantId, eventId);
     const signature = sign(body);
@@ -189,13 +173,20 @@ describe('POST /webhooks/square', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]!.externalEventId).toBe(eventId);
     expect(rows[0]!.eventType).toBe('transaction.updated');
-    expect(rows[0]!.processedAt).not.toBeNull();
-    expect(rows[0]!.processingError).toBeNull();
+    // The route no longer runs the sync inline — processedAt stays null until the worker
+    // processor (apps/worker/src/square-sync-processor.ts, tested there) actually runs it.
+    expect(rows[0]!.processedAt).toBeNull();
+
+    const jobs = await squareSyncQueue.getJobs(['waiting', 'active', 'delayed']);
+    const matching = jobs.find((j) => j.data.organizationId === organizationId && j.data.storeId === storeId);
+    expect(matching).toBeDefined();
+    expect(matching!.data.kind).toBe('orders');
+    expect(matching!.data.webhookEventId).toBe(rows[0]!.id);
+    await matching!.remove();
   });
 
-  it('replaying the SAME event id is deduped — one row, not reprocessed', async () => {
+  it('replaying the SAME event id is deduped — one row, not re-enqueued', async () => {
     const { organizationId, merchantId } = await setUpConnectedOrg();
-    stubSquareEmptyResponse();
     const eventId = generateId();
     const body = orderEventBody(merchantId, eventId);
     const signature = sign(body);
@@ -219,11 +210,15 @@ describe('POST /webhooks/square', () => {
 
     const rows = await db.select().from(webhookEvents).where(eq(webhookEvents.organizationId, organizationId));
     expect(rows).toHaveLength(1);
+
+    const jobs = await squareSyncQueue.getJobs(['waiting', 'active', 'delayed']);
+    const matching = jobs.filter((j) => j.data.organizationId === organizationId);
+    expect(matching).toHaveLength(1); // one enqueue, not two, for the duplicate delivery
+    await Promise.all(matching.map((j) => j.remove()));
   });
 
-  it('a catalog.version.updated event triggers a catalog sync, not an orders sync', async () => {
-    const { organizationId, merchantId } = await setUpConnectedOrg();
-    stubSquareEmptyResponse();
+  it('a catalog.version.updated event records catalog.updated and enqueues a real catalog sync job, not an orders one', async () => {
+    const { organizationId, storeId, merchantId } = await setUpConnectedOrg();
     const body = JSON.stringify({
       merchant_id: merchantId,
       type: 'catalog.version.updated',
@@ -242,12 +237,22 @@ describe('POST /webhooks/square', () => {
     expect(response.statusCode).toBe(200);
     const rows = await db.select().from(webhookEvents).where(eq(webhookEvents.organizationId, organizationId));
     expect(rows[0]!.eventType).toBe('catalog.updated');
-    expect(rows[0]!.processedAt).not.toBeNull();
+    expect(rows[0]!.processedAt).toBeNull(); // not run inline — the worker processor sets this once it actually runs
+
+    const jobs = await squareSyncQueue.getJobs(['waiting', 'active', 'delayed']);
+    const matching = jobs.find((j) => j.data.organizationId === organizationId && j.data.storeId === storeId);
+    expect(matching).toBeDefined();
+    expect(matching!.data.kind).toBe('catalog');
+    await matching!.remove();
   });
 
-  it('a genuinely valid event whose triggered sync fails still returns 200, with the failure recorded on the row', async () => {
-    const { organizationId, merchantId } = await setUpConnectedOrg();
-    globalThis.fetch = vi.fn(async () => new Response('', { status: 500 })) as typeof fetch;
+  it('a genuinely valid event still returns 200 and enqueues, regardless of how the eventual sync turns out — the route cannot know yet', async () => {
+    // The exact scenario this route used to observe synchronously (a downstream sync failure) is
+    // now apps/worker/src/square-sync-processor.test.ts's own concern — this route commits to
+    // nothing about the sync's eventual outcome, which is the whole point of moving it off the
+    // request path (Square's own 10s webhook timeout no longer bounds how long a real sync can
+    // take).
+    const { organizationId, storeId, merchantId } = await setUpConnectedOrg();
     const eventId = generateId();
     const body = orderEventBody(merchantId, eventId);
     const signature = sign(body);
@@ -259,10 +264,15 @@ describe('POST /webhooks/square', () => {
       headers: { 'content-type': 'application/json', 'x-square-hmacsha256-signature': signature },
     });
 
-    expect(response.statusCode).toBe(200); // the webhook itself was valid — the response reflects receipt, not the sync's outcome
+    expect(response.statusCode).toBe(200);
     const rows = await db.select().from(webhookEvents).where(eq(webhookEvents.organizationId, organizationId));
-    expect(rows[0]!.processedAt).not.toBeNull();
-    expect(rows[0]!.processingError).not.toBeNull();
+    expect(rows[0]!.processedAt).toBeNull();
+    expect(rows[0]!.processingError).toBeNull();
+
+    const jobs = await squareSyncQueue.getJobs(['waiting', 'active', 'delayed']);
+    const matching = jobs.find((j) => j.data.organizationId === organizationId && j.data.storeId === storeId);
+    expect(matching).toBeDefined();
+    await matching!.remove();
   });
 
   it('an unrecognized event type is accepted (200) but not recorded', async () => {

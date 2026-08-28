@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyPluginCallback } from 'fastify';
 import { PosConnectionLookup, WebhookEventRepository } from '@retailos/db';
 import { generateId } from '@retailos/domain';
+import { enqueueSquareSyncJob } from '@retailos/queue';
 import {
   parseSquareWebhook,
   verifySquareWebhookSignature,
@@ -8,9 +9,7 @@ import {
   type SquareEnvironment,
   type SquareOAuthConfig,
 } from '@retailos/pos';
-import { db } from '../trpc/context';
-import { syncSquareCatalog } from '../integrations/square-catalog-sync';
-import { syncSquareOrders } from '../integrations/square-orders-sync';
+import { db, squareSyncQueue } from '../trpc/context';
 
 const SQUARE_WEBHOOK_SIGNATURE_HEADER = 'x-square-hmacsha256-signature';
 
@@ -36,16 +35,15 @@ const readSquareConfig = (): SquareOAuthConfig | null => {
  * already re-serialized it into a JS object by the time a normal route handler sees it, which
  * produces a different byte sequence (key order, whitespace) than what Square actually signed.
  *
- * "Return 200 immediately" is interpreted as "respond within Square's own documented 10-second
- * timeout," not "before doing any work" — asked the user first, confirmed: since no real job
- * queue/worker exists anywhere in this codebase yet (`apps/worker` is still a placeholder), the
- * triggered sync (`syncSquareCatalog`/`syncSquareOrders`) runs SYNCHRONOUSLY, before the response
- * is sent, with its outcome recorded on the `webhook_events` row regardless of whether it
- * succeeded — a future worker can pick up `processedAt IS NULL` rows the same way once one exists,
- * without this route needing to change. A sync that fails does NOT fail the webhook response
- * itself (Square already delivered a genuinely valid, verified event — the response reflects that
- * receipt, not the downstream sync's own success/failure, matching the plan's "webhooks are
- * best-effort; the nightly reconciliation sweep is not optional" framing).
+ * "Return 200 immediately" now means what the design's plain-language example actually says:
+ * `enqueueSquareSyncJob` hands the real sync (`syncSquareCatalog`/`syncSquareOrders`, now
+ * `packages/integrations` — a real BullMQ `Worker` in `apps/worker` consumes it) off the request
+ * path entirely, and this route returns as soon as the job is queued. This route used to run the
+ * sync SYNCHRONOUSLY, before `apps/worker` had 8 real BullMQ workers — a large catalog paginating
+ * 1000 objects/page with no timeout, inside Square's own 10-second webhook delivery window, risked
+ * Square abandoning the request and retrying (re-running the same sync again). `webhook_events`'
+ * own `processedAt`/`processingError` are now set by the WORKER's processor once the sync actually
+ * runs, not by this route — this route only knows the job was accepted, not its outcome.
  */
 export const registerSquareWebhookRoute: FastifyPluginCallback = (app: FastifyInstance, _opts, done) => {
   // Captures the raw request body as a string BEFORE any JSON parsing — scoped to this plugin only.
@@ -117,21 +115,16 @@ export const registerSquareWebhookRoute: FastifyPluginCallback = (app: FastifyIn
       return;
     }
 
-    // Best-effort processing, still inside the response window (Square's own documented 10s
-    // timeout) — a failed sync here does NOT turn the response into a failure; Square genuinely
-    // delivered a valid event, and retrying delivery of the SAME event would not fix a sync-side
-    // error. The row's processingError is this failure's real, durable record instead.
-    try {
-      if (parsed.event.type === 'catalog.updated') {
-        await syncSquareCatalog(db, connection.organizationId, connection.storeId, config, process.env.POS_TOKEN_ENCRYPTION_KEY);
-      } else {
-        await syncSquareOrders(db, connection.organizationId, connection.storeId, config, process.env.POS_TOKEN_ENCRYPTION_KEY);
-      }
-      await webhookEventRepository.markProcessed(recorded.id);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Webhook-triggered sync failed.';
-      await webhookEventRepository.markProcessed(recorded.id, message);
-    }
+    // Off the request path — see this route's own top-level doc comment. `webhookEventId` lets the
+    // worker processor call `markProcessed` on the SAME row this route just created, so
+    // `webhook_events` still ends up with a real, durable outcome — just recorded later, by the
+    // process that actually ran the sync.
+    await enqueueSquareSyncJob(squareSyncQueue, {
+      kind: parsed.event.type === 'catalog.updated' ? 'catalog' : 'orders',
+      organizationId: connection.organizationId,
+      storeId: connection.storeId,
+      webhookEventId: recorded.id,
+    });
 
     reply.code(200).send({ received: true, duplicate: false });
   });

@@ -510,4 +510,41 @@ describe('purchaseOrders — create/addLine/submit/approve/reject/send/cancel', 
       expect(JSON.parse(pdfUrlResponse.body).result.data.url).toBeNull();
     });
   });
+
+  /**
+   * The real exit for a short-shipped PO — packages/domain/src/purchasing/po-lifecycle.test.ts and
+   * packages/db's own purchase-order-repository.test.ts already prove the domain legality and the
+   * real DB/outbox/audit-log effects end to end; these tests prove the ROUTER's own thin wrapper
+   * (permission gate, error mapping) is wired correctly, matching this file's own precedent of
+   * testing the router boundary separately from the repository it calls through to.
+   */
+  describe('closeShort', () => {
+    it('is rejected (409) on a DRAFT purchase order — CLOSE_SHORT is only legal from PARTIALLY_RECEIVED', async () => {
+      const { organizationId, storeId, supplierId } = await setUpOrgWithSupplierProduct();
+      const { token } = await issueSessionWithMembership(organizationId, 'OWNER', ['purchasing:read', 'purchasing:write', 'purchasing:approve']);
+      const createResponse = await call('purchaseOrders.create', token, { storeId, supplierId, poNumber: 'PO-CLOSE-1' });
+      const purchaseOrderId = JSON.parse(createResponse.body).result.data.id;
+
+      const closeResponse = await call('purchaseOrders.closeShort', token, { purchaseOrderId, expectedVersion: 1 });
+      expect(closeResponse.statusCode).toBe(409);
+      expect(JSON.parse(closeResponse.body).error.message).toMatch(/CLOSE_SHORT/);
+
+      const getResponse = await query('purchaseOrders.get', token, { purchaseOrderId });
+      expect(JSON.parse(getResponse.body).result.data.purchaseOrder.status).toBe('DRAFT');
+    });
+
+    it('a session without purchasing:write is rejected with 403, never reaching the repository', async () => {
+      const { organizationId, storeId, supplierId } = await setUpOrgWithSupplierProduct();
+      const { token: ownerToken } = await issueSessionWithMembership(organizationId, 'OWNER', ['purchasing:read', 'purchasing:write', 'purchasing:approve']);
+      const createResponse = await call('purchaseOrders.create', ownerToken, { storeId, supplierId, poNumber: 'PO-CLOSE-2' });
+      const purchaseOrderId = JSON.parse(createResponse.body).result.data.id;
+
+      const { token: readOnlyToken } = await issueSessionWithMembership(organizationId, 'MANAGER', ['purchasing:read']);
+      const closeResponse = await call('purchaseOrders.closeShort', readOnlyToken, { purchaseOrderId, expectedVersion: 1 });
+      expect(closeResponse.statusCode).toBe(403);
+
+      const getResponse = await query('purchaseOrders.get', ownerToken, { purchaseOrderId });
+      expect(JSON.parse(getResponse.body).result.data.purchaseOrder.status).toBe('DRAFT');
+    });
+  });
 });

@@ -1,6 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import { Decimal } from 'decimal.js';
 import {
+  createDb,
   PosConnectionRepository,
   SalesIngestionPipeline,
   MovementService,
@@ -15,10 +16,11 @@ import {
 } from '@retailos/db';
 import { decryptToken, encryptToken, fetchSquareOrders, refreshSquareToken, type SquareOAuthConfig, type ExternalTransaction } from '@retailos/pos';
 import { generateId, type CurrencyCode } from '@retailos/domain';
-import type { db as Db } from '../trpc/context';
 import { SquareNotConnectedError } from './square-catalog-sync';
 
 export { SquareNotConnectedError };
+
+type Db = ReturnType<typeof createDb>['db'];
 
 export class SquareLocationMissingError extends Error {
   constructor() {
@@ -58,7 +60,7 @@ export type SquareReconciliationResult = SquareOrdersSyncResult;
  * counted, matching `SaleConsumptionService`'s own per-ingredient failure isolation.
  */
 export const syncSquareOrders = async (
-  db: typeof Db,
+  db: Db,
   organizationId: string,
   storeId: string,
   config: SquareOAuthConfig,
@@ -134,7 +136,7 @@ const RECONCILIATION_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
  * healthy incremental sync costs nothing beyond the re-fetch itself.
  */
 export const reconcileSquareOrders = async (
-  db: typeof Db,
+  db: Db,
   organizationId: string,
   storeId: string,
   config: SquareOAuthConfig,
@@ -199,7 +201,7 @@ export const reconcileSquareOrders = async (
  * progress.
  */
 const runOrdersWindow = async (
-  db: typeof Db,
+  db: Db,
   organizationId: string,
   storeId: string,
   config: SquareOAuthConfig,
@@ -372,7 +374,7 @@ const recordOrderInTx = async (
  * and revenue exactly rather than recomputing from the recipe.
  */
 const triggerConsumptionForTransaction = async (
-  db: typeof Db,
+  db: Db,
   organizationId: string,
   storeId: string,
   transactionId: string
@@ -437,7 +439,7 @@ const triggerConsumptionForTransaction = async (
  * only the additional reversal, not a second full one.
  */
 const processRefundIfNew = async (
-  db: typeof Db,
+  db: Db,
   organizationId: string,
   storeId: string,
   order: ExternalTransaction

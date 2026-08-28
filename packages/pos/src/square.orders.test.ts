@@ -73,6 +73,7 @@ describe('fetchSquareOrders', () => {
     expect(tx.checks).toHaveLength(1);
 
     const check = tx.checks[0]!;
+    expect(check.subtotal).toEqual({ amount: '9.00', currency: 'USD' });
     expect(check.total).toEqual({ amount: '9.00', currency: 'USD' });
     expect(check.tax).toEqual({ amount: '0.72', currency: 'USD' });
     expect(check.lines).toHaveLength(1);
@@ -87,6 +88,39 @@ describe('fetchSquareOrders', () => {
       modifiers: [],
       voided: false,
     });
+  });
+
+  it('subtotal is the sum of line totals, not the tax-inclusive order total_money', async () => {
+    mockResponse({
+      orders: [
+        {
+          id: 'ORDER-TAXED',
+          location_id: LOCATION_ID,
+          created_at: '2026-08-02T12:00:00Z',
+          state: 'COMPLETED',
+          line_items: [
+            {
+              uid: 'LINE-1',
+              catalog_object_id: 'VAR-1',
+              name: 'Cappuccino',
+              quantity: '2',
+              base_price_money: { amount: 450, currency: 'USD' },
+              total_money: { amount: 900, currency: 'USD' },
+            },
+          ],
+          // total_money includes tax (72 cents) on top of the 900-cent line subtotal — Square's Orders
+          // API has no separate plain-subtotal field, so a naive mapping would mislabel 9.72 as subtotal.
+          total_money: { amount: 972, currency: 'USD' },
+          total_tax_money: { amount: 72, currency: 'USD' },
+        },
+      ],
+    });
+
+    const result = await fetchSquareOrders(sandboxConfig, 'token', LOCATION_ID, SINCE);
+    const check = result.items[0]!.checks[0]!;
+    expect(check.subtotal).toEqual({ amount: '9.00', currency: 'USD' });
+    expect(check.total).toEqual({ amount: '9.72', currency: 'USD' });
+    expect(check.tax).toEqual({ amount: '0.72', currency: 'USD' });
   });
 
   it('maps a CANCELED order to status "voided"', async () => {

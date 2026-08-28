@@ -18,22 +18,46 @@ const sampleResult = (overrides: Partial<MetricResult> = {}): MetricResult => ({
 
 describe('buildMetricCacheKey', () => {
   it('includes the organization id — I4, a cache hit bypasses RLS entirely', () => {
-    const keyA = buildMetricCacheKey('net_revenue', 'org-a', { storeId: 's1' });
-    const keyB = buildMetricCacheKey('net_revenue', 'org-b', { storeId: 's1' });
+    const keyA = buildMetricCacheKey('net_revenue', 'org-a', 'ALL', { storeId: 's1' });
+    const keyB = buildMetricCacheKey('net_revenue', 'org-b', 'ALL', { storeId: 's1' });
     expect(keyA).not.toBe(keyB);
     expect(keyA).toContain('org-a');
   });
 
   it('is stable regardless of key order in the params object', () => {
-    const keyA = buildMetricCacheKey('net_revenue', 'org-1', { storeId: 's1', days: 30 });
-    const keyB = buildMetricCacheKey('net_revenue', 'org-1', { days: 30, storeId: 's1' });
+    const keyA = buildMetricCacheKey('net_revenue', 'org-1', 'ALL', { storeId: 's1', days: 30 });
+    const keyB = buildMetricCacheKey('net_revenue', 'org-1', 'ALL', { days: 30, storeId: 's1' });
     expect(keyA).toBe(keyB);
   });
 
   it('produces a different key for different params, same metric and org', () => {
-    const keyA = buildMetricCacheKey('net_revenue', 'org-1', { storeId: 's1' });
-    const keyB = buildMetricCacheKey('net_revenue', 'org-1', { storeId: 's2' });
+    const keyA = buildMetricCacheKey('net_revenue', 'org-1', 'ALL', { storeId: 's1' });
+    const keyB = buildMetricCacheKey('net_revenue', 'org-1', 'ALL', { storeId: 's2' });
     expect(keyA).not.toBe(keyB);
+  });
+
+  it('produces a different key for different NESTED params — the historical collapse bug', () => {
+    // JSON.stringify(value, Object.keys(value).sort()) looks like a sort but is the replacer-ARRAY
+    // overload: an allowlist applied at EVERY nesting level, not a comparator. Proven live before
+    // the fix: {filters:{productId:'p1'}} and {filters:{productId:'p2'}} both serialized to
+    // {"filters":{}} — two different params sharing one cache key.
+    const keyA = buildMetricCacheKey('net_revenue', 'org-1', 'ALL', { filters: { productId: 'p1' } });
+    const keyB = buildMetricCacheKey('net_revenue', 'org-1', 'ALL', { filters: { productId: 'p2' } });
+    expect(keyA).not.toBe(keyB);
+  });
+
+  it('produces a different key for different storeIds scopes, even with identical params', () => {
+    const keyA = buildMetricCacheKey('net_revenue', 'org-1', 'ALL', { storeId: 's1' });
+    const keyB = buildMetricCacheKey('net_revenue', 'org-1', ['store-x'], { storeId: 's1' });
+    const keyC = buildMetricCacheKey('net_revenue', 'org-1', ['store-y'], { storeId: 's1' });
+    expect(keyA).not.toBe(keyB);
+    expect(keyB).not.toBe(keyC);
+  });
+
+  it('storeIds array order does not change the key', () => {
+    const keyA = buildMetricCacheKey('net_revenue', 'org-1', ['store-a', 'store-b'], {});
+    const keyB = buildMetricCacheKey('net_revenue', 'org-1', ['store-b', 'store-a'], {});
+    expect(keyA).toBe(keyB);
   });
 });
 
@@ -60,11 +84,11 @@ describe('withMetricCache', () => {
 
   it('a cache miss calls compute exactly once and returns its real result', async () => {
     const params = uniqueParams();
-    const key = buildMetricCacheKey('net_revenue', 'org-miss', params);
+    const key = buildMetricCacheKey('net_revenue', 'org-miss', 'ALL', params);
     usedKeys.push(key);
 
     let computeCallCount = 0;
-    const result = await withMetricCache(redis, 'net_revenue', 'org-miss', params, async () => {
+    const result = await withMetricCache(redis, 'net_revenue', 'org-miss', 'ALL', params, async () => {
       computeCallCount++;
       return sampleResult();
     });
@@ -75,16 +99,16 @@ describe('withMetricCache', () => {
 
   it('a real cache hit returns the ORIGINAL computedAt/freshness, not the current time — confirmed with the user, staleness must stay honest', async () => {
     const params = uniqueParams();
-    const key = buildMetricCacheKey('net_revenue', 'org-hit', params);
+    const key = buildMetricCacheKey('net_revenue', 'org-hit', 'ALL', params);
     usedKeys.push(key);
     const originalComputedAt = new Date('2020-01-01T00:00:00Z'); // deliberately far in the past
 
-    await withMetricCache(redis, 'net_revenue', 'org-hit', params, async () =>
+    await withMetricCache(redis, 'net_revenue', 'org-hit', 'ALL', params, async () =>
       sampleResult({ computedAt: originalComputedAt, freshness: originalComputedAt })
     );
 
     let computeCallCount = 0;
-    const second = await withMetricCache(redis, 'net_revenue', 'org-hit', params, async () => {
+    const second = await withMetricCache(redis, 'net_revenue', 'org-hit', 'ALL', params, async () => {
       computeCallCount++;
       return sampleResult(); // would be wrong if this were ever called
     });
@@ -96,11 +120,11 @@ describe('withMetricCache', () => {
 
   it('Date fields survive the real Redis round-trip as genuine Date instances, not strings', async () => {
     const params = uniqueParams();
-    const key = buildMetricCacheKey('net_revenue', 'org-dates', params);
+    const key = buildMetricCacheKey('net_revenue', 'org-dates', 'ALL', params);
     usedKeys.push(key);
 
-    await withMetricCache(redis, 'net_revenue', 'org-dates', params, async () => sampleResult());
-    const cached = await withMetricCache(redis, 'net_revenue', 'org-dates', params, async () => sampleResult());
+    await withMetricCache(redis, 'net_revenue', 'org-dates', 'ALL', params, async () => sampleResult());
+    const cached = await withMetricCache(redis, 'net_revenue', 'org-dates', 'ALL', params, async () => sampleResult());
 
     expect(cached.computedAt).toBeInstanceOf(Date);
     expect(cached.period.from).toBeInstanceOf(Date);
@@ -109,26 +133,26 @@ describe('withMetricCache', () => {
 
   it('a metric-specific extension field (e.g. an anomalies array) survives the round-trip unchanged', async () => {
     const params = uniqueParams();
-    const key = buildMetricCacheKey('sales_anomaly', 'org-ext', params);
+    const key = buildMetricCacheKey('sales_anomaly', 'org-ext', 'ALL', params);
     usedKeys.push(key);
     const extended = { ...sampleResult({ metricId: 'sales_anomaly' }), anomalies: [{ date: '2026-01-05', value: '50.0000', zScore: '3.1000' }] };
 
-    await withMetricCache(redis, 'sales_anomaly', 'org-ext', params, async () => extended as MetricResult);
-    const cached = await withMetricCache(redis, 'sales_anomaly', 'org-ext', params, async () => extended as MetricResult);
+    await withMetricCache(redis, 'sales_anomaly', 'org-ext', 'ALL', params, async () => extended as MetricResult);
+    const cached = await withMetricCache(redis, 'sales_anomaly', 'org-ext', 'ALL', params, async () => extended as MetricResult);
 
     expect((cached as typeof extended).anomalies).toEqual(extended.anomalies);
   });
 
   it('respects a real short TTL — a key genuinely expires and a later call recomputes', async () => {
     const params = uniqueParams();
-    const key = buildMetricCacheKey('net_revenue', 'org-ttl', params);
+    const key = buildMetricCacheKey('net_revenue', 'org-ttl', 'ALL', params);
     usedKeys.push(key);
 
-    await withMetricCache(redis, 'net_revenue', 'org-ttl', params, async () => sampleResult(), 1);
+    await withMetricCache(redis, 'net_revenue', 'org-ttl', 'ALL', params, async () => sampleResult(), 1);
     await new Promise((resolve) => setTimeout(resolve, 1300)); // past the 1s TTL
 
     let computeCallCount = 0;
-    await withMetricCache(redis, 'net_revenue', 'org-ttl', params, async () => {
+    await withMetricCache(redis, 'net_revenue', 'org-ttl', 'ALL', params, async () => {
       computeCallCount++;
       return sampleResult();
     }, 1);
@@ -138,7 +162,7 @@ describe('withMetricCache', () => {
 
   it('single-flight: N concurrent misses on the SAME key only compute once', async () => {
     const params = uniqueParams();
-    const key = buildMetricCacheKey('net_revenue', 'org-flight', params);
+    const key = buildMetricCacheKey('net_revenue', 'org-flight', 'ALL', params);
     usedKeys.push(key);
 
     let computeCallCount = 0;
@@ -149,7 +173,7 @@ describe('withMetricCache', () => {
     };
 
     const results = await Promise.all(
-      Array.from({ length: 5 }, () => withMetricCache(redis, 'net_revenue', 'org-flight', params, compute))
+      Array.from({ length: 5 }, () => withMetricCache(redis, 'net_revenue', 'org-flight', 'ALL', params, compute))
     );
 
     expect(computeCallCount).toBe(1);

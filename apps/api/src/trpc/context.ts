@@ -1,9 +1,9 @@
 import { createDb } from '@retailos/db';
 import { createRedisClient, SessionStore } from '@retailos/session';
 import { createStorageClient } from '@retailos/storage';
-import { createExtractionQueue, createEmbeddingQueue, createQueueRedisConnection } from '@retailos/queue';
+import { createExtractionQueue, createEmbeddingQueue, createSquareSyncQueue, createQueueRedisConnection } from '@retailos/queue';
 import type { Queue } from 'bullmq';
-import type { ExtractionJobData, EmbeddingJobData } from '@retailos/queue';
+import type { ExtractionJobData, EmbeddingJobData, SquareSyncJobData } from '@retailos/queue';
 import type { S3Client } from '@aws-sdk/client-s3';
 import type { CreateFastifyContextOptions } from '@trpc/server/adapters/fastify';
 import { createAuthRateLimiters } from '../auth/rate-limit';
@@ -61,6 +61,18 @@ export const extractionQueue: Queue<ExtractionJobData> = createExtractionQueue(
 
 /** earlier work — a real, separate connection matching `extractionQueue`'s own reasoning above; the embedding job's failure/backoff profile is genuinely distinct from extraction's. */
 export const embeddingQueue: Queue<EmbeddingJobData> = createEmbeddingQueue(
+  createQueueRedisConnection(process.env.REDIS_URL ?? 'redis://localhost:6379')
+);
+
+/**
+ * Square catalog/orders/reconciliation syncs used to run SYNCHRONOUSLY inside the webhook request
+ * and the two manual-trigger mutations (`integrations.ts`) — real, external, paginated API calls
+ * with no timeout, inside Square's own 10-second webhook delivery window. Same reasoning as
+ * `extractionQueue`/`embeddingQueue` above for why this is its own queue/connection, not a job type
+ * added to one of them: an external, rate-limited vendor API call has a different failure/backoff
+ * profile than either.
+ */
+export const squareSyncQueue: Queue<SquareSyncJobData> = createSquareSyncQueue(
   createQueueRedisConnection(process.env.REDIS_URL ?? 'redis://localhost:6379')
 );
 

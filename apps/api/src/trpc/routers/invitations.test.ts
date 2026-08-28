@@ -34,6 +34,22 @@ const rpc = async (
   return { status: response.statusCode, body: response.json() as TrpcSuccess | TrpcError, cookies };
 };
 
+/** A `.query()` procedure (unlike `.mutation()`) is called over GET with `?input=`, matching
+ * tRPC's Fastify adapter — see assistant.test.ts's own established pattern for this same shape. */
+const queryRpc = async (
+  app: FastifyInstance,
+  path: string,
+  input: Record<string, unknown>,
+  cookie?: string
+): Promise<{ status: number; body: TrpcSuccess | TrpcError }> => {
+  const response = await app.inject({
+    method: 'GET',
+    url: `/trpc/${path}?input=${encodeURIComponent(JSON.stringify(input))}`,
+    ...(cookie ? { headers: { cookie: `__Host-session=${cookie}` } } : {}),
+  });
+  return { status: response.statusCode, body: response.json() as TrpcSuccess | TrpcError };
+};
+
 const asSuccess = (body: TrpcSuccess | TrpcError): TrpcSuccess['result']['data'] => {
   if (!('result' in body)) throw new Error(`Expected success, got error: ${JSON.stringify(body)}`);
   return body.result.data;
@@ -129,6 +145,20 @@ describe('invitations router', () => {
 
     const login = await rpc(app, 'auth.login', { email, password });
     return { userId, organizationId, email, cookie: login.cookies['__Host-session']! };
+  };
+
+  /** Adds a second real accepted member to an EXISTING org and logs them in — for tests that need two members of the same org rather than `loginAs`'s own fresh org per call. */
+  const addAndLoginMember = async (organizationId: string, role: 'OWNER' | 'MANAGER' | 'STAFF' | 'VIEWER_FINANCE') => {
+    const email = uniqueEmail(`member-${role.toLowerCase()}`);
+    const password = 'a-genuinely-long-password-123';
+    const userId = generateId();
+    createdUserIds.push(userId);
+    await db.insert(users).values({ id: userId, email, passwordHash: await hashPassword(password), emailVerifiedAt: new Date() });
+    const membershipId = generateId();
+    await db.insert(memberships).values({ id: membershipId, organizationId, userId, role, acceptedAt: new Date() });
+
+    const login = await rpc(app, 'auth.login', { email, password });
+    return { userId, membershipId, email, cookie: login.cookies['__Host-session']! };
   };
 
   it('an OWNER can create a real invitation', async () => {
@@ -307,5 +337,37 @@ describe('invitations router', () => {
 
     expect(status).toBe(400);
     expect(asError(body).message).toBe('This invitation is invalid or has expired.');
+  });
+
+  it("updateRole revokes the demoted member's existing session immediately, not at its natural expiry", async () => {
+    const owner = await loginAs('OWNER');
+    const manager = await addAndLoginMember(owner.organizationId, 'MANAGER');
+
+    // The demoted member's session is live and valid before the role change.
+    const before = await queryRpc(app, 'invitations.listMembers', {}, manager.cookie);
+    expect(before.status).toBe(403); // MANAGER lacks users:manage — proves the session works at all, just not for this endpoint
+
+    const { status } = await rpc(
+      app,
+      'invitations.updateRole',
+      { membershipId: manager.membershipId, role: 'STAFF' },
+      owner.cookie
+    );
+    expect(status).toBe(200);
+
+    // Same cookie, now revoked — any authenticated call must reject as if never logged in.
+    const after = await queryRpc(app, 'invitations.listMembers', {}, manager.cookie);
+    expect(after.status).toBe(401);
+  });
+
+  it("removeMember revokes the removed member's existing session immediately", async () => {
+    const owner = await loginAs('OWNER');
+    const staff = await addAndLoginMember(owner.organizationId, 'STAFF');
+
+    const { status } = await rpc(app, 'invitations.removeMember', { membershipId: staff.membershipId }, owner.cookie);
+    expect(status).toBe(200);
+
+    const after = await queryRpc(app, 'invitations.listMembers', {}, staff.cookie);
+    expect(after.status).toBe(401);
   });
 });

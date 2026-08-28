@@ -49,17 +49,49 @@ const remedyForUnknownReason = (reason: string): string => {
   if (lower.includes('no recipe') || lower.includes('linked recipe')) {
     return 'Add or link a recipe for this menu item, then ask again.';
   }
-  if (lower.includes('no currently-effective price') || lower.includes('no known cost') || lower.includes('no known average cost')) {
+  if (
+    lower.includes('no currently-effective price') ||
+    lower.includes('no known cost') ||
+    lower.includes('no known average cost') ||
+    lower.includes('no stock movement has ever recorded a cost') ||
+    lower.includes('no fully-resolvable confirmed supplier price') ||
+    lower.includes('resolvable cost') ||
+    (lower.includes('cogs') && (lower.includes('unknown') || lower.includes('zero')))
+  ) {
     return 'Record a supplier price or a stock receipt with a real cost for this product, then ask again.';
   }
   if (lower.includes('not found')) {
     return 'Check the name or id and try again — this does not currently exist.';
   }
-  if (lower.includes('no completed') || lower.includes('no sales') || lower.includes('no gross revenue') || lower.includes('no transactions')) {
+  if (
+    lower.includes('no completed') ||
+    lower.includes('no sales') ||
+    lower.includes('no gross revenue') ||
+    lower.includes('no transactions') ||
+    lower.includes('no sale_consumption') ||
+    lower.includes('no mapped menu items sold')
+  ) {
     return 'There is no sales activity in this period yet — try a different date range.';
   }
   if (lower.includes('no purchase order') || lower.includes('no goods receipt')) {
     return 'There is no purchasing activity in this period yet — try a different date range.';
+  }
+  if (
+    lower.includes('fill_complete') ||
+    lower.includes('delivery_on_time') ||
+    lower.includes('invoice_clean') ||
+    lower.includes('po-linked receipt')
+  ) {
+    return 'This supplier has no recorded delivery/fill/invoice outcomes for this period yet — record a goods receipt against a purchase order, then ask again.';
+  }
+  if (lower.includes('never completed a successful sync')) {
+    return 'This integration has not completed a sync yet — check its connection status, then ask again.';
+  }
+  if (lower.includes('no documents are currently awaiting review')) {
+    return 'This is a genuinely calm result, not a gap — there is nothing pending review right now.';
+  }
+  if (lower.includes('no document extractions exist yet')) {
+    return 'Upload an invoice or receipt document to get started, then ask again.';
   }
   return GENERIC_REMEDY;
 };

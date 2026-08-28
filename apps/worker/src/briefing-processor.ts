@@ -81,21 +81,28 @@ export const createBriefingProcessor = (config: { databaseUrl: string; redisUrl:
     // package export) and this worker cannot import from apps/api (module-boundary direction: apps
     // depend on packages, never on each other). If this list needs to change, change it in BOTH
     // places — flagged here rather than silently risking drift.
-    const specs: { id: string; severity: 'danger' | 'warning'; label: string; run: () => Promise<MetricResult> }[] = [
-      { id: 'expiry_risk_value', severity: 'warning', label: 'Stock is approaching its expiry date', run: () => executeMetric('expiry_risk_value', { storeId, horizonDays: 7 }, auth, metricCtx) },
-      { id: 'dead_stock_value', severity: 'warning', label: 'Stock is sitting unsold', run: () => executeMetric('dead_stock_value', { storeId }, auth, metricCtx) },
-      { id: 'negative_stock_incidents', severity: 'danger', label: 'Products are showing negative stock', run: () => executeMetric('negative_stock_incidents', { storeId }, auth, metricCtx) },
-      { id: 'stock_projection_drift', severity: 'danger', label: 'Stock records disagree with the ledger — a data-integrity problem', run: () => executeMetric('stock_projection_drift', {}, auth, metricCtx) },
-      { id: 'documents_pending_review', severity: 'warning', label: 'Documents are awaiting review', run: () => executeMetric('documents_pending_review', { storeId }, auth, metricCtx) },
-      { id: 'unmapped_pos_items_count', severity: 'warning', label: 'POS items are still unmapped, so consumption data is incomplete', run: () => executeMetric('unmapped_pos_items_count', { storeId }, auth, metricCtx) },
-      { id: 'waste_spike', severity: 'warning', label: 'Waste was unusually high on some days', run: () => executeMetric('waste_spike', windowParams, auth, metricCtx) },
-      { id: 'sales_anomaly', severity: 'warning', label: 'Sales activity was unusual on some days', run: () => executeMetric('sales_anomaly', windowParams, auth, metricCtx) },
+    //
+    // `scope` names the store this candidate's metric was actually computed over — every spec below
+    // is called with THIS job's own `storeId` except `stock_projection_drift`, which is
+    // deliberately called with `{}` (org-wide — stock projection drift is a data-integrity check
+    // over the whole org's ledger, not a per-store figure). Without an explicit scope label here, an
+    // org-wide figure surfacing inside one store's daily briefing would read as if it were about
+    // that store alone — a real misattribution once a second store exists.
+    const specs: { id: string; severity: 'danger' | 'warning'; label: string; scope: string | undefined; run: () => Promise<MetricResult> }[] = [
+      { id: 'expiry_risk_value', severity: 'warning', label: 'Stock is approaching its expiry date', scope: store.name, run: () => executeMetric('expiry_risk_value', { storeId, horizonDays: 7 }, auth, metricCtx) },
+      { id: 'dead_stock_value', severity: 'warning', label: 'Stock is sitting unsold', scope: store.name, run: () => executeMetric('dead_stock_value', { storeId }, auth, metricCtx) },
+      { id: 'negative_stock_incidents', severity: 'danger', label: 'Products are showing negative stock', scope: store.name, run: () => executeMetric('negative_stock_incidents', { storeId }, auth, metricCtx) },
+      { id: 'stock_projection_drift', severity: 'danger', label: 'Stock records disagree with the ledger — a data-integrity problem', scope: 'entire organization (all stores)', run: () => executeMetric('stock_projection_drift', {}, auth, metricCtx) },
+      { id: 'documents_pending_review', severity: 'warning', label: 'Documents are awaiting review', scope: store.name, run: () => executeMetric('documents_pending_review', { storeId }, auth, metricCtx) },
+      { id: 'unmapped_pos_items_count', severity: 'warning', label: 'POS items are still unmapped, so consumption data is incomplete', scope: store.name, run: () => executeMetric('unmapped_pos_items_count', { storeId }, auth, metricCtx) },
+      { id: 'waste_spike', severity: 'warning', label: 'Waste was unusually high on some days', scope: store.name, run: () => executeMetric('waste_spike', windowParams, auth, metricCtx) },
+      { id: 'sales_anomaly', severity: 'warning', label: 'Sales activity was unusual on some days', scope: store.name, run: () => executeMetric('sales_anomaly', windowParams, auth, metricCtx) },
     ];
 
     const settled = await Promise.all(specs.map(async (spec) => ({ spec, result: await tryMetric(spec.run) })));
     const candidates: BriefingCandidate[] = settled
       .filter((s): s is { spec: (typeof specs)[number]; result: MetricResult } => s.result !== null)
-      .map(({ spec, result }) => ({ id: spec.id, severity: spec.severity, label: spec.label, result }));
+      .map(({ spec, result }) => ({ id: spec.id, severity: spec.severity, label: spec.label, scope: spec.scope, result }));
 
     const ranked = rankExceptions(candidates);
     const localDate = resolveLocalDate(to, store.timezone);

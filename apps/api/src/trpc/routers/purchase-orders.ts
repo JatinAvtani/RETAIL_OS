@@ -351,4 +351,21 @@ export const purchaseOrdersRouter = router({
     }
     return result;
   }),
+
+  /**
+   * The real exit for a supplier that short-ships and never delivers the remaining balance — the
+   * one purchasing outcome the state machine previously had no way out of short of a manual DB
+   * fix (`po-lifecycle.ts`'s own doc comment has the full reasoning). Deliberately NOT `cancel`:
+   * real goods already arrived and were posted as real stock via a prior RECEIVE_PARTIAL, so
+   * "cancelled" would misdescribe an order that partly, genuinely happened.
+   */
+  closeShort: protectedProcedure.input(rejectOrCancelInput).mutation(async ({ ctx, input }) => {
+    requirePermission(ctx.session.permissions, 'purchasing:write');
+    const repo = new PurchaseOrderRepository(ctx.db, ctx.session.organizationId);
+    const result = await repo.applyTransition(input.purchaseOrderId, 'CLOSE_SHORT', input.expectedVersion, ctx.session.userId, input.reason);
+    if (!result.ok) {
+      throw new TRPCError({ code: result.reason.includes('not found') ? 'NOT_FOUND' : 'CONFLICT', message: result.reason });
+    }
+    return result;
+  }),
 });

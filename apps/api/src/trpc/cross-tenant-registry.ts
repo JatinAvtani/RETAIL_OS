@@ -335,6 +335,21 @@ const seedSentPurchaseOrderWithLine = async (db: Db, organizationId: string): Pr
   return lines[0].id;
 };
 
+/**
+ * A real PARTIALLY_RECEIVED purchase order — `purchaseOrders.closeShort`'s own-resource starting
+ * state (the ONLY status CLOSE_SHORT is legal from). Reaches it via `applyTransition` directly
+ * rather than the real `goodsReceipts.confirmReceipt` procedure — legitimate here since this
+ * fixture only needs the PO to genuinely BE in that status; exercising the receipt-confirmation
+ * flow itself is `goodsReceipts.confirmReceipt`'s own registry entry's job, not this one's.
+ */
+const seedPartiallyReceivedPurchaseOrder = async (db: Db, organizationId: string): Promise<string> => {
+  const purchaseOrderId = await seedApprovedPurchaseOrder(db, organizationId);
+  const repo = new PurchaseOrderRepository(db, organizationId);
+  await repo.applyTransition(purchaseOrderId, 'SEND', 3);
+  await repo.applyTransition(purchaseOrderId, 'RECEIVE_PARTIAL', 4);
+  return purchaseOrderId;
+};
+
 /** A real confirmed goods receipt — `goodsReceipts.get`'s own-resource starting state. */
 const seedGoodsReceipt = async (db: Db, organizationId: string): Promise<string> => {
   const result = await seedGoodsReceiptAndLine(db, organizationId);
@@ -1513,6 +1528,14 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     type: 'mutation',
     seedResource: seedDraftPurchaseOrder,
     buildInput: (resourceId) => ({ purchaseOrderId: resourceId, expectedVersion: 1 }),
+  },
+  {
+    // CLOSE_SHORT is legal ONLY from PARTIALLY_RECEIVED (create=v1, submit=v2, approve=v3, send=v4,
+    // receive_partial=v5) — unlike cancel above, no earlier status works for the own-resource case.
+    path: 'purchaseOrders.closeShort',
+    type: 'mutation',
+    seedResource: seedPartiallyReceivedPurchaseOrder,
+    buildInput: (resourceId) => ({ purchaseOrderId: resourceId, expectedVersion: 5 }),
   },
   {
     // id-scoped by purchaseOrderLineId — the real risk is tenant B posting a receipt (and

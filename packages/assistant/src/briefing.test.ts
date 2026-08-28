@@ -19,16 +19,18 @@ const result = (over: Partial<MetricResult> = {}): MetricResult => ({
 const candidate = (
   id: string,
   severity: 'danger' | 'warning',
-  res: Partial<MetricResult>
+  res: Partial<MetricResult>,
+  scope?: string
 ): BriefingCandidate => ({
   id,
   severity,
   label: `${id} label`,
   result: result({ metricId: id, ...res }),
+  ...(scope !== undefined ? { scope } : {}),
 });
 
-const money = (id: string, amount: string, severity: 'danger' | 'warning' = 'warning') =>
-  candidate(id, severity, { value: amount, unit: 'CURRENCY' });
+const money = (id: string, amount: string, severity: 'danger' | 'warning' = 'warning', scope?: string) =>
+  candidate(id, severity, { value: amount, unit: 'CURRENCY' }, scope);
 
 const count = (id: string, n: string, severity: 'danger' | 'warning' = 'warning') =>
   candidate(id, severity, { value: n, unit: 'COUNT' });
@@ -143,6 +145,23 @@ describe('toBriefingBundle', () => {
   });
 
   it('an empty ranking produces an empty bundle, which narration must treat as "nothing to report"', () => {
-    expect(toBriefingBundle([])).toEqual({ metrics: [], passages: [], entities: [] });
+    expect(toBriefingBundle([])).toEqual({ metrics: [], metricScopes: [], passages: [], entities: [] });
+  });
+
+  it('carries each candidate\'s scope through to metricScopes, same length and order as metrics', () => {
+    const ranked = rankExceptions([
+      money('shrinkage_value', '900.00', 'danger', 'Downtown Store'), // ranks first — largest monetary
+      count('stock_projection_drift', '1', 'danger'),
+    ]);
+    const bundle = toBriefingBundle(ranked);
+    expect(bundle.metricScopes).toHaveLength(bundle.metrics.length);
+    // shrinkage_value (Downtown Store, real money) outranks stock_projection_drift (no scope, a count).
+    expect(bundle.metricScopes).toEqual(['Downtown Store', undefined]);
+  });
+
+  it('an explicit org-wide scope label survives through ranking and into the bundle, distinct from an unset scope', () => {
+    const orgWide = candidate('stock_projection_drift', 'danger', { value: '1', unit: 'COUNT' }, 'entire organization (all stores)');
+    const bundle = toBriefingBundle(rankExceptions([orgWide]));
+    expect(bundle.metricScopes).toEqual(['entire organization (all stores)']);
   });
 });

@@ -34,6 +34,17 @@ export type BriefingCandidate = {
   severity: BriefingSeverity;
   label: string;
   result: MetricResult;
+  /**
+   * The store this candidate's metric was scoped to, for `narration.ts`'s `metricScopes` (which
+   * names the store behind each figure). `undefined` for a genuinely store-scoped candidate whose
+   * caller didn't resolve a name (rare — most callers know the store they're briefing), but an
+   * ORG-WIDE metric (e.g. `stock_projection_drift` called with no storeId) must set this
+   * explicitly rather than leaving it `undefined`, which reads as "scope unknown," not "no store
+   * applies." Distinguishing those two is the whole reason this field exists: a store's own daily
+   * briefing silently including an org-wide figure with no label looks like it's about that one
+   * store, which is a real misattribution once a second store exists.
+   */
+  scope?: string;
 };
 
 export type RankedException = BriefingCandidate & {
@@ -100,6 +111,7 @@ export const rankExceptions = (candidates: BriefingCandidate[]): RankedException
  */
 export const toBriefingBundle = (ranked: RankedException[]): GroundingBundle => ({
   metrics: ranked.map((r) => r.result),
+  metricScopes: ranked.map((r) => r.scope),
   passages: [],
   entities: [],
 });
