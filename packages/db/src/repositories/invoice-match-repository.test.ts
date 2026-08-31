@@ -49,7 +49,11 @@ describe('InvoiceMatchRepository', () => {
   let supplierProductId: string;
   let kgUnitId: string;
 
-  const createSentPurchaseOrder = async (quantityOrderUnits: string, unitPrice: string) => {
+  const createSentPurchaseOrder = async (
+    quantityOrderUnits: string,
+    unitPrice: string,
+    conversionToBase = '1'
+  ) => {
     const poRepo = new PurchaseOrderRepository(createScopedDb(client), organizationId);
     const created = await poRepo.create({ storeId, supplierId, poNumber: `PO-IM-${generateId()}`, currency: 'USD' });
     const addLineResult = await poRepo.addLine({
@@ -58,7 +62,7 @@ describe('InvoiceMatchRepository', () => {
       productId,
       quantityOrderUnits,
       orderUnitId: kgUnitId,
-      conversionToBase: '1',
+      conversionToBase,
       unitPrice,
       lineNumber: 1,
     });
@@ -204,6 +208,45 @@ describe('InvoiceMatchRepository', () => {
     // genuinely landed, not that it was the only event in the org.
     const events = await adminDb.select().from(outboxEvents).where(eq(outboxEvents.organizationId, organizationId));
     expect(events.map((e) => e.eventType)).toContain('match.variance_detected');
+  });
+
+  it('compares invoice packs with received base units through the frozen PO conversion', async () => {
+    const { purchaseOrderId, purchaseOrderLineId } = await createSentPurchaseOrder(
+      '3',
+      '1785.40',
+      '10000'
+    );
+    await receiveAgainstPo(purchaseOrderId, purchaseOrderLineId, '30000');
+    const documentId = await createPostedInvoiceDocument();
+
+    const repo = new InvoiceMatchRepository(createScopedDb(client), organizationId);
+    const result = await repo.runMatch({
+      documentId,
+      storeId,
+      supplierName,
+      lines: [
+        {
+          sku: { value: 'SUP-SKU-IM-TEST' },
+          quantity: { value: '3' },
+          unitPrice: { value: '1785.40' },
+        },
+      ],
+    });
+
+    expect(result.highestSeverity).toBe('NONE');
+    expect(result.lines[0]?.varianceType).toBe('CLEAN');
+
+    const adminDb = drizzle(adminClient, { schema });
+    const [matchRow] = await adminDb
+      .select()
+      .from(invoiceMatches)
+      .where(eq(invoiceMatches.documentId, documentId));
+    const [lineRow] = await adminDb
+      .select()
+      .from(invoiceMatchLines)
+      .where(eq(invoiceMatchLines.invoiceMatchId, matchRow!.id));
+    expect(lineRow?.receivedQuantity).toBe('3.000000');
+    expect(lineRow?.quantityVariance).toBe('0.000000');
   });
 
   it('flags a real price variance beyond tolerance between the invoice and the PO', async () => {

@@ -17,6 +17,48 @@ is why almost no small business knows the number.
 
 ---
 
+## Buildathon reviewer path
+
+This is an **Open Track** submission. The shortest reproducible path is a bounded version of the
+same corpus and the same production write paths used by the full demo:
+
+```bash
+cp .env.local.example .env.local
+docker compose up -d
+corepack enable
+pnpm install --frozen-lockfile
+pnpm demo:quick
+pnpm dev
+```
+
+Open [http://localhost:3000](http://localhost:3000) and choose **Explore with sample data**, or sign
+in as `demo@vyapaar.test` / `Vyapaar-Demo-Cafe-2026!`.
+
+`demo:quick` creates the demo identity through the real verification/password-hashing paths, runs
+both migrations, regenerates the deterministic Indian corpus, and seeds the complete catalog,
+invoice, purchasing, inventory and notification workflows. It bounds sales to 14 days and at most
+10 receipts per store-day (at most 420 receipts across three stores) so evaluation does not require the
+multi-hour full replay. It deliberately omits pre-written assistant answers whose full-corpus
+figures would be false for the bounded dataset; live answers still use the real grounded pipeline.
+Budget roughly ten minutes on a typical development laptop; deleting a previously seeded full
+corpus can account for several of those minutes.
+
+The four highest-signal things to inspect are:
+
+1. **Dashboard → an unknown cost:** one deliberately unpriced ingredient prevents a partial total
+   from masquerading as complete.
+2. **Documents → an invoice:** extraction evidence, deterministic validation and posting are
+   connected in one drillable chain.
+3. **Purchase orders → variance queue:** ordered, received and invoiced quantities reconcile, with
+   unresolved exceptions kept visible.
+4. **Assistant → ask about sales or suppliers:** the model selects registered metrics and narrates;
+   code computes every number and rejects unsupported numeric claims.
+
+The submission narrative, evidence inventory, five-minute script and final manual checklist live in
+[`docs/BUILDATHON_SUBMISSION.md`](docs/BUILDATHON_SUBMISSION.md).
+
+---
+
 ## The design principle everything follows
 
 A wrong business number is worse than a missing one.
@@ -241,19 +283,29 @@ logic failure is the remaining work before any number here means something.
 ## Running it
 
 ```bash
-cp .env.local.example .env.local   # fill in GEMINI_API_KEY to exercise the invoice pipeline
+cp .env.local.example .env.local   # add GEMINI_API_KEY only for live AI/extraction calls
 docker compose up -d               # Postgres, Redis, MinIO
-pnpm install
+corepack enable
+pnpm install --frozen-lockfile
 
-pnpm demo                          # migrate, generate the corpus, seed a full demo tenant
+pnpm demo:quick                    # bounded reviewer dataset
+# pnpm demo                        # canonical 180-day corpus
 ```
 
-`pnpm demo` is the one-command path: it runs both migrations, regenerates the deterministic corpus,
-and seeds catalog, sales, invoices, purchasing, and engagement data. The sales seed replays ~50k
-transactions through the real repositories, so a full run takes a few hours — everything after
-`seed-demo.mts` can be run separately if you only need part of it.
+Both commands create or repair the local demo identity, run both migrations, regenerate the
+deterministic corpus, and seed catalog, sales, invoices, purchasing and engagement data.
+`pnpm demo:quick` caps sales at 420 receipts while retaining every store-day in its 14-day window.
+`pnpm demo` replays 42,875 transactions through the real repositories and is the canonical evidence
+dataset, but it takes several hours. Everything after `seed-demo.mts` can be run separately if you
+only need part of it.
 
-Then, in three terminals:
+Start all three processes together:
+
+```bash
+pnpm dev
+```
+
+Or run them separately when debugging:
 
 ```bash
 pnpm --filter @retailos/api dev       # :3001
@@ -261,8 +313,9 @@ pnpm --filter @retailos/web dev       # :3000
 pnpm --filter @retailos/worker dev    # extraction, embeddings, notifications
 ```
 
-The worker is not optional for the full experience — document extraction, embeddings, and
-notification delivery are all driven by it.
+The worker is not optional for the full experience—document extraction, embeddings and notification
+delivery are all driven by it. The seeded demo remains useful without a Gemini key; live model calls
+degrade explicitly instead of fabricating an answer.
 
 Scripts load `.env.local` themselves (`packages/config`), so no manual `export` step is
 needed. Real environment variables always take precedence, which is why CI — which sets them

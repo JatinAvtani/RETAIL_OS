@@ -15,7 +15,8 @@
     "test": "turbo run test",
     "boundaries": "depcruise --config .dependency-cruiser.cjs --output-type err apps packages",
     "invariants": "bash scripts/verify-invariants.sh",
-    "demo": "pnpm --filter @retailos/db db:migrate && pnpm --filter @retailos/db db:migrate:concurrent && pnpm --filter @retailos/api exec tsx ../../mock-data/generate/generate.mts && pnpm --filter @retailos/api exec tsx src/scripts/seed-demo.mts && pnpm --filter @retailos/api exec tsx src/scripts/seed-demo-invoices.mts && pnpm --filter @retailos/api exec tsx src/scripts/seed-demo-operations.mts && pnpm --filter @retailos/api exec tsx src/scripts/seed-demo-engagement.mts"
+    "demo:quick": "pnpm --filter @retailos/db db:migrate && pnpm --filter @retailos/db db:migrate:concurrent && pnpm --filter @retailos/api exec tsx src/scripts/seed-demo-account.mts && pnpm --filter @retailos/api exec tsx ../../mock-data/generate/generate.mts && pnpm --filter @retailos/api exec tsx src/scripts/seed-demo.mts --limit-days=14 --max-receipts-per-store-day=10 && pnpm --filter @retailos/api exec tsx src/scripts/seed-demo-operations.mts && pnpm --filter @retailos/api exec tsx src/scripts/seed-demo-invoices.mts && pnpm --filter @retailos/api exec tsx src/scripts/seed-demo-engagement.mts --skip-assistant-history",
+    "demo": "pnpm --filter @retailos/db db:migrate && pnpm --filter @retailos/db db:migrate:concurrent && pnpm --filter @retailos/api exec tsx src/scripts/seed-demo-account.mts && pnpm --filter @retailos/api exec tsx ../../mock-data/generate/generate.mts && pnpm --filter @retailos/api exec tsx src/scripts/seed-demo.mts && pnpm --filter @retailos/api exec tsx src/scripts/seed-demo-operations.mts && pnpm --filter @retailos/api exec tsx src/scripts/seed-demo-invoices.mts && pnpm --filter @retailos/api exec tsx src/scripts/seed-demo-engagement.mts"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

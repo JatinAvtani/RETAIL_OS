@@ -19,6 +19,9 @@ import '@retailos/config/auto';
  *
  * Usage:
  *   DATABASE_URL=... pnpm --filter @retailos/api exec tsx src/scripts/seed-demo-engagement.mts
+ *
+ * Flags:
+ *   --skip-assistant-history   do not seed full-corpus answers into a bounded quick-demo dataset
  */
 import {
   createDb,
@@ -47,6 +50,7 @@ import {
 import Decimal from 'decimal.js';
 import { and, eq, isNotNull } from 'drizzle-orm';
 
+const SKIP_ASSISTANT_HISTORY = process.argv.includes('--skip-assistant-history');
 const { db, client } = createDb(process.env.DATABASE_URL!);
 
 const [org] = await db.select().from(organizations).where(eq(organizations.slug, 'third-wave-bengaluru'));
@@ -319,7 +323,7 @@ const existingConversations = await conversationRepo.findForUser(demoUser.id);
 let conversationsCreated = 0;
 let messagesCreated = 0;
 
-if (existingConversations.length === 0) {
+if (!SKIP_ASSISTANT_HISTORY && existingConversations.length === 0) {
   const TRANSCRIPTS: { title: string; turns: { role: 'USER' | 'ASSISTANT'; content: string }[] }[] = [
     {
       title: 'Where did my margin go last month?',
@@ -370,7 +374,11 @@ if (existingConversations.length === 0) {
     }
   }
 }
-log('assistant history', { conversations: conversationsCreated, messages: messagesCreated });
+log('assistant history', {
+  skipped: SKIP_ASSISTANT_HISTORY,
+  conversations: conversationsCreated,
+  messages: messagesCreated,
+});
 
 /* ------------------------------------------------------------------ 4. CSV import history */
 

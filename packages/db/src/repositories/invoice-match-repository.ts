@@ -335,7 +335,10 @@ export class InvoiceMatchRepository {
     if (!supplierId || !sku) return empty;
 
     const [mapping] = await tx
-      .select({ productId: supplierProducts.productId })
+      .select({
+        productId: supplierProducts.productId,
+        conversionToBase: supplierProducts.conversionToBase,
+      })
       .from(supplierProducts)
       .where(
         and(
@@ -358,6 +361,7 @@ export class InvoiceMatchRepository {
         receivedQuantityBaseUnits: goodsReceiptLines.receivedQuantityBaseUnits,
         purchaseOrderId: purchaseOrderLines.purchaseOrderId,
         poUnitPrice: purchaseOrderLines.unitPrice,
+        poConversionToBase: purchaseOrderLines.conversionToBase,
       })
       .from(goodsReceiptLines)
       .innerJoin(goodsReceipts, eq(goodsReceipts.id, goodsReceiptLines.goodsReceiptId))
@@ -373,13 +377,23 @@ export class InvoiceMatchRepository {
       .limit(1);
 
     if (receiptRow) {
+      // Invoice quantities and PO prices are expressed in supplier/order units (bags, cases,
+      // packs), while goods receipts deliberately persist base units for stock posting. Compare
+      // like with like by converting the received base quantity back to the frozen PO order unit.
+      // A walk-in receipt has no PO line, so fall back to the confirmed supplier mapping's pack
+      // conversion; a legacy mapping with no conversion continues to mean order unit == base unit.
+      const receivedBase = new Decimal(receiptRow.receivedQuantityBaseUnits);
+      const conversionToBase = receiptRow.poConversionToBase ?? mapping.conversionToBase;
+      const receivedOrderUnits =
+        conversionToBase === null ? receivedBase : receivedBase.dividedBy(new Decimal(conversionToBase));
+
       return {
         purchaseOrderId: receiptRow.purchaseOrderId ?? null,
         purchaseOrderLineId: receiptRow.purchaseOrderLineId ?? null,
         goodsReceiptLineId: receiptRow.goodsReceiptLineId,
         productId: mapping.productId,
         poUnitPrice: receiptRow.poUnitPrice !== null ? new Decimal(receiptRow.poUnitPrice) : null,
-        receivedQuantity: new Decimal(receiptRow.receivedQuantityBaseUnits),
+        receivedQuantity: receivedOrderUnits,
         receiptFound: true,
       };
     }

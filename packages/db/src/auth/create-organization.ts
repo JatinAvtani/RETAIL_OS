@@ -18,10 +18,11 @@ type Db = ReturnType<typeof drizzle<typeof schema>>;
  * organizationId to provide yet when creating the org itself. Matches
  * `InvitationRepository`'s own established precedent for this exact "pre-tenant" shape.
  *
- * Creates the organization (no RLS — it IS the tenant boundary, not a tenant-scoped row), then the
- * store and an already-ACCEPTED OWNER membership inside ONE `withTenantContext`-wrapped transaction
- * (stores/memberships are both FORCE RLS) — a signup that produced an org with no store or no owner
- * would be a genuinely broken account, so all three commit together or not at all. The membership's
+ * Creates the organization (no RLS — it IS the tenant boundary), store and already-ACCEPTED OWNER
+ * membership inside ONE transaction. `withTenantContext` is established after the organization
+ * insert but inside that same transaction because stores/memberships are both FORCE RLS. A signup
+ * that produced an org with no store or no owner would be a genuinely broken account, so all three
+ * commit together or not at all. The membership's
  * `acceptedAt` is set immediately (never a pending invite to themselves) — matching how OWNER, the
  * founding member, has always been seeded in `seed-demo.mts`.
  *
@@ -42,18 +43,18 @@ export const createOrganizationWithOwner = async (
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/(^-|-$)/g, '')}-${organizationId}`;
 
-  await db.insert(organizations).values({
-    id: organizationId,
-    name: input.organizationName,
-    slug,
-    baseCurrency: input.baseCurrency,
-  });
-
   const storeId = generateId();
   const membershipId = generateId();
 
-  await db.transaction((tx) =>
-    withTenantContext(tx, organizationId, async () => {
+  return db.transaction(async (tx) => {
+    await tx.insert(organizations).values({
+      id: organizationId,
+      name: input.organizationName,
+      slug,
+      baseCurrency: input.baseCurrency,
+    });
+
+    await withTenantContext(tx, organizationId, async () => {
       await tx.insert(stores).values({
         id: storeId,
         organizationId,
@@ -69,8 +70,8 @@ export const createOrganizationWithOwner = async (
         storeIds: null, // NULL = org-wide access to all current and future stores (schema's own convention).
         acceptedAt: new Date(),
       });
-    })
-  );
+    });
 
-  return { organizationId, storeId, membershipId };
+    return { organizationId, storeId, membershipId };
+  });
 };

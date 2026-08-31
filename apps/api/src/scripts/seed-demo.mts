@@ -25,8 +25,10 @@ import '@retailos/config/auto';
  *   DATABASE_URL=... REDIS_URL=... pnpm --filter @retailos/api exec tsx src/scripts/seed-demo.mts
  *
  * Flags:
- *   --dry-run      report what would be seeded, write nothing
- *   --skip-wipe    add to the existing org instead of rebuilding (debugging only)
+ *   --dry-run                         report what would be seeded, write nothing
+ *   --skip-wipe                       add to the existing org instead of rebuilding (debugging only)
+ *   --limit-days=N                    include only sales from the most recent N days
+ *   --max-receipts-per-store-day=N    deterministically cap receipt volume for a fast demo
  */
 import { readFileSync } from 'node:fs';
 import { Decimal } from 'decimal.js';
@@ -60,6 +62,11 @@ import { createQueueRedisConnection, createFactAggregationQueue, registerFactAgg
 // `.mjs`, not `.mts`: this package emits real `.mjs` output, so the built specifier must match, and
 // tsx resolves `.mjs` back to the `.mts` source when running from source. Verified both ways.
 import { wipeOrganization } from './wipe-organization.mjs';
+import {
+  capReceiptsPerStoreDay,
+  isWithinDemoWindow,
+  parseDemoSeedOptions,
+} from './demo-seed-options.mjs';
 
 const DRY_RUN = process.argv.includes('--dry-run');
 const SKIP_WIPE = process.argv.includes('--skip-wipe');
@@ -70,8 +77,8 @@ const SKIP_WIPE = process.argv.includes('--skip-wipe');
  * slice rather than guess at it, and to give a usable demo quickly on a constrained machine.
  * Catalog, suppliers and stock are always seeded in full — only the sales window is narrowed.
  */
-const limitArg = process.argv.find((a) => a.startsWith('--limit-days='));
-const LIMIT_DAYS = limitArg ? Number(limitArg.split('=')[1]) : null;
+const { limitDays: LIMIT_DAYS, maxReceiptsPerStoreDay: MAX_RECEIPTS_PER_STORE_DAY } =
+  parseDemoSeedOptions(process.argv.slice(2));
 
 /* ------------------------------------------------------------------ corpus */
 
@@ -132,7 +139,7 @@ const supplierProducts = read<CorpusSupplierProduct[]>('suppliers/supplier-produ
  * same set. Sizing stock against the full window while seeding only part of it would leave every
  * lot massively overstocked and make stock-on-hand meaningless.
  */
-const withinWindow = (daysAgo: number): boolean => LIMIT_DAYS === null || daysAgo <= LIMIT_DAYS;
+const withinWindow = (daysAgo: number): boolean => isWithinDemoWindow(daysAgo, LIMIT_DAYS);
 
 const aggregates = read<CorpusAggregate[]>('sales/daily-aggregates.json').filter((a) => withinWindow(a.daysAgo));
 
@@ -149,7 +156,10 @@ const aggregates = read<CorpusAggregate[]>('sales/daily-aggregates.json').filter
  * go out of scope, so at most one store's worth is reachable at any moment.
  */
 const loadReceipts = (storeCode: string): CorpusReceipt[] =>
-  read<CorpusReceipt[]>(`sales/receipts-${storeCode.toLowerCase()}.json`).filter((r) => withinWindow(r.daysAgo));
+  capReceiptsPerStoreDay(
+    read<CorpusReceipt[]>(`sales/receipts-${storeCode.toLowerCase()}.json`).filter((r) => withinWindow(r.daysAgo)),
+    MAX_RECEIPTS_PER_STORE_DAY
+  );
 
 /** Counted without retaining the receipts themselves — used only for the dry-run report. */
 const countReceipts = (): { receipts: number; lines: number } => {
@@ -246,6 +256,10 @@ if (DRY_RUN) {
         dryRun: true,
         corpusSeed: meta.seed,
         generatedAt: meta.generatedAt,
+        profile: {
+          limitDays: LIMIT_DAYS,
+          maxReceiptsPerStoreDay: MAX_RECEIPTS_PER_STORE_DAY,
+        },
         wouldSeed: {
           organization: meta.organization.name,
           stores: meta.stores.length,
@@ -792,6 +806,10 @@ console.log(
       stage: 'complete',
       organizationId,
       corpusSeed: meta.seed,
+      profile: {
+        limitDays: LIMIT_DAYS,
+        maxReceiptsPerStoreDay: MAX_RECEIPTS_PER_STORE_DAY,
+      },
       signInAs: owner.email,
       stores: storeIdByCode.size,
       products: products.length,

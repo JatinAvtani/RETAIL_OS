@@ -12,6 +12,9 @@ coverage/
 .ai/
 .claude/
 docs/
+!docs/
+docs/*
+!docs/BUILDATHON_SUBMISSION.md
 CLAUDE.md
 
 spikes/extraction/corpus/
