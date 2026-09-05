@@ -17,6 +17,7 @@
     { "path": "../../packages/authz" },
     { "path": "../../packages/assistant" },
     { "path": "../../packages/pos" },
-    { "path": "../../packages/integrations" }
+    { "path": "../../packages/integrations" },
+    { "path": "../../packages/logger" }
   ]
 }

@@ -376,6 +376,90 @@ describe('StockCountService', () => {
     expect(approved.status).toBe('APPROVED');
   });
 
+  it('submitCount emits a real stocktake.submitted outbox event in the SAME transaction, carrying the largest real variance magnitude/dollar value (I8)', async () => {
+    const movementService = new MovementService(createScopedDb(client), organizationId);
+    await movementService.postMovement({
+      storeId,
+      productId,
+      variantId,
+      movementType: 'RECEIPT',
+      quantity: '100.000000',
+      unitCost: '2.0000',
+      currency: 'USD',
+      occurredAt: new Date(),
+      sourceType: 'manual',
+    });
+    const lotRepo = new LotRepository(createScopedDb(client), organizationId);
+    await lotRepo.receive({
+      id: generateId(),
+      storeId,
+      productId,
+      variantId,
+      receivedAt: new Date(),
+      initialQuantity: '100.000000',
+      unitCost: '2.0000',
+      currency: 'USD',
+    });
+
+    const service = new StockCountService(createScopedDb(client), organizationId);
+    const count = await service.createCount({ storeId, scope: 'full', productVariantPairs: [{ productId, variantId }] });
+    await service.startCount(count.id);
+    const lineId = (await service.findLines(count.id))[0]!.id;
+
+    // Counted 70 vs theoretical 100 — a 30% shortfall at $2.00/unit: magnitude 0.3, dollar value -$60.00.
+    await service.enterCount(lineId, '70.000000', userId);
+    await service.submitCount(count.id, userId);
+
+    const adminDb = drizzle(adminClient, { schema });
+    const events = await adminDb
+      .select()
+      .from(outboxEvents)
+      .where(eq(outboxEvents.aggregateId, count.id));
+    const submittedEvent = events.find((e) => e.eventType === 'stocktake.submitted');
+    expect(submittedEvent).toBeDefined();
+    expect(submittedEvent?.organizationId).toBe(organizationId);
+    expect(submittedEvent?.aggregateType).toBe('stock_count');
+
+    const payload = submittedEvent!.payload as {
+      stockCountId: string;
+      storeId: string;
+      maxVarianceMagnitude: string | null;
+      largestVarianceDollarValue: string | null;
+    };
+    expect(payload.stockCountId).toBe(count.id);
+    expect(payload.storeId).toBe(storeId);
+    expect(payload.maxVarianceMagnitude).not.toBeNull();
+    expect(Number(payload.maxVarianceMagnitude)).toBeCloseTo(0.3, 6);
+    expect(payload.largestVarianceDollarValue).not.toBeNull();
+    expect(Number(payload.largestVarianceDollarValue)).toBeCloseTo(-60, 4);
+
+    // Clean up the reason-code requirement this large a variance would otherwise impose on approval —
+    // not needed here since this test never calls approveCount.
+  });
+
+  it('submitCount emits stocktake.submitted with a NULL magnitude/value when every line\'s theoretical quantity was never established (I7)', async () => {
+    const service = new StockCountService(createScopedDb(client), organizationId);
+    const count = await service.createCount({ storeId, scope: 'full', productVariantPairs: [{ productId, variantId }] });
+    await service.startCount(count.id);
+    const lineId = (await service.findLines(count.id))[0]!.id;
+
+    // Force the frozen theoretical quantity back to NULL directly — simulating the real "never
+    // snapshotted" case `stock-count-service.test.ts`'s own line-468 test already covers for
+    // approveCount; this test proves submitCount's OWN outbox payload degrades the same way.
+    const adminDb = drizzle(adminClient, { schema });
+    await adminDb.update(stockCountLines).set({ theoreticalQuantityT0: null }).where(eq(stockCountLines.id, lineId));
+
+    await service.enterCount(lineId, '70.000000', userId);
+    await service.submitCount(count.id, userId);
+
+    const events = await adminDb.select().from(outboxEvents).where(eq(outboxEvents.aggregateId, count.id));
+    const submittedEvent = events.find((e) => e.eventType === 'stocktake.submitted');
+    expect(submittedEvent).toBeDefined();
+    const payload = submittedEvent!.payload as { maxVarianceMagnitude: string | null; largestVarianceDollarValue: string | null };
+    expect(payload.maxVarianceMagnitude).toBeNull();
+    expect(payload.largestVarianceDollarValue).toBeNull();
+  });
+
   it('a variance under the 10% threshold does NOT require a reason code', async () => {
     const movementService = new MovementService(createScopedDb(client), organizationId);
     await movementService.postMovement({

@@ -1,9 +1,9 @@
 -- Hand-written, not `drizzle-kit generate` output — the snapshot chain has been stale since
 -- migration 0005 (see 0008_units_and_conversions.sql's header and project memory for why).
 --
--- earlier work's quarantine queue: a sale line whose POS item can't be resolved to a
--- MenuItem. No FK to pos_items/sales_transactions - those tables don't exist yet (a later milestone, not
--- started); the raw external identifying fields are stored directly, confirmed with the user.
+-- The quarantine queue: a sale line whose POS item can't be resolved to a
+-- MenuItem. No FK to pos_items/sales_transactions - those tables don't exist yet (not
+-- started); the raw external identifying fields are stored directly.
 CREATE TYPE "unmapped_sale_status" AS ENUM ('UNRESOLVED', 'RESOLVED', 'IGNORED');
 --> statement-breakpoint
 

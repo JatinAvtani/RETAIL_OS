@@ -21,7 +21,7 @@ import type { Permission } from '@retailos/authz';
 import { buildServer } from '../../server';
 import type { FastifyInstance } from 'fastify';
 
-describe('productDetection.confirmSupplier/confirmProduct (012-05)', () => {
+describe('productDetection.confirmSupplier/confirmProduct', () => {
   let app: FastifyInstance;
   const { db } = createDb(process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/retailos');
   const redis = createRedisClient(process.env.REDIS_URL ?? 'redis://localhost:6379');

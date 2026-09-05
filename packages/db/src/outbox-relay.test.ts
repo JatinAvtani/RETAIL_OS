@@ -127,4 +127,33 @@ describe('findUnpublishedOutboxEvents + markOutboxEventsPublished: the real rela
     const stillUnpublished = await findUnpublishedOutboxEvents(db, 100);
     expect(stillUnpublished.map((e) => e.id)).not.toContain(someId);
   });
+
+  it('the real least-privileged retailos_sweeper role (not the superuser, not retailos_app) can run this exact cross-tenant query — the role apps/worker/start.ts actually connects with in production', async () => {
+    // A real, previously-undetected production bug: `apps/worker/src/start.ts` wired the relay poll
+    // worker to the plain `retailos_app` connection (RLS-scoped, no BYPASSRLS), so
+    // `findUnpublishedOutboxEvents` genuinely threw `unrecognized configuration parameter
+    // "app.current_org_id"` on every single poll tick — confirmed live against this project's own
+    // dev database before this fix. `retailos_sweeper` (docker/postgres/init/03-sweeper-role.sql)
+    // is the actual least-privileged fix: BYPASSRLS without also granting CREATE/ALTER/DROP or role
+    // management, unlike the `postgres` superuser this sweep fell back to before that.
+    const sweeperClient = postgres('postgresql://retailos_sweeper:retailos_sweeper_local_only@localhost:5432/retailos');
+    const sweeperDb = drizzle(sweeperClient, { schema });
+    try {
+      await expect(findUnpublishedOutboxEvents(sweeperDb, 1)).resolves.not.toThrow();
+
+      // The exact regression this test guards: the same query through the ordinary APP role (no
+      // BYPASSRLS) must still fail — proving retailos_sweeper's elevated access is genuinely doing
+      // something `retailos_app` cannot, not that RLS has been silently disabled for everyone.
+      const appConnectionString = process.env.TEST_DATABASE_URL ?? 'postgresql://retailos_app:retailos_app_local_only@localhost:5432/retailos';
+      const appClient = postgres(appConnectionString);
+      const appDb = drizzle(appClient, { schema });
+      try {
+        await expect(findUnpublishedOutboxEvents(appDb, 1)).rejects.toThrow(/app\.current_org_id/);
+      } finally {
+        await appClient.end();
+      }
+    } finally {
+      await sweeperClient.end();
+    }
+  });
 });

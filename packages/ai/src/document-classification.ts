@@ -64,7 +64,10 @@ export const classifyDocument = async (
   mimeType: string
 ): Promise<DocumentClassificationResult> => {
   const client = new GoogleGenAI({ apiKey });
-  const model = 'gemini-flash-lite-latest';
+  // Versioned tag, not the `-latest` alias (2026-09-04) — see model-config.ts's own doc comment for
+  // the full reasoning and live verification (a vision+JSON-schema call against a real invoice PDF
+  // correctly classified it as INVOICE at 0.95 confidence on this exact tag before switching).
+  const model = 'gemini-3.5-flash-lite';
 
   try {
     const response = await client.models.generateContent({

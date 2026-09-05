@@ -5,6 +5,8 @@ import { eq } from 'drizzle-orm';
 import { generateId } from '@retailos/domain';
 import * as schema from '../schema/index';
 import {
+  notifications,
+  notificationRules,
   auditLogs,
   documents,
   goodsReceiptLines,
@@ -169,6 +171,11 @@ describe('InvoiceMatchRepository', () => {
     await adminDb.delete(schema.productVariants).where(eq(schema.productVariants.productId, productId));
     await adminDb.delete(products).where(eq(products.organizationId, organizationId));
     await adminDb.delete(suppliers).where(eq(suppliers.organizationId, organizationId));
+    // `notifications.store_id` references `stores`, so notification rows must go BEFORE the
+    // store rows. Sweep processors can create these for any org present in the database, so a
+    // fixture that never creates one itself can still be holding some at teardown time.
+    await adminDb.delete(notifications).where(eq(notifications.organizationId, organizationId));
+    await adminDb.delete(notificationRules).where(eq(notificationRules.organizationId, organizationId));
     await adminDb.delete(stores).where(eq(stores.organizationId, organizationId));
     await adminDb.delete(organizations).where(eq(organizations.id, organizationId));
     await client.end();
@@ -210,6 +217,30 @@ describe('InvoiceMatchRepository', () => {
     expect(events.map((e) => e.eventType)).toContain('match.variance_detected');
   });
 
+  it('findLines returns a real product name for a matched line, and null (never a fabricated name) for an unresolved one', async () => {
+    const { purchaseOrderId, purchaseOrderLineId } = await createSentPurchaseOrder('10', '4.50');
+    await receiveAgainstPo(purchaseOrderId, purchaseOrderLineId, '10');
+    const documentId = await createPostedInvoiceDocument();
+
+    const repo = new InvoiceMatchRepository(createScopedDb(client), organizationId);
+    const result = await repo.runMatch({
+      documentId,
+      storeId,
+      supplierName,
+      lines: [
+        { sku: { value: 'SUP-SKU-IM-TEST' }, quantity: { value: '10' }, unitPrice: { value: '4.50' } }, // resolves to the real fixture product
+        { sku: { value: 'NEVER-MAPPED-FOR-FINDLINES-TEST' }, quantity: { value: '1' }, unitPrice: { value: '1.00' } }, // UNORDERED_ITEM — no product resolves
+      ],
+    });
+
+    const lines = await repo.findLines(result.id);
+    expect(lines).toHaveLength(2);
+    const matched = lines.find((l) => l.productId === productId);
+    expect(matched?.productName).toBe('Invoice Match Test Product');
+    const unmatched = lines.find((l) => l.productId === null);
+    expect(unmatched?.productName).toBeNull();
+  });
+
   it('compares invoice packs with received base units through the frozen PO conversion', async () => {
     const { purchaseOrderId, purchaseOrderLineId } = await createSentPurchaseOrder(
       '3',
@@ -247,6 +278,53 @@ describe('InvoiceMatchRepository', () => {
       .where(eq(invoiceMatchLines.invoiceMatchId, matchRow!.id));
     expect(lineRow?.receivedQuantity).toBe('3.000000');
     expect(lineRow?.quantityVariance).toBe('0.000000');
+  });
+
+  it('degrades quantity comparison to unknown rather than dividing by zero when a supplier-product conversion factor is invalid', async () => {
+    // `supplier_products.conversion_to_base` has no CHECK constraint (unlike a PO line's ordered/
+    // received relationship, which the database itself guards) — a zero value here is realistic
+    // legacy/bad data, not something the schema already prevents. This is the walk-in-receipt path
+    // (no PO line at all), which falls back to this exact column per the fix's own comment.
+    const adminDb = drizzle(adminClient, { schema });
+    await adminDb.update(supplierProducts).set({ conversionToBase: '0' }).where(eq(supplierProducts.id, supplierProductId));
+
+    const grRepo = new GoodsReceiptRepository(createScopedDb(client), organizationId);
+    await grRepo.confirmReceipt({
+      storeId,
+      supplierId,
+      receivedAt: new Date(),
+      lines: [{ productId, variantId, receivedQuantityBaseUnits: '5', unitCost: '6.00', currency: 'USD', lineNumber: 1 }],
+    });
+    const documentId = await createPostedInvoiceDocument();
+
+    const repo = new InvoiceMatchRepository(createScopedDb(client), organizationId);
+    const result = await repo.runMatch({
+      documentId,
+      storeId,
+      supplierName,
+      lines: [{ sku: { value: 'SUP-SKU-IM-TEST' }, quantity: { value: '5' }, unitPrice: { value: '6.00' } }],
+    });
+
+    // A zero conversion factor makes "received quantity in order units" unanswerable — this must
+    // never throw (dividing by zero) and must never silently misreport a quantity variance (I7):
+    // the line still resolves on price alone, with quantity treated as unknown, not flagged.
+    expect(result.highestSeverity).toBe('NONE');
+    expect(result.lines[0]?.varianceType).toBe('CLEAN');
+
+    const [matchRow] = await adminDb
+      .select()
+      .from(invoiceMatches)
+      .where(eq(invoiceMatches.documentId, documentId));
+    const [lineRow] = await adminDb
+      .select()
+      .from(invoiceMatchLines)
+      .where(eq(invoiceMatchLines.invoiceMatchId, matchRow!.id));
+    expect(lineRow?.receivedQuantity).toBeNull();
+    expect(lineRow?.quantityVariance).toBeNull();
+
+    // Restore the fixture's real default (unset — the `beforeAll` insert never sets this column),
+    // so later tests in this file see the same starting state they always have.
+    await adminDb.update(supplierProducts).set({ conversionToBase: null }).where(eq(supplierProducts.id, supplierProductId));
   });
 
   it('flags a real price variance beyond tolerance between the invoice and the PO', async () => {
@@ -556,6 +634,11 @@ describe('InvoiceMatchRepository', () => {
     ).rejects.toThrow(UnresolvableInvoiceSupplierError);
 
     await adminDb.delete(documents).where(eq(documents.organizationId, emptyOrgId));
+    // `notifications.store_id` references `stores`, so notification rows must go BEFORE the
+    // store rows. Sweep processors can create these for any org present in the database, so a
+    // fixture that never creates one itself can still be holding some at teardown time.
+    await adminDb.delete(notifications).where(eq(notifications.organizationId, emptyOrgId));
+    await adminDb.delete(notificationRules).where(eq(notificationRules.organizationId, emptyOrgId));
     await adminDb.delete(stores).where(eq(stores.organizationId, emptyOrgId));
     await adminDb.delete(organizations).where(eq(organizations.id, emptyOrgId));
   });
@@ -580,6 +663,13 @@ describe('InvoiceMatchRepository', () => {
     const pending = await repo.findPending(storeId);
     expect(pending.length).toBeGreaterThanOrEqual(2);
     expect(pending[0]?.highestSeverity).toBe('HIGH');
+
+    // The variance queue's real "supplier name" and "estimated impact" gaps — both computed here,
+    // not synthesized: supplierName is a real join, dollarImpact is the exact figure
+    // computeMatchDollarImpact derives from this match's own lines (I2).
+    expect(pending[0]?.supplierName).toBe(supplierName);
+    const highSeverityMatch = pending.find((m) => m.id === result2.id);
+    expect(highSeverityMatch?.dollarImpact?.toFixed(4)).toBe('45.0000'); // INVOICED_NOT_RECEIVED: 10 units x $4.50 = full exposure
   });
 
   it('findPending never returns a CLEAN match — a queue full of clean invoices defeats the point of \'s tolerances', async () => {

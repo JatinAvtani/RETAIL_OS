@@ -2,8 +2,11 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { trpc } from '@/lib/trpc';
+import { humanizeEnum } from '@/lib/format';
 import {
+  BarComparison,
   Card,
+  CardHeader,
   ErrorNotice,
   Field,
   LoadingState,
@@ -169,44 +172,72 @@ export default function SupplierScorecardPage() {
             />
           </StatTileGrid>
 
-          <Card>
-            {!events || events.length === 0 ? (
+          {!events || events.length === 0 ? (
+            <Card>
               <p className="p-4 text-sm text-content-subtle">No real events in this window — every figure above is honestly unknown, not a fabricated zero.</p>
-            ) : (
-              <Table>
-                <thead>
-                  <tr>
-                    <Th>Occurred</Th>
-                    <Th>Event</Th>
-                    <Th align="right">Expected</Th>
-                    <Th align="right">Actual</Th>
-                    <Th align="right">Variance</Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {events.map((e) => (
-                    <Tr key={e.id}>
-                      <Td className="font-mono text-content-muted">
-                        {new Date(e.occurredAt).toLocaleDateString()}
-                      </Td>
-                      <Td>{e.eventType}</Td>
-                      {/* Variance figures, so a dash would read as "no drift" — the one reading that
-                          is definitely wrong when the value is simply absent. */}
-                      <Td variant="numeric">
-                        <Value value={e.expectedValue} />
-                      </Td>
-                      <Td variant="numeric">
-                        <Value value={e.actualValue} />
-                      </Td>
-                      <Td variant="numeric">
-                        <Value value={e.variance} />
-                      </Td>
-                    </Tr>
-                  ))}
-                </tbody>
-              </Table>
-            )}
-          </Card>
+            </Card>
+          ) : (
+            <>
+              {(() => {
+                // Price changes carry a real, comparable dollar variance per event — the one event
+                // type in this ledger where "how much did this move, and in which events" is
+                // honestly chartable without mixing units. Fill/on-time events are pass/fail, not a
+                // magnitude, so they stay in the raw table below rather than being forced into a bar.
+                const priceChanges = events
+                  .filter((e) => e.eventType === 'PRICE_CHANGE' && e.variance !== null)
+                  .map((e) => ({
+                    key: e.id,
+                    label: new Date(e.occurredAt).toLocaleDateString(),
+                    value: Number(e.variance),
+                  }));
+                if (priceChanges.length === 0) return null;
+                return (
+                  <Card className="mb-6">
+                    <CardHeader title="Price change variance" />
+                    <BarComparison
+                      tone="warning"
+                      rows={priceChanges}
+                      formatValue={(value) => value.toFixed(2)}
+                    />
+                  </Card>
+                );
+              })()}
+              <Card>
+                <Table>
+                  <thead>
+                    <tr>
+                      <Th>Occurred</Th>
+                      <Th>Event</Th>
+                      <Th align="right">Expected</Th>
+                      <Th align="right">Actual</Th>
+                      <Th align="right">Variance</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {events.map((e) => (
+                      <Tr key={e.id}>
+                        <Td className="font-mono text-content-muted">
+                          {new Date(e.occurredAt).toLocaleDateString()}
+                        </Td>
+                        <Td>{humanizeEnum(e.eventType)}</Td>
+                        {/* Variance figures, so a dash would read as "no drift" — the one reading
+                            that is definitely wrong when the value is simply absent. */}
+                        <Td variant="numeric">
+                          <Value value={e.expectedValue} />
+                        </Td>
+                        <Td variant="numeric">
+                          <Value value={e.actualValue} />
+                        </Td>
+                        <Td variant="numeric">
+                          <Value value={e.variance} />
+                        </Td>
+                      </Tr>
+                    ))}
+                  </tbody>
+                </Table>
+              </Card>
+            </>
+          )}
         </>
       )}
     </>

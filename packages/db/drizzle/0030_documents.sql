@@ -1,7 +1,7 @@
 -- Hand-written, not `drizzle-kit generate` output — the snapshot chain has been stale since
 -- migration 0005 (see 0008_units_and_conversions.sql's header and project memory for why).
 --
--- documents.classification_confidence added on top of earlier work's schema
+-- documents.classification_confidence added on top of the document pipeline schema
 -- (this migration wasn't committed yet, so it's edited in place rather than stacking a second
 -- migration on an uncommitted one) — the model's own subjective confidence in `type`, null until
 -- classification has actually run (source = 'EMAIL'/'INTEGRATION' rows, or any row from before
@@ -150,7 +150,7 @@ EXCEPTION
 END $$;
 --> statement-breakpoint
 
--- Tenant-first composite indexes (), matching the spec's own literal example for this table:
+-- Tenant-first composite indexes, matching the reference example for this table:
 -- CREATE INDEX ON documents(organization_id, created_at DESC) WHERE status = 'REVIEW_REQUIRED';
 CREATE INDEX IF NOT EXISTS "documents_org_status_idx" ON "documents" ("organization_id", "status");
 --> statement-breakpoint

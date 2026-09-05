@@ -1,6 +1,6 @@
 /**
- * Store-local time resolution — the design: "Store timezone is applied at query/presentation
- * time... dayparts computed in UTC are simply wrong." Every business table stores TIMESTAMPTZ in
+ * Store-local time resolution. Store timezone is applied at query/presentation
+ * time — dayparts computed in UTC are simply wrong. Every business table stores TIMESTAMPTZ in
  * UTC; this module is the ONE place a UTC instant is converted to the store's own wall-clock day
  * or hour, so every consumer (a metric, a report, a daily job) resolves "today"/"this hour"
  * identically rather than each reimplementing timezone math.
@@ -27,6 +27,27 @@ export const resolveLocalDate = (instant: Date, timezone: StoreTimezone): string
     day: '2-digit',
   }).format(instant);
 
+/** The IANA day-of-week codes `stores.operatingHours` uses (schema's own documented shape). */
+export type WeekdayCode = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';
+
+const WEEKDAY_CODES: readonly WeekdayCode[] = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+
+/**
+ * The local calendar day-of-week an instant falls on, for the given store timezone — needed to
+ * check `stores.operatingHours` (`{ day; open; close }[]`) against a specific UTC instant, the same
+ * "resolve via the store's own timezone, never the server's or UTC's" discipline every other
+ * function in this module already applies. `'en-US'` with `weekday: 'short'` reliably returns one
+ * of Sun/Mon/Tue/Wed/Thu/Fri/Sat regardless of the runtime's default locale.
+ */
+export const resolveLocalDayOfWeek = (instant: Date, timezone: StoreTimezone): WeekdayCode => {
+  const short = new Intl.DateTimeFormat('en-US', { timeZone: timezone, weekday: 'short' }).format(instant);
+  const code = WEEKDAY_CODES.find((c) => short.toLowerCase().startsWith(c));
+  // Every real IANA locale's short weekday name starts with one of these three-letter codes; this
+  // is unreachable, not a genuine "unknown weekday" case.
+  if (!code) throw new Error(`Could not resolve a weekday code from Intl output '${short}'.`);
+  return code;
+};
+
 /** The local wall-clock hour (0-23) an instant falls on for the given store timezone. */
 export const resolveLocalHour = (instant: Date, timezone: StoreTimezone): number => {
   const formatted = new Intl.DateTimeFormat('en-US', {
@@ -41,8 +62,8 @@ export const resolveLocalHour = (instant: Date, timezone: StoreTimezone): number
 };
 
 /**
- * The four dayparts the design's `revenue_per_daypart` needs, with no boundary definition given in
- * the spec itself — standard restaurant-industry buckets, confirmed with the user rather than
+ * The four dayparts `revenue_per_daypart` needs. No boundary definition exists in an external
+ * standard, so these are standard restaurant-industry buckets, deliberately chosen rather than
  * invented silently. `LATE_NIGHT` wraps past midnight (21:00-05:59), which is why this is a
  * function over the local hour rather than a simple range lookup table.
  */
@@ -73,6 +94,36 @@ export const resolveDaypart = (localHour: number): Daypart => {
 export const resolveLocalDaypart = (instant: Date, timezone: StoreTimezone): Daypart =>
   resolveDaypart(resolveLocalHour(instant, timezone));
 
+/** `stores.operatingHours`'s real stored shape (schema's own documented convention). */
+export type OperatingHoursEntry = { day: WeekdayCode; open: string; close: string };
+
+/**
+ * Whether a store is scheduled closed on the local calendar day an instant falls on — the real
+ * data source `findReorderSuggestions`'s own doc comment names as a confirmed, previously-unfilled
+ * gap ("this codebase has no closure/operating-calendar table anywhere, so 'closures excluded'
+ * cannot be honestly implemented"). `operatingHours` genuinely already existed on `stores`
+ * (`{ day; open; close }[]`) but had zero readers anywhere in the codebase until this function.
+ *
+ * A store with `operatingHours` unset/empty is treated as open every day — the honest default for
+ * a store that has never configured a schedule, matching this codebase's own "absence of
+ * configuration is not evidence of closure" convention (I7's reasoning applied to scheduling, not
+ * money). A store WITH a configured schedule is closed on any day with no matching entry — the
+ * array lists days the store IS open, so a day missing from it is a real, deliberate closure
+ * (e.g. "closed Mondays" is expressed by simply never listing 'mon').
+ *
+ * Recurring weekly closures only — a one-off holiday calendar is real, separate, larger scope
+ * (a dedicated table, not a JSONB reinterpretation) and is NOT what this function claims to solve.
+ */
+export const isStoreClosedOn = (
+  instant: Date,
+  timezone: StoreTimezone,
+  operatingHours: readonly OperatingHoursEntry[] | null | undefined
+): boolean => {
+  if (!operatingHours || operatingHours.length === 0) return false;
+  const dayOfWeek = resolveLocalDayOfWeek(instant, timezone);
+  return !operatingHours.some((entry) => entry.day === dayOfWeek);
+};
+
 /**
  * The real UTC offset (in minutes, positive = ahead of UTC) in effect for a given instant in a
  * given timezone — e.g. `America/New_York` is `-240` (EDT) in August, `-300` (EST) in January.
@@ -97,7 +148,7 @@ const resolveUtcOffsetMinutes = (instant: Date, timezone: StoreTimezone): number
  * need this exists for: "06:00 store-local" scheduling (the daily briefing) needs a genuine
  * per-store UTC cron time, not fact-aggregation's own fixed-UTC-cron approximation (that job's
  * 05:00 UTC choice is a documented, accepted limitation for its own less time-sensitive deadline;
- * the briefing plan explicitly names "briefing at wrong local time" as a real risk to mitigate, a
+ * "briefing at wrong local time" is a real risk worth mitigating here, a
  * stricter requirement). Returns hour/minute as the caller's own cron pattern fields
  * (`${minute} ${hour} * * *`), NOT a `Date` — the caller re-derives this on a repeating tick (see
  * `packages/queue/src/briefing-queue.ts`) so a store's schedule self-corrects across a DST
@@ -124,10 +175,10 @@ export const resolveUtcCronForLocalTime = (
 };
 
 /**
- * The `[from, to)` UTC instant range one store-local calendar date covers — earlier work's real need:
+ * The `[from, to)` UTC instant range one store-local calendar date covers — the real need here:
  * an incremental aggregation job resolves "yesterday" per store's own timezone (this project's
- * standing example: "a three-store group across two timezones has three different yesterdays,"
- * the plan Phase 1), then must query raw transactional tables (all stored TIMESTAMPTZ/UTC) for
+ * standing example: "a three-store group across two timezones has three different yesterdays"),
+ * then must query raw transactional tables (all stored TIMESTAMPTZ/UTC) for
  * exactly the UTC window that local day spans — never the UTC calendar day, which would silently
  * include/exclude hours at either edge for any timezone not at UTC+0.
  *

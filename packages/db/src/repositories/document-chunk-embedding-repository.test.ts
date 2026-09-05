@@ -98,6 +98,51 @@ describe('DocumentChunkEmbeddingRepository', () => {
     expect(rows).toEqual([]);
   });
 
+  it('findExistingByChunkKey returns every stored chunk keyed by chunkKey, with the exact sourceText/model/embedding needed to decide a cache hit', async () => {
+    await seedDocument();
+    const repo = new DocumentChunkEmbeddingRepository(createScopedDb(client), organizationId);
+
+    await repo.upsertChunks(documentId, [
+      { chunkKey: 'header', chunkType: 'header', order: 0, model: 'real-model-v1', sourceText: 'Supplier: Acme', values: flatVector(0.1) },
+      { chunkKey: 'line-0', chunkType: 'line_item', order: 1, model: 'real-model-v1', sourceText: 'Item: Flour', values: flatVector(0.2) },
+    ]);
+
+    const existing = await repo.findExistingByChunkKey(documentId);
+    expect(existing.size).toBe(2);
+    expect(existing.get('header')).toMatchObject({ sourceText: 'Supplier: Acme', model: 'real-model-v1' });
+    expect(existing.get('line-0')).toMatchObject({ sourceText: 'Item: Flour', model: 'real-model-v1' });
+    // The literal must be pgvector's own text representation — a real `[n,n,...]` string, not a
+    // JS array serialization or anything requiring a parse step before reuse.
+    expect(existing.get('header')!.embeddingLiteral).toMatch(/^\[.*\]$/);
+  });
+
+  it('upsertChunks accepts a cache-hit embeddingLiteral directly (no values array) and reuses the exact stored vector, byte for byte', async () => {
+    await seedDocument();
+    const repo = new DocumentChunkEmbeddingRepository(createScopedDb(client), organizationId);
+
+    await repo.upsertChunks(documentId, [
+      { chunkKey: 'header', chunkType: 'header', order: 0, model: 'real-model-v1', sourceText: 'Supplier: Acme', values: flatVector(0.42) },
+    ]);
+    const original = await repo.findByDocumentId(documentId);
+    const existing = await repo.findExistingByChunkKey(documentId);
+    const cachedLiteral = existing.get('header')!.embeddingLiteral;
+
+    // Simulate the embedding worker's cache-hit path: re-upsert using ONLY the cached literal, no
+    // `values` array at all — this is exactly what happens on a re-approval where this chunk's text
+    // didn't change and the real Gemini call was skipped entirely.
+    await repo.upsertChunks(documentId, [
+      { chunkKey: 'header', chunkType: 'header', order: 0, model: 'real-model-v1', sourceText: 'Supplier: Acme', embeddingLiteral: cachedLiteral },
+    ]);
+
+    const after = await repo.findByDocumentId(documentId);
+    expect(after).toHaveLength(1);
+    // Read back via findExistingByChunkKey again — the vector must be byte-identical after the
+    // literal-only round trip, proving no parse/re-serialize step corrupted or approximated it.
+    const afterExisting = await repo.findExistingByChunkKey(documentId);
+    expect(afterExisting.get('header')!.embeddingLiteral).toBe(cachedLiteral);
+    expect(original[0]!.id).not.toBe(after[0]!.id); // upsertChunks always deletes-then-reinserts — a new row id is expected, the VECTOR must still match
+  });
+
   it("a document's chunks written under one org are invisible to a repository scoped to a different org — real cross-tenant isolation, not just an application-layer filter", async () => {
     const adminDb = drizzle(adminClient, { schema });
     const otherOrgId = generateId();

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { trpc } from '@/lib/trpc';
 import { useStores } from '@/lib/use-stores';
-import { formatMoney } from '@/lib/format';
+import { addDecimal, formatMoney } from '@/lib/format';
 import { useOrgCurrency } from '@/lib/use-org-currency';
 import {
   Badge,
@@ -14,10 +14,13 @@ import {
   PageHeader,
   SkeletonRows,
   Select,
+  StatTile,
+  StatTileGrid,
   Table,
   Td,
   Th,
   Tr,
+  Value,
 } from '@/components/ui';
 
 type UnmappedItem = Awaited<ReturnType<typeof trpc.posItems.listUnmapped.query>>[number];
@@ -113,6 +116,36 @@ export default function PosItemsPage() {
 
       {error && <ErrorNotice>{error}</ErrorNotice>}
 
+      {!loading && !error && items.length > 0 && (
+        <StatTileGrid className="mb-6">
+          <StatTile
+            label="Unmapped items"
+            value={String(items.length)}
+            unknownReason="No unmapped items"
+          />
+          <StatTile
+            label="Revenue at stake"
+            value={formatMoney(
+              items.reduce<string>((sum, item) => addDecimal(sum, item.totalRevenue) ?? sum, '0'),
+              orgCurrency,
+              { precision: 'currency' }
+            )}
+            hint="Sold revenue currently attributed to no menu item"
+            unknownReason="No unmapped items"
+          />
+          <StatTile
+            label="With a suggested match"
+            value={String(items.filter((item) => item.suggestions.length > 0).length)}
+            unknownReason="No unmapped items"
+          />
+          <StatTile
+            label="No close match"
+            value={String(items.filter((item) => item.suggestions.length === 0).length)}
+            unknownReason="No unmapped items"
+          />
+        </StatTileGrid>
+      )}
+
       <Card>
         {(loading || storesLoading) && <SkeletonRows columns={4} />}
         {!storesLoading && stores.length === 0 && (
@@ -146,7 +179,7 @@ export default function PosItemsPage() {
                     <Td className="font-medium">{item.name}</Td>
                     <Td variant="numeric" className="text-content-muted">
                       {item.totalRevenue === '0' ? (
-                        <span className="text-content-subtle">—</span>
+                        <Value value={null} />
                       ) : (
                         formatMoney(item.totalRevenue, orgCurrency)
                       )}

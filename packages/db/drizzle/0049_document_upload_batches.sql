@@ -1,5 +1,5 @@
--- document_upload_batches — groups the documents from one bulk-upload session (012-02, spec 03
--- M9's "bulk invoice backfill") so a caller can poll real progress ("47 of 90 processed") scoped
+-- document_upload_batches — groups the documents from one bulk-upload session (part of the
+-- "bulk invoice backfill" feature) so a caller can poll real progress ("47 of 90 processed") scoped
 -- to that session, not an all-time count. documents.upload_batch_id is nullable: a plain ad-hoc
 -- upload has no batch at all.
 CREATE TABLE IF NOT EXISTS "document_upload_batches" (

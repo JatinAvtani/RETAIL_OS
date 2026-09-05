@@ -38,6 +38,49 @@ const REQUEST_TIMEOUT_MS = 15_000;
  */
 const DETERMINISTIC_TEMPERATURE = 0;
 
+/**
+ * A `503 UNAVAILABLE` ("this model is currently experiencing high demand") is Google-side capacity,
+ * not a fault in the request — the identical call typically succeeds moments later. Without a
+ * retry, one transient spike failed a whole multi-hop investigation, which is a real, observed
+ * outcome: `investigations` rows carrying exactly that 503 body sit alongside COMPLETE rows from
+ * the same key, model and hour.
+ *
+ * Bounded deliberately at two extra attempts with a short fixed backoff. A user is waiting in front
+ * of both the planning and narration calls, so the worst case stays under ~35s
+ * (3 × 15s timeout is the true ceiling, but a 503 returns fast; only a genuine hang costs the full
+ * timeout). Retrying more, or with a longer backoff, trades a bounded failure for an unbounded wait.
+ */
+const MAX_ATTEMPTS = 3;
+const RETRY_BACKOFF_MS = 700;
+
+/**
+ * Only genuinely transient, server-side conditions are retried — never a malformed request, a bad
+ * schema, or an auth/quota rejection, all of which fail identically no matter how many times they
+ * are sent. Retrying a real 429 would also actively worsen a quota exhaustion this project has hit
+ * before, so it is excluded on purpose.
+ */
+const isTransient = (message: string): boolean =>
+  /\b(503|500|502|504)\b/.test(message) || /UNAVAILABLE|INTERNAL|deadline|timeout|ETIMEDOUT|ECONNRESET|fetch failed/i.test(message);
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Runs `attempt` up to `MAX_ATTEMPTS` times, stopping at the first success or the first
+ * NON-transient failure. `toError` reads the provider-shaped result (which reports failure in an
+ * `error` field rather than by throwing), so both a thrown exception and a returned error are
+ * covered by the same policy.
+ */
+const withRetry = async <T>(attempt: () => Promise<T>, toError: (result: T) => string | null): Promise<T> => {
+  let last: T = await attempt();
+  for (let i = 1; i < MAX_ATTEMPTS; i += 1) {
+    const error = toError(last);
+    if (error === null || !isTransient(error)) return last;
+    await sleep(RETRY_BACKOFF_MS * i);
+    last = await attempt();
+  }
+  return last;
+};
+
 export const createGeminiChatProvider = (apiKey: string): ChatProvider => {
   const client = new GoogleGenAI({ apiKey });
 
@@ -45,57 +88,61 @@ export const createGeminiChatProvider = (apiKey: string): ChatProvider => {
     name: 'gemini',
 
     async generate(prompt: string, model: string): Promise<ChatResult> {
-      const started = Date.now();
+      return withRetry<ChatResult>(async () => {
+        const started = Date.now();
 
-      try {
-        const response = await client.models.generateContent({
-          model,
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          config: { temperature: DETERMINISTIC_TEMPERATURE, httpOptions: { timeout: REQUEST_TIMEOUT_MS } },
-        });
+        try {
+          const response = await client.models.generateContent({
+            model,
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            config: { temperature: DETERMINISTIC_TEMPERATURE, httpOptions: { timeout: REQUEST_TIMEOUT_MS } },
+          });
 
-        const latencyMs = Date.now() - started;
-        const text = response.text;
-        if (!text) {
-          return { provider: 'gemini', modelVersion: model, latencyMs, error: 'empty response text', text: null };
+          const latencyMs = Date.now() - started;
+          const text = response.text;
+          if (!text) {
+            return { provider: 'gemini', modelVersion: model, latencyMs, error: 'empty response text', text: null };
+          }
+
+          return { provider: 'gemini', modelVersion: model, latencyMs, error: null, text };
+        } catch (e) {
+          return { provider: 'gemini', modelVersion: model, latencyMs: Date.now() - started, error: (e as Error).message, text: null };
         }
-
-        return { provider: 'gemini', modelVersion: model, latencyMs, error: null, text };
-      } catch (e) {
-        return { provider: 'gemini', modelVersion: model, latencyMs: Date.now() - started, error: (e as Error).message, text: null };
-      }
+      }, (result) => result.error);
     },
 
     async generateStructured(prompt: string, model: string, schema: Record<string, unknown>): Promise<StructuredChatResult> {
-      const started = Date.now();
-
-      try {
-        const response = await client.models.generateContent({
-          model,
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          config: {
-            temperature: DETERMINISTIC_TEMPERATURE,
-            responseMimeType: 'application/json',
-            responseSchema: schema,
-            httpOptions: { timeout: REQUEST_TIMEOUT_MS },
-          },
-        });
-
-        const latencyMs = Date.now() - started;
-        const text = response.text;
-        if (!text) {
-          return { provider: 'gemini', modelVersion: model, latencyMs, error: 'empty response text', data: null };
-        }
+      return withRetry<StructuredChatResult>(async () => {
+        const started = Date.now();
 
         try {
-          const data = JSON.parse(text);
-          return { provider: 'gemini', modelVersion: model, latencyMs, error: null, data };
+          const response = await client.models.generateContent({
+            model,
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            config: {
+              temperature: DETERMINISTIC_TEMPERATURE,
+              responseMimeType: 'application/json',
+              responseSchema: schema,
+              httpOptions: { timeout: REQUEST_TIMEOUT_MS },
+            },
+          });
+
+          const latencyMs = Date.now() - started;
+          const text = response.text;
+          if (!text) {
+            return { provider: 'gemini', modelVersion: model, latencyMs, error: 'empty response text', data: null };
+          }
+
+          try {
+            const data = JSON.parse(text);
+            return { provider: 'gemini', modelVersion: model, latencyMs, error: null, data };
+          } catch (e) {
+            return { provider: 'gemini', modelVersion: model, latencyMs, error: `malformed JSON: ${(e as Error).message}`, data: null };
+          }
         } catch (e) {
-          return { provider: 'gemini', modelVersion: model, latencyMs, error: `malformed JSON: ${(e as Error).message}`, data: null };
+          return { provider: 'gemini', modelVersion: model, latencyMs: Date.now() - started, error: (e as Error).message, data: null };
         }
-      } catch (e) {
-        return { provider: 'gemini', modelVersion: model, latencyMs: Date.now() - started, error: (e as Error).message, data: null };
-      }
+      }, (result) => result.error);
     },
   };
 };

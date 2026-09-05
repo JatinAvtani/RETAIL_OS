@@ -74,15 +74,60 @@ export const aggregateNotificationContent = (
 };
 
 /**
+ * Groups an exact `Decimal` amount to 2dp for display. Formats the integer part with `en-IN`
+ * grouping (lakh/crore), matching this project's INR-first presentation elsewhere, and does the
+ * grouping on the STRING rather than via `Number()` so a large amount can't lose precision to a
+ * float on its way to the screen.
+ */
+const formatAmount = (amount: Decimal): string => {
+  const fixed = amount.toFixed(2);
+  const negative = fixed.startsWith('-');
+  const [whole = '0', fraction = '00'] = (negative ? fixed.slice(1) : fixed).split('.');
+  // Indian grouping applied to the digit STRING: last 3 digits, then 2 at a time
+  // (12,34,567.89). Never routed through `Number()` — a value past MAX_SAFE_INTEGER would be
+  // silently rounded, the precision trap this codebase has already hit once with `toFixed` money.
+  const head = whole.slice(0, -3);
+  const tail = whole.slice(-3);
+  const grouped = head === '' ? tail : `${head.replace(/\B(?=(\d{2})+(?!\d))/g, ',')},${tail}`;
+  return `${negative ? '−' : ''}${grouped}.${fraction}`;
+};
+
+/**
  * `lot_expiring`'s own real title/body shape, matching the target-output worked example
  * ("$340 at risk — 12kg cream and 8kg berries expire in 2 days"). A pure formatting function, not
  * a template the aggregation core hardcodes — different rule types will want different phrasing
  * (the daily briefing reuses this same aggregation core for its own exception ranking, by design).
  */
 export const formatLotExpiringTitle = (count: number, totalDollarImpact: Decimal | null): string => {
-  const impactPhrase = totalDollarImpact !== null ? `$${totalDollarImpact.toFixed(2)} at risk` : 'Stock at risk of expiring';
+  // No currency SYMBOL here, deliberately. This is pure domain code with no access to the org's
+  // `baseCurrency`, and a hardcoded "$" was a real bug on this project's own INR demo org — the
+  // same class as the org-wide `baseCurrency` hardcoding fixed earlier. An unlabelled amount is
+  // ambiguous; a WRONGLY-labelled one is false, so the number is stated without a unit until a
+  // caller that genuinely knows the currency can supply one.
+  const impactPhrase = totalDollarImpact !== null ? `${formatAmount(totalDollarImpact)} at risk` : 'Stock at risk of expiring';
   return count === 1 ? impactPhrase : `${impactPhrase} — ${count} lots expiring`;
 };
 
 export const formatLotExpiringBody = (items: AggregationItem[]): string =>
   items.length === 1 ? `${items[0]!.label} is expiring soon.` : `${items.map((item) => item.label).join(', ')} are expiring soon.`;
+
+/** `unmapped_pos_items`'s own title/body shape, matching `formatLotExpiringTitle`'s established convention — a real dollar figure only when at least one item in the group has genuine trailing revenue attributed to it. */
+export const formatUnmappedPosItemsTitle = (count: number, totalDollarImpact: Decimal | null): string => {
+  // Currency-neutral for the same reason as `formatLotExpiringTitle` — see its comment.
+  const impactPhrase = totalDollarImpact !== null ? `${formatAmount(totalDollarImpact)} in unattributed sales` : 'Unmapped POS items';
+  return count === 1 ? `${impactPhrase} — 1 item needs mapping` : `${impactPhrase} — ${count} items need mapping`;
+};
+
+export const formatUnmappedPosItemsBody = (items: AggregationItem[]): string =>
+  items.length === 1
+    ? `${items[0]!.label} has not been mapped to a menu item — its sales are not attributed to any recipe or ingredient consumption.`
+    : `${items.map((item) => item.label).join(', ')} have not been mapped to a menu item — their sales are not attributed to any recipe or ingredient consumption.`;
+
+/** `document_review_required`'s own title/body shape. No dollar impact is ever attached (the rule type carries none, I7) — the second parameter is always `null` here, accepted only to match `aggregateNotificationContent`'s shared formatter signature. */
+export const formatDocumentReviewRequiredTitle = (count: number, _totalDollarImpact: Decimal | null): string =>
+  count === 1 ? '1 document needs review' : `${count} documents need review`;
+
+export const formatDocumentReviewRequiredBody = (items: AggregationItem[]): string =>
+  items.length === 1
+    ? `${items[0]!.label} is waiting for manual review before it can be processed.`
+    : `${items.map((item) => item.label).join(', ')} are waiting for manual review before they can be processed.`;

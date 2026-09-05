@@ -1,12 +1,12 @@
-import { char, jsonb, numeric, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { char, integer, jsonb, numeric, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { organizations } from './organizations';
 import { stores } from './stores';
 import { menuItems } from './recipes';
 import { idColumn, timestamps } from './columns';
 
 /**
- * the two ingestion sources this codebase actually builds — Square (the
- * only vendor shipping, per the plan) and CSV (the universal fallback, "what makes the product
+ * The two ingestion sources this codebase actually builds — Square (the
+ * only vendor shipping) and CSV (the universal fallback, "what makes the product
  * sellable to anyone during the design-partner phase"). Not a free-text column: every sales row's
  * provenance is one of a fixed, known set, same reasoning as `store_status`/`lot_status`.
  */
@@ -17,8 +17,22 @@ export const posItemMappingStatusEnum = pgEnum('pos_item_mapping_status', ['UNMA
 export const salesTransactionStatusEnum = pgEnum('sales_transaction_status', ['COMPLETED', 'REFUNDED', 'VOIDED']);
 
 /**
+ * Whether inventory consumption has actually run for this transaction — separate from `status`
+ * (which describes the SALE itself: completed/refunded/voided), since a transaction can be a
+ * perfectly real, correctly-recorded sale while its consumption side effect failed or never ran.
+ * `PENDING` is the default the moment a transaction is recorded; a background sweep advances
+ * `FAILED`/`PENDING` rows to `COMPLETED` by retrying `SalesIngestionPipeline.ingestSaleLine`, never
+ * by silently leaving them unconsumed forever.
+ */
+export const salesTransactionConsumptionStatusEnum = pgEnum('sales_transaction_consumption_status', [
+  'PENDING',
+  'COMPLETED',
+  'FAILED',
+]);
+
+/**
  * One item as the POS vendor's catalog names it — NOT a `Product`/`MenuItem`. `pos_items` is the
- * left side of the fuzzy-match mapping problem earlier work's UI solves; `menuItemId` stays NULL until a
+ * left side of the fuzzy-match mapping problem the mapping UI solves; `menuItemId` stays NULL until a
  * human confirms a mapping (I9 — mapping is deterministic and human-confirmed, never automatic).
  * `mappingStatus` mirrors `unmappedSaleStatusEnum`'s three-way split for the same reason: `IGNORED`
  * covers a real POS catalog entry (a gift card, a service charge) that will never have a recipe,
@@ -29,8 +43,8 @@ export const salesTransactionStatusEnum = pgEnum('sales_transaction_status', ['C
  * stores each with their own Square location (their own catalog + external ids can collide
  * trivially, e.g. both use Square's own auto-incrementing internal counters).
  *
- * Deleted-upstream items are marked (`lastSeenAt` stops advancing), never deleted — the plan Phase 2
- * is explicit that historical sales still reference them via `sales_transaction_lines.posItemId`.
+ * Deleted-upstream items are marked (`lastSeenAt` stops advancing), never deleted — because
+ * historical sales still reference them via `sales_transaction_lines.posItemId`.
  */
 export const posItems = pgTable(
   'pos_items',
@@ -68,7 +82,7 @@ export const posItems = pgTable(
 
 /**
  * One POS sale (a Square order, a CSV row group) — the header. Idempotency is the whole point of
- * this table's shape (the plan Phase 3, the design): the unique index on
+ * this table's shape: the unique index on
  * `(source, external_id)` is what makes `.onConflictDoNothing()` in the future ingestion pipeline a
  * real guarantee rather than a hope. Scoped per-organization, not globally, for the same reason
  * `pos_items` is — the SAME external id from two different vendors' accounts (two different orgs
@@ -76,7 +90,7 @@ export const posItems = pgTable(
  *
  * `refundOfId` is nullable, self-referencing: a `REFUNDED` row points back at the `COMPLETED`
  * transaction it reverses. This table records the FACT of a refund; reversing the consumption
- * movements it caused is earlier work's job, one level up, against `stock_movements` (I3 — never an
+ * movements it caused happens one level up, against `stock_movements` (I3 — never an
  * UPDATE/DELETE on the original sale row itself).
  *
  * `subtotal`/`discount`/`tax`/`total` are separate columns, not derived — a vendor's own rounding
@@ -104,6 +118,10 @@ export const salesTransactions = pgTable(
     currency: char('currency', { length: 3 }).notNull(),
     status: salesTransactionStatusEnum('status').notNull().default('COMPLETED'),
     refundOfId: uuid('refund_of_id'),
+    consumptionStatus: salesTransactionConsumptionStatusEnum('consumption_status').notNull().default('PENDING'),
+    /** The real error message from the last failed consumption attempt — never overwritten on success, so the last real failure stays inspectable even after a later retry succeeds. */
+    consumptionError: text('consumption_error'),
+    consumptionAttempts: integer('consumption_attempts').notNull().default(0),
     ...timestamps,
   },
   (table) => [

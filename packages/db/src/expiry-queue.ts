@@ -8,6 +8,8 @@ export type ExpiryQueueRow = {
   organizationId: string;
   storeId: string;
   productId: string;
+  /** The product's real name, for user-facing text. `null` only if the product row is gone — never substituted with an id. */
+  productName: string | null;
   variantId: string;
   lotId: string;
   expiryDate: string;
@@ -25,14 +27,14 @@ export type ExpiryQueueRow = {
  *
  * `avg_daily_consumption` doesn't exist anywhere as a stored or computed value yet, so this
  * function derives it inline: the trailing-30-day sum of `SALE_CONSUMPTION` movement quantities
- * (negative in the ledger) per (store, product, variant), divided by 30. 30 days was chosen (asked
- * the user) to smooth day-of-week noise while still reacting to a real recent demand shift, the
- * same tradeoff the plan's own par-level discussion (the design) makes for reorder math.
+ * (negative in the ledger) per (store, product, variant), divided by 30. 30 days was chosen to
+ * smooth day-of-week noise while still reacting to a real recent demand shift, the same tradeoff
+ * the par-level design makes for reorder math.
  *
  * `consumption_cover = remaining_quantity / avg_daily_consumption` is undefined for a product with
  * zero consumption in the window (new product, or a product that simply hasn't sold). Per I7 this
  * must not silently read as "safe" — a missing consumption signal is not evidence the stock will be
- * used in time. Asked the user: treated as an infinite cover (`consumption_cover_days: null` in the
+ * used in time. Treated as an infinite cover (`consumption_cover_days: null` in the
  * output, `at_risk = remaining_quantity > 0`), so a zero-consumption lot with real remaining
  * quantity and a real expiry date is always surfaced, never silently excluded by a division by
  * zero.
@@ -47,7 +49,7 @@ export type ExpiryQueueRow = {
  * Deliberately cross-tenant by nature, same reasoning as `findStockLevelDrift`/`findBelowParLevels`/
  * `findNegativeStock` — an internal sweep across every tenant, not a single organization's scoped
  * request. `db` must be an admin-equivalent connection. Detection/ranking only: no event emission,
- * no notifications table, matching every other a later milestone sweep function's precedent.
+ * no notifications table, matching every other sweep function's precedent.
  */
 export const findExpiryQueue = async (db: Db, asOf: Date = new Date()): Promise<ExpiryQueueRow[]> => {
   const asOfIso = asOf.toISOString();
@@ -55,6 +57,7 @@ export const findExpiryQueue = async (db: Db, asOf: Date = new Date()): Promise<
     organization_id: string;
     store_id: string;
     product_id: string;
+    product_name: string | null;
     variant_id: string;
     lot_id: string;
     expiry_date: string;
@@ -81,6 +84,7 @@ export const findExpiryQueue = async (db: Db, asOf: Date = new Date()): Promise<
       l.organization_id,
       l.store_id,
       l.product_id,
+      p.name AS product_name,
       l.variant_id,
       l.id AS lot_id,
       l.expiry_date,
@@ -95,6 +99,9 @@ export const findExpiryQueue = async (db: Db, asOf: Date = new Date()): Promise<
         ELSE NULL
       END AS consumption_cover_days
     FROM lots l
+    LEFT JOIN products p
+      ON p.id = l.product_id
+     AND p.organization_id = l.organization_id
     LEFT JOIN consumption c
       ON c.store_id = l.store_id
      AND c.product_id = l.product_id
@@ -115,6 +122,7 @@ export const findExpiryQueue = async (db: Db, asOf: Date = new Date()): Promise<
     organizationId: row.organization_id,
     storeId: row.store_id,
     productId: row.product_id,
+    productName: row.product_name,
     variantId: row.variant_id,
     lotId: row.lot_id,
     expiryDate: row.expiry_date,

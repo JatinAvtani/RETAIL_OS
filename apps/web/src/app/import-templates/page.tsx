@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
-import { Badge, Button, Card, EmptyState, ErrorNotice, PageHeader, SkeletonRows, Table, Td, Th, Tr, type BadgeTone } from '@/components/ui';
+import { humanizeEnum } from '@/lib/format';
+import { Badge, Button, Card, EmptyState, ErrorNotice, PageHeader, SkeletonRows, Table, Td, Th, Tr, Value, type BadgeTone } from '@/components/ui';
 
 type CatalogCsvImportRow = Awaited<ReturnType<typeof trpc.catalogCsvImport.list.query>>[number];
 type ImportType = CatalogCsvImportRow['importType'];
@@ -140,9 +141,15 @@ export default function ImportTemplatesPage() {
                 <Tr key={row.id}>
                   <Td className="text-content-muted">{new Date(row.createdAt).toLocaleString()}</Td>
                   <Td>
-                    <Badge tone={STATUS_TONES[row.status]!}>{row.status.toLowerCase()}</Badge>
+                    <Badge tone={STATUS_TONES[row.status]!}>{humanizeEnum(row.status)}</Badge>
                   </Td>
-                  <Td className="text-content-muted">{row.status === 'IMPORTED' ? `${row.importedRowCount ?? 0} imported` : '—'}</Td>
+                  <Td className="text-content-muted">
+                    {row.status === 'IMPORTED' && row.importedRowCount !== null ? (
+                      `${row.importedRowCount} imported`
+                    ) : (
+                      <Value value={null} />
+                    )}
+                  </Td>
                   <Td align="right">
                     <Link href={`/import-templates/${row.id}`} className="text-sm font-medium text-accent hover:underline">
                       {row.status === 'UPLOADED' ? 'Map columns' : 'View'}

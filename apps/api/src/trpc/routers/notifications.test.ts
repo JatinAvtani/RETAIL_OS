@@ -197,6 +197,63 @@ describe('notifications router', () => {
     expect(found?.actedAt).not.toBeNull();
   });
 
+  it('resolve sets resolvedAt, removing the notification from the unresolved list', async () => {
+    const { organizationId, storeId } = await setUpOrg();
+    const cookie = await issueSession(organizationId);
+
+    const ruleRepo = new NotificationRuleRepository(db, organizationId);
+    const { id: ruleId } = await ruleRepo.create({ ruleType: 'stock_below_reorder', severity: 'HIGH', threshold: {}, recipientRoles: ['MANAGER'], channels: ['EMAIL'] });
+    const notifRepo = new NotificationRepository(db, organizationId);
+    const { id: notificationId } = await notifRepo.create({
+      storeId,
+      ruleId,
+      severity: 'HIGH',
+      title: 'Flour low',
+      body: 'body',
+      dedupKey: `test-resolve:${generateId()}`,
+    });
+
+    const resolveResponse = await call('notifications.resolve', cookie, { id: notificationId }, 'POST');
+    expect(resolveResponse.statusCode).toBe(200);
+
+    const found = await notifRepo.findById(notificationId);
+    expect(found?.resolvedAt).not.toBeNull();
+
+    const listResponse = await call('notifications.list', cookie, { storeId });
+    const list = JSON.parse(listResponse.body).result.data;
+    expect(list.map((n: { id: string }) => n.id)).not.toContain(notificationId);
+  });
+
+  it('resolve on an already-resolved notification returns a real 400, not a silent no-op', async () => {
+    const { organizationId, storeId } = await setUpOrg();
+    const cookie = await issueSession(organizationId);
+
+    const ruleRepo = new NotificationRuleRepository(db, organizationId);
+    const { id: ruleId } = await ruleRepo.create({ ruleType: 'stock_below_reorder', severity: 'HIGH', threshold: {}, recipientRoles: ['MANAGER'], channels: ['EMAIL'] });
+    const notifRepo = new NotificationRepository(db, organizationId);
+    const { id: notificationId } = await notifRepo.create({
+      storeId,
+      ruleId,
+      severity: 'HIGH',
+      title: 'Flour low',
+      body: 'body',
+      dedupKey: `test-resolve-twice:${generateId()}`,
+    });
+
+    const first = await call('notifications.resolve', cookie, { id: notificationId }, 'POST');
+    expect(first.statusCode).toBe(200);
+
+    const second = await call('notifications.resolve', cookie, { id: notificationId }, 'POST');
+    expect(second.statusCode).toBe(400);
+  });
+
+  it('resolve on a nonexistent id returns 404', async () => {
+    const { organizationId } = await setUpOrg();
+    const cookie = await issueSession(organizationId);
+    const response = await call('notifications.resolve', cookie, { id: generateId() }, 'POST');
+    expect(response.statusCode).toBe(404);
+  });
+
   it('markRead on a nonexistent id returns 404', async () => {
     const { organizationId } = await setUpOrg();
     const cookie = await issueSession(organizationId);

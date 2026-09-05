@@ -6,7 +6,7 @@ import { TRPCClientError } from '@trpc/client';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
 import { Badge, Button, Card, ErrorNotice, LoadingState, PageHeader, Table, Td, Th, Tr, Value } from '@/components/ui';
-import { statusTone } from '../status-tone';
+import { statusLabel, statusTone } from '../status-tone';
 import { formatMoney, trimZeros } from '@/lib/format';
 
 type GetResult = Awaited<ReturnType<typeof trpc.purchaseOrders.get.query>>;
@@ -26,6 +26,8 @@ export default function PurchaseOrderDetailPage() {
   const [actionPending, setActionPending] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [showRejectForm, setShowRejectForm] = useState(false);
+  const [closeShortReason, setCloseShortReason] = useState('');
+  const [showCloseShortForm, setShowCloseShortForm] = useState(false);
   const [pdfUrlPending, setPdfUrlPending] = useState(false);
 
   const load = useCallback(() => {
@@ -105,7 +107,7 @@ export default function PurchaseOrderDetailPage() {
       <PageHeader
         title={purchaseOrder.poNumber}
         description={`Created ${new Date(purchaseOrder.createdAt).toLocaleDateString()}`}
-        actions={<Badge tone={statusTone(purchaseOrder.status)}>{purchaseOrder.status.replace(/_/g, ' ')}</Badge>}
+        actions={<Badge tone={statusTone(purchaseOrder.status)}>{statusLabel(purchaseOrder.status)}</Badge>}
       />
 
       {error && <ErrorNotice>{error}</ErrorNotice>}
@@ -256,6 +258,16 @@ export default function PurchaseOrderDetailPage() {
             </Link>
           )}
 
+          {/* A partially-received order that will never be completed by the supplier previously had
+              no exit besides a manual DB fix — goods already arrived and were posted as real stock,
+              so `cancel` would misdescribe an order that partly, genuinely happened. `closeShort` is
+              the real terminal state for this outcome. */}
+          {purchaseOrder.status === 'PARTIALLY_RECEIVED' && (
+            <Button type="button" variant="ghost" disabled={actionPending} onClick={() => setShowCloseShortForm((s) => !s)}>
+              Close short
+            </Button>
+          )}
+
           {(purchaseOrder.status === 'RECEIVED' || purchaseOrder.status === 'CLOSED' || purchaseOrder.status === 'CANCELLED') && (
             <p className="text-sm text-content-subtle">This order is closed. There's nothing left to do here.</p>
           )}
@@ -285,6 +297,34 @@ export default function PurchaseOrderDetailPage() {
               }
             >
               Confirm reject
+            </Button>
+          </div>
+        )}
+
+        {showCloseShortForm && (
+          <div className="mt-4 flex items-center gap-2 border-t border-border pt-4">
+            <input
+              type="text"
+              value={closeShortReason}
+              onChange={(e) => setCloseShortReason(e.target.value)}
+              placeholder="Reason (optional) — e.g. supplier confirmed no further delivery"
+              className="w-full max-w-sm rounded-lg border border-border-strong bg-surface-raised px-3 py-1.5 text-sm text-content"
+            />
+            <Button
+              type="button"
+              variant="primary"
+              disabled={actionPending}
+              onClick={() =>
+                runAction(() =>
+                  trpc.purchaseOrders.closeShort.mutate({
+                    purchaseOrderId: purchaseOrder.id,
+                    expectedVersion: version,
+                    ...(closeShortReason ? { reason: closeShortReason } : {}),
+                  })
+                )
+              }
+            >
+              Confirm close short
             </Button>
           </div>
         )}

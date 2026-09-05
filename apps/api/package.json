@@ -22,6 +22,7 @@
     "@retailos/db": "workspace:*",
     "@retailos/domain": "workspace:*",
     "@retailos/email": "workspace:*",
+    "@retailos/logger": "workspace:*",
     "@retailos/metrics": "workspace:*",
     "@retailos/pos": "workspace:*",
     "@retailos/queue": "workspace:*",

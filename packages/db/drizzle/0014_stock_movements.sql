@@ -41,8 +41,8 @@ CREATE TABLE IF NOT EXISTS "stock_movements" (
 
 -- One real partition for the current month, plus a DEFAULT catch-all so an insert with an
 -- occurred_at outside the pre-created range fails loudly at the database only if DEFAULT is
--- also absent — with DEFAULT present it is accepted, not silently rejected, matching the plan's
--- "partitions created ahead of time" as an operational job this migration seeds the first
+-- also absent — with DEFAULT present it is accepted, not silently rejected. "Partitions created
+-- ahead of time" is an operational job this migration seeds the first
 -- instance of, not a promise every future month is pre-created by this file alone.
 CREATE TABLE IF NOT EXISTS "stock_movements_2026_08"
   PARTITION OF "stock_movements"
@@ -97,9 +97,9 @@ END
 $$;
 --> statement-breakpoint
 
--- the design: write-heavy tables get a deliberately minimal index set — every index is a
--- write cost on the hottest path in the system. BRIN (not B-tree) for occurred_at, per the design's
--- reasoning: orders of magnitude smaller than B-tree for naturally time-ordered append-only data.
+-- Write-heavy tables get a deliberately minimal index set — every index is a
+-- write cost on the hottest path in the system. BRIN (not B-tree) for occurred_at:
+-- orders of magnitude smaller than B-tree for naturally time-ordered append-only data.
 -- The idempotency unique index must include occurred_at (the partition key) — Postgres requires
 -- every unique index on a partitioned table to include it. Not CONCURRENTLY: Postgres refuses
 -- CONCURRENTLY directly on a partitioned parent (no way to build one global concurrent index

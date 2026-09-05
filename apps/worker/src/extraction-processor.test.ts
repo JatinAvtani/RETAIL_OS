@@ -45,8 +45,8 @@ const fakeSuccessfulProvider: ExtractionProvider = {
         total: { value: '11.00', confidence: 0.9 },
       },
       // Internally consistent with the fields above (10.00 line total + 1.00 tax = 11.00 total) so
-      // this fixture reads as a genuinely clean extraction now that earlier work's real gates run against
-      // it — a self-contradicting fixture would otherwise silently produce a real TOTAL_MISMATCH.
+      // this fixture reads as a genuinely clean extraction against the real validation gates —
+      // a self-contradicting fixture would otherwise silently produce a real TOTAL_MISMATCH.
       lines: [
         {
           sku: { value: 'SKU-1', confidence: 0.9 },
@@ -69,6 +69,18 @@ const fakeFailingProvider: ExtractionProvider = {
   },
 };
 
+/** Unlike `fakeFailingProvider` (a provider call that completes and reports its own failure), this simulates a genuinely UNEXPECTED exception — a network/storage-style crash the processor never anticipated. */
+const throwingProvider: ExtractionProvider = {
+  name: 'fake-throwing',
+  async extract(): Promise<ExtractionResult> {
+    throw new Error('simulated unexpected crash');
+  },
+};
+
+/** A real `Job`-shaped object exposing the `attemptsMade`/`opts.attempts` fields the processor's last-attempt check reads — `asJob` above omits both, which would make every attempt look final. */
+const asJobWithAttempts = (data: ExtractionJobData, attemptsMade: number, attempts: number): Job<ExtractionJobData> =>
+  ({ data, attemptsMade, opts: { attempts } }) as Job<ExtractionJobData>;
+
 const asJob = (data: ExtractionJobData): Job<ExtractionJobData> => ({ data }) as Job<ExtractionJobData>;
 
 /**
@@ -89,11 +101,20 @@ describe('extraction processor', () => {
     storeId = generateId();
     await adminDb.insert(stores).values({ id: storeId, organizationId, name: 'Main Store', timezone: 'America/New_York' });
 
+    // A real, resolvable supplier named exactly 'Test Supplier' — several fixtures below extract
+    // this literal name, and `runValidationGates`'s own `findByExactName` lookup now BLOCKs
+    // auto-approval (2026-09 fix) whenever a document's extracted supplier name doesn't resolve to
+    // a real row, so a fixture using this name must have one to seed, matching the real "Price
+    // Anomaly Supplier"/"Duplicate Supplier" pattern the other describe blocks in this file already
+    // use — these tests are about confidence-threshold/arithmetic-gate behavior specifically, not
+    // supplier resolution, so the supplier itself must be a non-issue for them.
+    await adminDb.insert(suppliers).values({ id: generateId(), organizationId, name: 'Test Supplier' });
+
     const storageClient = createStorageClient({ endpoint: process.env.S3_ENDPOINT ?? 'http://localhost:9000', accessKeyId: 'minioadmin', secretAccessKey: 'minioadmin', bucket: BUCKET });
     await ensureBucketExists(storageClient, BUCKET);
     await putObjectBytes(storageClient, BUCKET, 'test-invoice.pdf', Buffer.from('%PDF-1.4\n%%EOF'), 'application/pdf');
     // A real, OCR-able invoice — the trivial fake PDF above has no readable text at all, which
-    // would make the earlier work circuit-breaker-fallback test's "Tesseract found something real"
+    // would make the circuit-breaker-fallback test's "Tesseract found something real"
     // assertion meaningless regardless of whether the fallback wiring is correct. Lives in
     // src/__fixtures__/ (tracked in git), not spikes/extraction/corpus/ (gitignored) — a CI
     // runner's fresh clone never has the spike corpus, which broke this test in CI despite
@@ -110,6 +131,7 @@ describe('extraction processor', () => {
   });
 
   afterAll(async () => {
+    await adminDb.delete(suppliers).where(eq(suppliers.organizationId, organizationId));
     await adminDb.delete(stores).where(eq(stores.organizationId, organizationId));
     await adminDb.delete(organizations).where(eq(organizations.id, organizationId));
   });
@@ -237,6 +259,55 @@ describe('extraction processor', () => {
     expect(validation.issues).toHaveLength(1);
     expect(validation.issues[0]?.code).toBe('EXTRACTION_FAILED');
     expect(validation.issues[0]?.message).toBe('simulated provider failure');
+  });
+
+  it('an unexpected thrown exception on a NON-final attempt rethrows so BullMQ retries, and leaves the document at PROCESSING — never silently stuck with no path back', async () => {
+    documentId = await seedDocument();
+
+    const processor = createExtractionProcessor({
+      databaseUrl: APP_CONNECTION_STRING,
+      geminiApiKey: 'unused-because-provider-is-injected',
+      storage: { endpoint: process.env.S3_ENDPOINT ?? 'http://localhost:9000', accessKeyId: 'minioadmin', secretAccessKey: 'minioadmin', bucket: BUCKET },
+      provider: throwingProvider,
+    });
+
+    // attemptsMade: 0 of a 3-attempt budget — this is NOT the last attempt.
+    await expect(
+      processor(asJobWithAttempts({ documentId, organizationId, storageKey: 'test-invoice.pdf', mimeType: 'application/pdf' }, 0, 3))
+    ).rejects.toThrow('simulated unexpected crash');
+
+    const [doc] = await adminDb.select().from(documents).where(eq(documents.id, documentId));
+    // Real BullMQ retry is what happens next for a rethrown error — the document correctly stays
+    // PROCESSING (a retryable attempt in progress), not moved to any terminal status prematurely.
+    expect(doc?.status).toBe('PROCESSING');
+    const [extraction] = await adminDb.select().from(documentExtractions).where(eq(documentExtractions.documentId, documentId));
+    expect(extraction).toBeUndefined();
+  });
+
+  it('an unexpected thrown exception on the FINAL attempt records a real terminal REVIEW_REQUIRED outcome instead of leaving the document stuck at PROCESSING forever', async () => {
+    documentId = await seedDocument();
+
+    const processor = createExtractionProcessor({
+      databaseUrl: APP_CONNECTION_STRING,
+      geminiApiKey: 'unused-because-provider-is-injected',
+      storage: { endpoint: process.env.S3_ENDPOINT ?? 'http://localhost:9000', accessKeyId: 'minioadmin', secretAccessKey: 'minioadmin', bucket: BUCKET },
+      provider: throwingProvider,
+    });
+
+    // attemptsMade: 2 of a 3-attempt budget — job.attemptsMade + 1 === 3 === the budget, so this IS the last attempt.
+    await processor(asJobWithAttempts({ documentId, organizationId, storageKey: 'test-invoice.pdf', mimeType: 'application/pdf' }, 2, 3));
+
+    const [doc] = await adminDb.select().from(documents).where(eq(documents.id, documentId));
+    expect(doc?.status).toBe('REVIEW_REQUIRED');
+
+    const [extraction] = await adminDb.select().from(documentExtractions).where(eq(documentExtractions.documentId, documentId));
+    expect(extraction).toBeTruthy();
+    expect(extraction?.fields).toEqual({});
+    expect(extraction?.lines).toEqual([]);
+    const validation = extraction?.validation as { issues: { code: string; message: string }[] };
+    expect(validation.issues).toHaveLength(1);
+    expect(validation.issues[0]?.code).toBe('EXTRACTION_FAILED');
+    expect(validation.issues[0]?.message).toContain('simulated unexpected crash');
   });
 
   it('with a real invalid Gemini key and no injected provider, the REAL circuit-breaker-wrapped provider falls back to a REAL Tesseract extraction', async () => {
@@ -433,7 +504,7 @@ describe('extraction processor', () => {
     await adminDb.delete(suppliers).where(eq(suppliers.id, supplierId));
   });
 
-  it('an extracted supplier name that resolves to zero known suppliers produces PRICE_CHECK_UNAVAILABLE, not a silent skip', async () => {
+  it('an extracted supplier name that resolves to zero known suppliers produces a BLOCKing PRICE_CHECK_UNAVAILABLE and routes to REVIEW_REQUIRED even at high confidence', async () => {
     documentId = await seedDocument();
     const unresolvedSupplierProvider: ExtractionProvider = {
       name: 'fake-unresolved-supplier',
@@ -482,10 +553,26 @@ describe('extraction processor', () => {
     const validation = extraction?.validation as { issues: { code: string; severity: string }[]; canAutoApprove: boolean };
     const unavailableIssue = validation.issues.find((issue) => issue.code === 'PRICE_CHECK_UNAVAILABLE');
     expect(unavailableIssue).toBeDefined();
-    expect(unavailableIssue?.severity).toBe('WARN');
+    // Regression test for a real gap (2026-09 fix): this was previously WARN, which let a document
+    // with an unresolved supplier and otherwise-high-confidence fields (0.9 everywhere in this
+    // fixture) reach AUTO_APPROVED wearing the same reassuring badge a real human approval gets —
+    // an unresolved supplier means posting has no real row to attribute cost/quantity to, which is
+    // exactly the silent-loss risk canAutoApprove exists to prevent.
+    expect(unavailableIssue?.severity).toBe('BLOCK');
+    expect(validation.canAutoApprove).toBe(false);
+
+    const [document] = await adminDb.select().from(documents).where(eq(documents.id, documentId));
+    expect(document?.status).toBe('REVIEW_REQUIRED');
   });
 
-  it('with no provider configured (no API key, no injected provider), the document is left at PROCESSING and no extraction row is created', async () => {
+  it('with no provider configured (no API key, no injected provider), the document moves to REVIEW_REQUIRED with a real extraction row explaining why, never left stuck at PROCESSING forever', async () => {
+    // Regression test for a real gap (2026-09 fix): this used to assert the OPPOSITE — that the
+    // document was left at PROCESSING with no extraction row at all. That was a genuine, silent
+    // stuck-document bug: the job completes without throwing (nothing left for BullMQ to retry),
+    // so a document uploaded to a worker with no GEMINI_API_KEY configured (a fresh clone, a
+    // misconfigured deployment) stayed at PROCESSING forever with no visible failure and no path to
+    // recovery. REVIEW_REQUIRED — the same terminal state the thrown-exception branch already uses
+    // for "extraction genuinely could not run" — is what a human can actually act on.
     documentId = await seedDocument();
 
     const processor = createExtractionProcessor({
@@ -497,9 +584,12 @@ describe('extraction processor', () => {
     await processor(asJob({ documentId, organizationId, storageKey: 'test-invoice.pdf', mimeType: 'application/pdf' }));
 
     const [doc] = await adminDb.select().from(documents).where(eq(documents.id, documentId));
-    expect(doc?.status).toBe('PROCESSING');
+    expect(doc?.status).toBe('REVIEW_REQUIRED');
 
     const extractionRows = await adminDb.select().from(documentExtractions).where(eq(documentExtractions.documentId, documentId));
-    expect(extractionRows).toHaveLength(0);
+    expect(extractionRows).toHaveLength(1);
+    const validation = extractionRows[0]?.validation as { issues: { code: string; severity: string }[]; canAutoApprove: boolean };
+    expect(validation.canAutoApprove).toBe(false);
+    expect(validation.issues.some((issue) => issue.code === 'EXTRACTION_FAILED')).toBe(true);
   });
 });

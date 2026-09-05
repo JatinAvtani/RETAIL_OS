@@ -8,8 +8,8 @@ import type { S3Client } from '@aws-sdk/client-s3';
 import type { ExtractionJobData } from '@retailos/queue';
 
 /**
- * earlier work (the plan Phase 2: "Primary + secondary configured. Circuit breaker; fall back on
- * outage."). 5 consecutive Gemini failures opens the circuit (routes straight to Tesseract without
+ * Primary + secondary provider configured with a circuit breaker that falls back on
+ * outage. 5 consecutive Gemini failures opens the circuit (routes straight to Tesseract without
  * even trying Gemini) for 5 minutes, then allows one real trial call. These numbers aren't from a
  * spec — they're a reasonable default for a free-tier provider with no documented SLA; revisit if
  * real production telemetry ever shows them wrong.
@@ -67,13 +67,62 @@ export const createExtractionProcessor = (config: {
 
     if (!provider) {
       // No key configured on this worker (e.g. CI, a fresh clone) — the job is not attempted,
-      // never a fabricated extraction. Left at PROCESSING rather than moved to REVIEW_REQUIRED,
-      // since no real extraction attempt happened to review.
+      // never a fabricated extraction. Previously left at PROCESSING forever with no real terminal
+      // status and no BullMQ retry (the job completes "successfully" here, so nothing ever revisits
+      // it) — a real, silent stuck-document gap (2026-09 fix). Now records a real extraction row
+      // saying so and moves to REVIEW_REQUIRED, the same visible/recoverable terminal state the
+      // thrown-exception branch below already uses for "extraction genuinely could not run."
+      await documentRepository.recordExtraction({
+        documentId,
+        provider: 'gemini',
+        modelVersion: 'unavailable',
+        promptVersion: '1',
+        fields: {},
+        lines: [],
+        validation: {
+          issues: [{ severity: 'BLOCK', code: 'EXTRACTION_FAILED', field: 'extraction', message: 'No extraction provider is configured on this worker (missing GEMINI_API_KEY).' }],
+          canAutoApprove: false,
+        },
+      });
+      await documentRepository.updateStatus(documentId, 'REVIEW_REQUIRED');
       return;
     }
 
-    const bytes = await getObjectBytes(storageClient, config.storage.bucket, storageKey);
-    const result = await provider.extract(bytes, mimeType);
+    // A thrown exception here (storage outage, an unexpected provider crash — distinct from
+    // `result.error`, which is the PROVIDER's own reported failure and already produces a real
+    // extraction row below) previously left the document at `PROCESSING` forever: nothing caught
+    // it, so it was never given a terminal status, and BullMQ's own retry (`attempts: 3`,
+    // extraction-queue.ts) would eventually exhaust with the document still stuck. This mirrors
+    // `notification-delivery-processor.ts`'s own "is this genuinely the last attempt" pattern:
+    // every non-final attempt rethrows so BullMQ retries normally; only the LAST attempt writes a
+    // real terminal outcome instead of leaving the document silently stuck.
+    let bytes: Awaited<ReturnType<typeof getObjectBytes>>;
+    let result: Awaited<ReturnType<typeof provider.extract>>;
+    try {
+      bytes = await getObjectBytes(storageClient, config.storage.bucket, storageKey);
+      result = await provider.extract(bytes, mimeType);
+    } catch (err) {
+      const attemptsBudget = job.opts.attempts ?? 1;
+      const isFinalAttempt = job.attemptsMade + 1 >= attemptsBudget;
+      if (!isFinalAttempt) {
+        throw err; // Let BullMQ's own retry/backoff handle it — the document correctly stays PROCESSING for a genuinely retryable attempt.
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      await documentRepository.recordExtraction({
+        documentId,
+        provider: 'gemini',
+        modelVersion: 'unavailable',
+        promptVersion: '1',
+        fields: {},
+        lines: [],
+        validation: {
+          issues: [{ severity: 'BLOCK', code: 'EXTRACTION_FAILED', field: 'extraction', message: `Extraction failed after ${attemptsBudget} attempts: ${message}` }],
+          canAutoApprove: false,
+        },
+      });
+      await documentRepository.updateStatus(documentId, 'REVIEW_REQUIRED');
+      return; // Deliberately does NOT rethrow — this was the last real attempt; a real terminal status is now recorded, so the job should complete, not land in BullMQ's failed set with nothing left to retry.
+    }
 
     // `document_extractions.fields`/`.lines` are NOT NULL — a provider error genuinely ran an
     // extraction attempt (unlike the no-provider-configured case above, which never attempts one

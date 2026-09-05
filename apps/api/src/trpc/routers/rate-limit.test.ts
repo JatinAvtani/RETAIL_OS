@@ -255,7 +255,11 @@ describe('rate limiting on auth endpoints', () => {
 
     expect(status).toBe(429);
     expect(asError(body).message).toBe('Too many attempts. Please try again later.');
-  }, 15000);
+    // 21 real signups, each a deliberately-expensive Argon2id hash plus a real DB insert. Measured
+    // at 15285ms against a warm database — the previous 15000 was under the real cost of the work
+    // this test does, so it failed on timing while asserting nothing about the rate limiter. 30s is
+    // a real ceiling (a genuine hang still fails); it is not a blanket suppression.
+  }, 30000);
 
   it('a locked-out account cannot be unlocked by trying from a fresh IP', async () => {
     const email = uniqueEmail('lockout-persists');

@@ -9,11 +9,11 @@ import { users } from './users';
 import { idColumn, timestamps, optimisticVersion } from './columns';
 
 /**
- * the design's exact state diagram. `SENT` is the immutability boundary — the plan: "amendments
- * create a new version so what was actually sent to the supplier is preserved," matching the design
- * the design's `purchase_orders` entity-revisions mechanism (a full JSONB snapshot on send, not a new
- * row here — that snapshot lives in `audit_logs`/a future `*_revisions` table, out of this task's
- * schema scope). `CANCELLED` is reachable from every pre-SENT-and-PARTIALLY_RECEIVED state per the
+ * The exact state diagram. `SENT` is the immutability boundary — amendments
+ * create a new version so what was actually sent to the supplier is preserved, matching
+ * the `purchase_orders` entity-revisions mechanism (a full JSONB snapshot on send, not a new
+ * row here — that snapshot lives in `audit_logs`/a future `*_revisions` table, out of this
+ * schema's scope). `CANCELLED` is reachable from every pre-SENT-and-PARTIALLY_RECEIVED state per the
  * spec; the domain-layer state machine (packages/domain/src/purchasing/po-lifecycle.ts) is the
  * single source of truth for which transitions are valid — this enum only constrains which VALUES
  * are representable, not which sequences are legal.
@@ -30,14 +30,36 @@ export const purchaseOrderStatusEnum = pgEnum('purchase_order_status', [
 ]);
 
 /**
- * the design / 07. `version` (optimisticVersion) prevents lost updates when two managers
+ * Whether the SENT state transition's real-world side effect (PDF generation + supplier email) has
+ * actually happened — separate from `status` (which, once `SEND` fires, only ever means "the state
+ * transition committed and this PO is now immutable"), for the exact same reason
+ * `sales_transactions.consumption_status` is separate from `sales_transactions.status`: a business
+ * event can be genuinely, correctly recorded while a side effect of it failed or never ran. The
+ * `SEND` transition and this column are deliberately NOT merged into one bigger status enum — the
+ * state machine (`applyPurchaseOrderTransition`) governs the PO's real business lifecycle
+ * (draft/approval/receiving/closing), which does not change based on whether an email delivery
+ * later succeeds or fails; overloading `SENT` into e.g. `SEND_REQUESTED`/`DELIVERED`/`DELIVERY_FAILED`
+ * would force `PARTIALLY_RECEIVED`/`RECEIVE_FULL`/`CLOSE_SHORT` and every other downstream transition
+ * to special-case which "SENT-shaped" status they may fire from, when none of them actually care.
+ *
+ * `PENDING` is the default the instant `applyTransition('SEND', ...)` commits — there is a real,
+ * intentional window where the state transition is done but delivery has not yet been attempted
+ * (the caller does PDF generation + email as a second, non-transactional step right after). A
+ * `resend` mutation can move a `FAILED` (or still-`PENDING`, if the process crashed mid-flight) row
+ * to `DELIVERED` without needing a further state-machine event — it does not change `status`, since
+ * the PO was already, correctly, `SENT`.
+ */
+export const purchaseOrderDeliveryStatusEnum = pgEnum('purchase_order_delivery_status', ['PENDING', 'DELIVERED', 'FAILED']);
+
+/**
+ * `version` (optimisticVersion) prevents lost updates when two managers
  * edit the same PO concurrently. Separate
  * actor+timestamp column pairs per transition (`submittedAt`/`submittedByUserId`,
  * `approvedAt`/`approvedByUserId`, etc.) mirror `stock_counts`' established convention — each
  * terminal-or-milestone state is independently queryable ("show me every CANCELLED PO this
  * quarter") rather than folded into one shared `resolvedAt`/`resolvedByUserId` pair.
  *
- * `sentAt` is the literal immutability boundary the design names ("SENT... becomes immutable")
+ * `sentAt` is the literal immutability boundary ("SENT... becomes immutable")
  * — application code must refuse further line/header edits once this is non-null, enforced in the
  * repository layer (a DB CHECK constraint can't express "no UPDATE to certain columns after a
  * certain state" without a trigger, which this project has avoided elsewhere in favor of
@@ -85,7 +107,7 @@ export const purchaseOrders = pgTable('purchase_orders', {
 
   closedAt: timestamp('closed_at', { withTimezone: true }),
 
-  // the design, "SENT triggers PDF generation + email to the supplier contact."
+  // SENT triggers PDF generation + email to the supplier contact.
   // `pdfObjectKey` is null until a SEND actually generates one (I7 — no PDF exists before that).
   // `emailSentAt`/`emailSentTo` record the (mocked, per this project's no-cost constraint) send
   // outcome directly on the row, so "was this actually sent, to whom" needs no audit_logs join.
@@ -93,13 +115,23 @@ export const purchaseOrders = pgTable('purchase_orders', {
   emailSentAt: timestamp('email_sent_at', { withTimezone: true }),
   emailSentTo: text('email_sent_to'),
 
+  // See `purchaseOrderDeliveryStatusEnum`'s own comment: a side-channel fact about whether the SENT
+  // transition's real PDF/email side effect actually completed, independent of `status` itself.
+  // Defaults `PENDING` the moment `SEND` commits; a `NULL`-safe default rather than nullable, since
+  // every PO that has ever reached `SENT` has SOME real delivery-attempt fact worth tracking (POs
+  // that never left DRAFT/APPROVED just carry the harmless default, never queried before SEND fires).
+  deliveryStatus: purchaseOrderDeliveryStatusEnum('delivery_status').notNull().default('PENDING'),
+  /** The real error message from the last failed delivery attempt (PDF generation or email send) — never overwritten on success, matching `sales_transactions.consumption_error`'s own precedent. */
+  deliveryError: text('delivery_error'),
+  deliveryAttempts: integer('delivery_attempts').notNull().default(0),
+
   createdByUserId: uuid('created_by_user_id').references(() => users.id),
   ...timestamps,
   ...optimisticVersion,
 });
 
 /**
- * the design: "Quantities are stored in both supplier order units (cases) and base units (kg).
+ * Quantities are stored in both supplier order units (cases) and base units (kg).
  * Every unit conversion failure in a purchasing system becomes a stock error; the conversion is
  * done once, at PO creation, and stored." `conversionToBase` is recorded on the LINE (not looked up
  * live from `unit_conversions`/`supplier_products` at receiving time) for the same reason

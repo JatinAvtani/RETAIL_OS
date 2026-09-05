@@ -115,7 +115,7 @@ describe('PostingService', () => {
     await adminClient.end();
   });
 
-  /** A real confirmed supplier-product mapping, product, and REVIEW_REQUIRED document — the state earlier work leaves behind for earlier work to post against. */
+  /** A real confirmed supplier-product mapping, product, and REVIEW_REQUIRED document — the state a posting call needs to have to post against. */
   const setUpMappedLine = async (options: { conversionToBase?: string } = {}): Promise<{ productId: string; mappingId: string; documentId: string }> => {
     const supplierRepo = new SupplierRepository(createScopedDb(client), organizationId);
     const supplier = await supplierRepo.create({ id: generateId(), name: `Posting Test Supplier ${generateId()}` });
@@ -463,7 +463,7 @@ describe('PostingService', () => {
     });
   });
 
-  it('skips a line with no confirmed supplier-SKU mapping — the document still reaches POSTED, never blocked (confirmed with the user)', async () => {
+  it('skips a line with no confirmed supplier-SKU mapping — the document still reaches POSTED, never blocked', async () => {
     const supplierRepo = new SupplierRepository(createScopedDb(client), organizationId);
     const supplier = await supplierRepo.create({ id: generateId(), name: `Posting Test Supplier Unmapped ${generateId()}` });
     const documentRepo = new DocumentRepository(createScopedDb(client), organizationId);

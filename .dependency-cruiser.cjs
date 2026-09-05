@@ -27,6 +27,7 @@ const WORKSPACES = [
   'packages/ui',
   'packages/assistant',
   'packages/integrations',
+  'packages/logger',
 ];
 
 const noReachIntoRules = WORKSPACES.map((ws) => ({

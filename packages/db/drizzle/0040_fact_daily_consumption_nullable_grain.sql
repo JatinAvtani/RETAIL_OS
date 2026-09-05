@@ -1,5 +1,5 @@
--- Hand-written. Follow-up to migration 0039 (already applied) — earlier work's own design was refined
--- mid-task after confirming with the user that fact_daily_consumption.theoreticalCogs (a real
+-- Hand-written. Follow-up to migration 0039 (already applied) — refines the design after
+-- recognizing that fact_daily_consumption.theoreticalCogs (a real
 -- STORE-WIDE dollar figure, no per-ingredient breakdown available — see
 -- packages/db/src/schema/fact-tables.ts's own header) needed a dedicated sentinel row per
 -- (org, store, date) rather than being repeated on every real per-product row, which would let a

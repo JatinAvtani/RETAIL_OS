@@ -130,4 +130,38 @@ export class SalesTransactionRepository extends TenantScopedRepository<typeof sa
         .where(and(eq(salesTransactionLines.organizationId, this.organizationId), eq(salesTransactionLines.transactionId, transactionId)))
     );
   }
+
+  /** Consumption genuinely ran to completion for this transaction — clears any prior failure's error text, but keeps `consumptionAttempts` as the real historical count. */
+  async markConsumptionCompleted(transactionId: string): Promise<void> {
+    await this.runScoped(async (db, scopedWhere) => {
+      await db
+        .update(salesTransactions)
+        .set({ consumptionStatus: 'COMPLETED', consumptionError: null })
+        .where(scopedWhere(eq(salesTransactions.id, transactionId)));
+    });
+  }
+
+  /**
+   * A consumption attempt threw — recorded as a real, visible fact (I7: never silently swallowed)
+   * rather than left at PENDING forever with no trace anything went wrong. `error` is the real
+   * thrown message, truncated defensively since this column has no length cap at the DB level and
+   * an unbounded provider/stack-trace string has no business living in a plain text column read by
+   * an eventual repair UI.
+   */
+  async markConsumptionFailed(transactionId: string, error: string): Promise<void> {
+    await this.runScoped(async (db, scopedWhere) => {
+      const [row] = await db
+        .select({ consumptionAttempts: salesTransactions.consumptionAttempts })
+        .from(salesTransactions)
+        .where(scopedWhere(eq(salesTransactions.id, transactionId)));
+      await db
+        .update(salesTransactions)
+        .set({
+          consumptionStatus: 'FAILED',
+          consumptionError: error.slice(0, 2000),
+          consumptionAttempts: (row?.consumptionAttempts ?? 0) + 1,
+        })
+        .where(scopedWhere(eq(salesTransactions.id, transactionId)));
+    });
+  }
 }

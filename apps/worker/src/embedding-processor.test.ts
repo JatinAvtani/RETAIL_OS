@@ -18,6 +18,7 @@ import {
 } from '@retailos/db';
 import { createEmbeddingProcessor } from './embedding-processor';
 import type { EmbeddingJobData } from '@retailos/queue';
+import { EMBEDDING_MODEL } from '@retailos/ai';
 
 const APP_CONNECTION_STRING = process.env.TEST_DATABASE_URL ?? 'postgresql://retailos_app:retailos_app_local_only@localhost:5432/retailos';
 const ADMIN_CONNECTION_STRING = process.env.TEST_DATABASE_URL_ADMIN ?? 'postgresql://postgres:postgres@localhost:5432/retailos';
@@ -146,6 +147,133 @@ describe('embedding processor', () => {
     // delete-then-insert-all contract, DocumentChunkEmbeddingRepository).
     const chunkRows = await adminDb.select().from(documentChunkEmbeddings).where(eq(documentChunkEmbeddings.documentId, doc.id));
     expect(chunkRows).toHaveLength(1); // header only — this fixture has zero real lines
+  });
+
+  it('a second run with byte-identical chunk text reuses the stored embedding instead of calling the provider again — the content-hash cache', async () => {
+    const organizationId = generateId();
+    createdOrgIds.push(organizationId);
+    await db.insert(organizations).values({ id: organizationId, name: 'Embed Cache Org', slug: `embed-cache-${organizationId}`, baseCurrency: 'USD' });
+    const storeId = generateId();
+    await db.transaction((tx) =>
+      withTenantContext(tx, organizationId, () =>
+        tx.insert(stores).values({ id: storeId, organizationId, name: 'Test Store', timezone: 'UTC' })
+      )
+    );
+
+    const documentRepository = new DocumentRepository(db, organizationId);
+    const doc = await documentRepository.create({
+      storeId, type: 'INVOICE', source: 'UPLOAD',
+      storageKey: `${organizationId}/cache.pdf`, contentHash: `cache-hash-${generateId()}`, mimeType: 'application/pdf', sizeBytes: 1,
+    });
+    await documentRepository.recordExtraction({
+      documentId: doc.id, provider: 'gemini', modelVersion: 'v1', promptVersion: '1',
+      fields: { supplier: { value: 'Cache Co' }, documentNumber: { value: 'INV-CACHE' } },
+      lines: [{ description: { value: 'Widget' } }],
+      validation: { issues: [], canAutoApprove: true },
+    });
+    await documentRepository.updateStatus(doc.id, 'REVIEW_REQUIRED');
+    await documentRepository.approve(doc.id, await seedUser());
+
+    // A cache hit is only possible when the stored `model` matches the processor's real
+    // EMBEDDING_MODEL constant — `fakeEmbed` above deliberately returns a DIFFERENT model string so
+    // every other test in this file exercises the safe "always re-embed" default. This fixture
+    // returns the real model name specifically to prove the cache path itself works.
+    let callCount = 0;
+    const countingRealModelEmbed = async (_apiKey: string, _text: string) => {
+      callCount++;
+      return { model: EMBEDDING_MODEL, values: FAKE_VALUES };
+    };
+    const firstProcessor = createEmbeddingProcessor({ databaseUrl: APP_CONNECTION_STRING, geminiApiKey: 'fake-key', embedFn: countingRealModelEmbed });
+    await firstProcessor(asJob({ documentId: doc.id, organizationId }));
+    // 1 whole-document embed (DocumentEmbeddingRepository — not cached, out of this fix's scope)
+    // + 2 chunk embeds (header + 1 line), all freshly computed since no cache exists yet.
+    expect(callCount).toBe(3);
+
+    const before = await adminDb
+      .select()
+      .from(documentChunkEmbeddings)
+      .where(eq(documentChunkEmbeddings.documentId, doc.id))
+      .orderBy(documentChunkEmbeddings.chunkOrder);
+    expect(before).toHaveLength(2);
+
+    // Second run over the SAME unchanged extraction — every CHUNK's text is byte-identical to what
+    // was just stored, so the real provider call must be skipped entirely for both chunks. Only the
+    // whole-document embed still runs (it has no cache of its own), so exactly 1 call remains.
+    callCount = 0;
+    const secondProcessor = createEmbeddingProcessor({ databaseUrl: APP_CONNECTION_STRING, geminiApiKey: 'fake-key', embedFn: countingRealModelEmbed });
+    await secondProcessor(asJob({ documentId: doc.id, organizationId }));
+    expect(callCount).toBe(1); // whole-document embed only — both chunk embeds were served from cache
+
+    const after = await adminDb
+      .select()
+      .from(documentChunkEmbeddings)
+      .where(eq(documentChunkEmbeddings.documentId, doc.id))
+      .orderBy(documentChunkEmbeddings.chunkOrder);
+    expect(after).toHaveLength(2);
+    // The reused row must carry the EXACT SAME vector as the original, byte-for-byte — proving the
+    // cache path actually reused stored data rather than silently writing a fresh (or corrupted) one.
+    expect(after[0]!.embedding).toEqual(before[0]!.embedding);
+    expect(after[1]!.embedding).toEqual(before[1]!.embedding);
+  });
+
+  it('a changed line item is re-embedded for real, while the unchanged header chunk still reuses its cached embedding', async () => {
+    const organizationId = generateId();
+    createdOrgIds.push(organizationId);
+    await db.insert(organizations).values({ id: organizationId, name: 'Embed Cache Partial Org', slug: `embed-cache-partial-${organizationId}`, baseCurrency: 'USD' });
+    const storeId = generateId();
+    await db.transaction((tx) =>
+      withTenantContext(tx, organizationId, () =>
+        tx.insert(stores).values({ id: storeId, organizationId, name: 'Test Store', timezone: 'UTC' })
+      )
+    );
+
+    const documentRepository = new DocumentRepository(db, organizationId);
+    const doc = await documentRepository.create({
+      storeId, type: 'INVOICE', source: 'UPLOAD',
+      storageKey: `${organizationId}/cache-partial.pdf`, contentHash: `cache-partial-hash-${generateId()}`, mimeType: 'application/pdf', sizeBytes: 1,
+    });
+    await documentRepository.recordExtraction({
+      documentId: doc.id, provider: 'gemini', modelVersion: 'v1', promptVersion: '1',
+      fields: { supplier: { value: 'Partial Cache Co' }, documentNumber: { value: 'INV-PC' } },
+      lines: [{ description: { value: 'Original Line' } }],
+      validation: { issues: [], canAutoApprove: true },
+    });
+    await documentRepository.updateStatus(doc.id, 'REVIEW_REQUIRED');
+    await documentRepository.approve(doc.id, await seedUser());
+
+    let callCount = 0;
+    const countingRealModelEmbed = async (_apiKey: string, _text: string) => {
+      callCount++;
+      return { model: EMBEDDING_MODEL, values: FAKE_VALUES };
+    };
+    const firstProcessor = createEmbeddingProcessor({ databaseUrl: APP_CONNECTION_STRING, geminiApiKey: 'fake-key', embedFn: countingRealModelEmbed });
+    await firstProcessor(asJob({ documentId: doc.id, organizationId }));
+    expect(callCount).toBe(3); // 1 whole-document embed + 2 chunk embeds (header + 1 line)
+
+    // A real correction changes the line item's extracted text — the header is untouched.
+    await documentRepository.recordExtraction({
+      documentId: doc.id, provider: 'gemini', modelVersion: 'v2', promptVersion: '1',
+      fields: { supplier: { value: 'Partial Cache Co' }, documentNumber: { value: 'INV-PC' } },
+      lines: [{ description: { value: 'Corrected Line' } }],
+      validation: { issues: [], canAutoApprove: true },
+    });
+    await documentRepository.updateStatus(doc.id, 'APPROVED');
+
+    callCount = 0;
+    const secondProcessor = createEmbeddingProcessor({ databaseUrl: APP_CONNECTION_STRING, geminiApiKey: 'fake-key', embedFn: countingRealModelEmbed });
+    await secondProcessor(asJob({ documentId: doc.id, organizationId }));
+    // 1 whole-document embed (always runs, uncached) + 1 real call for the CHANGED line chunk. The
+    // header chunk's text is unchanged and was served from cache — proving this isn't an
+    // all-or-nothing document-level check, but a genuine per-chunk comparison.
+    expect(callCount).toBe(2);
+
+    const rows = await adminDb
+      .select()
+      .from(documentChunkEmbeddings)
+      .where(eq(documentChunkEmbeddings.documentId, doc.id))
+      .orderBy(documentChunkEmbeddings.chunkOrder);
+    expect(rows).toHaveLength(2);
+    expect(rows[1]!.sourceText).toContain('Corrected Line');
   });
 
   it('skips quietly (no row written) for a document still at REVIEW_REQUIRED, never embedding unconfirmed fields', async () => {

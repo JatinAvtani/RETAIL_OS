@@ -5,6 +5,8 @@ import { eq } from 'drizzle-orm';
 import { generateId } from '@retailos/domain';
 import * as schema from '../schema/index';
 import {
+  notifications,
+  notificationRules,
   auditLogs,
   goodsReceiptLines,
   goodsReceipts,
@@ -141,6 +143,11 @@ describe('GoodsReceiptRepository', () => {
     await adminDb.delete(schema.productVariants).where(eq(schema.productVariants.productId, productId));
     await adminDb.delete(products).where(eq(products.organizationId, organizationId));
     await adminDb.delete(suppliers).where(eq(suppliers.organizationId, organizationId));
+    // `notifications.store_id` references `stores`, so notification rows must go BEFORE the
+    // store rows. Sweep processors can create these for any org present in the database, so a
+    // fixture that never creates one itself can still be holding some at teardown time.
+    await adminDb.delete(notifications).where(eq(notifications.organizationId, organizationId));
+    await adminDb.delete(notificationRules).where(eq(notificationRules.organizationId, organizationId));
     await adminDb.delete(stores).where(eq(stores.organizationId, organizationId));
     await adminDb.delete(organizations).where(eq(organizations.id, organizationId));
     await client.end();

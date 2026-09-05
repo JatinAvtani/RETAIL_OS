@@ -5,7 +5,8 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
 import { useStores } from '@/lib/use-stores';
-import { Badge, Button, Card, EmptyState, ErrorNotice, PageHeader, SkeletonRows, Select, Table, Td, Th, Tr, type BadgeTone } from '@/components/ui';
+import { humanizeEnum } from '@/lib/format';
+import { Badge, Button, Card, EmptyState, ErrorNotice, PageHeader, SkeletonRows, Select, Table, Td, Th, Tr, Value, type BadgeTone } from '@/components/ui';
 
 type CsvImportRow = Awaited<ReturnType<typeof trpc.csvImport.list.query>>[number];
 
@@ -136,12 +137,23 @@ export default function SalesImportPage() {
                 <Tr key={row.id}>
                   <Td className="text-content-muted">{new Date(row.createdAt).toLocaleString()}</Td>
                   <Td>
-                    <Badge tone={STATUS_TONES[row.status]}>{row.status.toLowerCase()}</Badge>
+                    <Badge tone={STATUS_TONES[row.status]}>{humanizeEnum(row.status)}</Badge>
                   </Td>
                   <Td className="text-content-muted">
-                    {row.status === 'IMPORTED'
-                      ? `${row.importedRowCount ?? 0} imported${(row.quarantinedRowCount ?? 0) > 0 ? `, ${row.quarantinedRowCount} quarantined` : ''}`
-                      : '—'}
+                    {row.status === 'IMPORTED' ? (
+                      row.importedRowCount === null ? (
+                        <Value value={null} />
+                      ) : (
+                        <>
+                          {row.importedRowCount} imported
+                          {row.quarantinedRowCount !== null && row.quarantinedRowCount > 0
+                            ? `, ${row.quarantinedRowCount} quarantined`
+                            : ''}
+                        </>
+                      )
+                    ) : (
+                      <Value value={null} />
+                    )}
                   </Td>
                   <Td align="right">
                     <Link href={`/sales-import/${row.id}`} className="text-sm font-medium text-accent hover:underline">

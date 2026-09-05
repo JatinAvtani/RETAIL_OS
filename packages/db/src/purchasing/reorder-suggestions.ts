@@ -1,9 +1,19 @@
 import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { Decimal } from 'decimal.js';
-import { quantity, money, suggestReorder, type ConsumptionDay, type CurrencyCode, type ReorderSuggestion, type Unit } from '@retailos/domain';
+import {
+  quantity,
+  money,
+  suggestReorder,
+  isStoreClosedOn,
+  type ConsumptionDay,
+  type CurrencyCode,
+  type OperatingHoursEntry,
+  type ReorderSuggestion,
+  type Unit,
+} from '@retailos/domain';
 import * as schema from '../schema/index';
-import { organizations } from '../schema/index';
+import { organizations, stores } from '../schema/index';
 import { withTenantContext } from '../tenant-context';
 
 type Db = ReturnType<typeof drizzle<typeof schema>>;
@@ -23,6 +33,12 @@ export type ReorderSuggestionRow = {
   unit: string | null;
   suggestion: ReorderSuggestion;
   explanationText: string;
+  /** The same real, latest-confirmed price `suggestReorder` itself was given above (`null` when
+   * none exists yet) — exposed on the row so a caller that later WRITES a real PO line from this
+   * suggestion (this epic's `applyApprovedReorderDraft`) uses the exact same price this function
+   * already looked up, never a second independent query that could disagree (I2). */
+  unitPrice: string | null;
+  currency: string;
 };
 
 export type SupplierGroupedSuggestions = {
@@ -32,7 +48,7 @@ export type SupplierGroupedSuggestions = {
 };
 
 /**
- * The plain-language rendering the plan's the design shows verbatim: "Suggest 3 cases (36 kg).
+ * The plain-language rendering the design shows verbatim: "Suggest 3 cases (36 kg).
  * You use ~4.2 kg/day, have 9 kg (2.1 days), lead time is 2 days, target cover 10 days. Pack size
  * 12 kg." Built here (not in packages/domain) since it's presentation, not domain logic — the
  * suggestion's raw numbers are what packages/domain computes; how to phrase them for a manager is
@@ -58,29 +74,29 @@ const renderExplanation = (suggestion: ReorderSuggestion, unit: string | null): 
 };
 
 /**
- * wires earlier work's `suggestReorder` (pure domain logic) to real data for the first time.
+ * wires `suggestReorder` (pure domain logic) to real data for the first time.
  * Deliberately org-wide-per-store, one row per confirmed `supplier_products` mapping — an unmapped
  * supplier line has no pack size/MOQ/lead-time data to suggest against at all (I7: absence of a
  * mapping is not evidence a product needs reordering, so it's simply excluded, never defaulted).
  *
  * Per-input assembly, one real query at a time (matching `findExpiryQueue`'s own precedent of
  * deriving `avg_daily_consumption` inline since no stored value exists anywhere yet):
- *  - `stockOnHand` / `onOrder`: read directly, never computed by this function's own arithmetic on
- *    raw movement rows (I5 — money/quantity math belongs in packages/domain or a projection table,
- *    not ad-hoc here).
- *  - `consumptionHistory`: the trailing `CONSUMPTION_LOOKBACK_DAYS` days of `SALE_CONSUMPTION`
- *    movements, one row per day. A day with zero consumption movements is a REAL zero-consumption
- *    day (the store was open and nothing sold), not a closure — this codebase has no closure/
- *    operating-calendar table anywhere, so "closures excluded" cannot be
- *    honestly implemented yet; every returned day is marked `isClosureDay: false`. Flagged as a
- *    real, confirmed gap, not silently guessed around.
- *  - `leadTimeDays`/`minOrderValue`: read from `suppliers`, matching `supplierProducts`'s FK.
- *  - `unitPrice`: the supplier's most recent confirmed price for this supplier_product, if any —
- *    `null` when no price history exists yet, which correctly makes `enforceMoq` pass quantity
- *    through unchanged (I7) rather than fabricating a price.
+ * - `stockOnHand` / `onOrder`: read directly, never computed by this function's own arithmetic on
+ * raw movement rows (I5 — money/quantity math belongs in packages/domain or a projection table,
+ * not ad-hoc here).
+ * - `consumptionHistory`: the trailing `CONSUMPTION_LOOKBACK_DAYS` days of `SALE_CONSUMPTION`
+ * movements, one row per day. A day with zero consumption movements is a REAL zero-consumption
+ * day (the store was open and nothing sold), not a closure — this codebase has no closure/
+ * operating-calendar table anywhere, so "closures excluded" cannot be
+ * honestly implemented yet; every returned day is marked `isClosureDay: false`. Flagged as a
+ * real, confirmed gap, not silently guessed around.
+ * - `leadTimeDays`/`minOrderValue`: read from `suppliers`, matching `supplierProducts`'s FK.
+ * - `unitPrice`: the supplier's most recent confirmed price for this supplier_product, if any —
+ * `null` when no price history exists yet, which correctly makes `enforceMoq` pass quantity
+ * through unchanged (I7) rather than fabricating a price.
  *
  * Returns suggestions grouped by supplier — spec's D10 ("order grouping by supplier... manager
- * orders per supplier, not per item") and the natural shape for earlier work's PO-creation flow to
+ * orders per supplier, not per item") and the natural shape for the PO-creation flow to
  * consume directly (one PO per supplier group).
  */
 export const findReorderSuggestions = async (
@@ -107,6 +123,13 @@ const runReorderSuggestionsQuery = async (
     .from(organizations)
     .where(eq(organizations.id, organizationId));
   const currency = (orgRow?.baseCurrency ?? 'USD') as CurrencyCode;
+
+  const [storeRow] = await tx
+    .select({ timezone: stores.timezone, operatingHours: stores.operatingHours })
+    .from(stores)
+    .where(eq(stores.id, storeId));
+  const storeTimezone = storeRow?.timezone ?? 'UTC';
+  const operatingHours = (storeRow?.operatingHours as OperatingHoursEntry[] | null) ?? null;
 
   const candidateRows = await tx.execute<{
     supplier_product_id: string;
@@ -192,21 +215,46 @@ const runReorderSuggestionsQuery = async (
 
   if (candidateRows.length === 0) return [];
 
+  // A DENSE series — one real row per (product, calendar day) in the lookback window, `daily_
+  // quantity` genuinely 0 (not simply absent) for a day with no SALE_CONSUMPTION movement — is what
+  // makes a real closure day and a real zero-sales-but-open day distinguishable downstream. The
+  // previous version only ever produced a row for a day that had at least one movement, so BOTH
+  // cases were silently identical (absent from the array); `suggestReorder`'s confidence
+  // classification counts `measuredDays`, so a slow-moving product on a store open every day looked
+  // exactly as uncertain as one on a store closed half the window — this fixes that, not the
+  // suggested QUANTITY (which was already correctly unaffected by absent days either way).
   const consumptionRows = await tx.execute<{
     product_id: string;
     consumption_date: string;
     daily_quantity: string;
   }>(sql`
+    WITH candidate_products AS (
+      SELECT DISTINCT product_id FROM supplier_products
+      WHERE organization_id = ${organizationId} AND is_confirmed = true
+    ),
+    day_series AS (
+      SELECT generate_series(
+        (${asOfIso}::timestamptz - INTERVAL '${sql.raw(String(CONSUMPTION_LOOKBACK_DAYS))} days')::date,
+        (${asOfIso}::timestamptz - INTERVAL '1 day')::date,
+        INTERVAL '1 day'
+      )::date AS consumption_date
+    ),
+    real_consumption AS (
+      SELECT product_id, occurred_at::date AS consumption_date, SUM(-quantity) AS daily_quantity
+      FROM stock_movements
+      WHERE store_id = ${storeId}
+        AND movement_type = 'SALE_CONSUMPTION'
+        AND occurred_at >= ${asOfIso}::timestamptz - INTERVAL '${sql.raw(String(CONSUMPTION_LOOKBACK_DAYS))} days'
+        AND occurred_at < ${asOfIso}::timestamptz
+      GROUP BY product_id, occurred_at::date
+    )
     SELECT
-      product_id,
-      occurred_at::date AS consumption_date,
-      SUM(-quantity) AS daily_quantity
-    FROM stock_movements
-    WHERE store_id = ${storeId}
-      AND movement_type = 'SALE_CONSUMPTION'
-      AND occurred_at >= ${asOfIso}::timestamptz - INTERVAL '${sql.raw(String(CONSUMPTION_LOOKBACK_DAYS))} days'
-      AND occurred_at < ${asOfIso}::timestamptz
-    GROUP BY product_id, occurred_at::date
+      cp.product_id,
+      ds.consumption_date::text AS consumption_date,
+      COALESCE(rc.daily_quantity, 0)::text AS daily_quantity
+    FROM candidate_products cp
+    CROSS JOIN day_series ds
+    LEFT JOIN real_consumption rc ON rc.product_id = cp.product_id AND rc.consumption_date = ds.consumption_date
   `);
 
   // Kept as raw (date, amount) pairs here — the real unit isn't known until the main loop below
@@ -215,7 +263,7 @@ const runReorderSuggestionsQuery = async (
   const consumptionByProduct = new Map<string, { date: Date; amount: string }[]>();
   for (const row of consumptionRows) {
     const list = consumptionByProduct.get(row.product_id) ?? [];
-    list.push({ date: new Date(row.consumption_date), amount: row.daily_quantity });
+    list.push({ date: new Date(`${row.consumption_date}T00:00:00Z`), amount: row.daily_quantity });
     consumptionByProduct.set(row.product_id, list);
   }
 
@@ -229,11 +277,19 @@ const runReorderSuggestionsQuery = async (
     }
     const baseUnit = row.base_unit_code as Unit;
     const rawHistory = consumptionByProduct.get(row.product_id) ?? [];
-    const consumptionHistory: ConsumptionDay[] = rawHistory.map((d) => ({
-      date: d.date,
-      quantityConsumed: quantity(d.amount, baseUnit),
-      isClosureDay: false,
-    }));
+    // A closure day's OWN `quantityConsumed` is `null`, never the real (necessarily zero) figure
+    // the dense series reports for it — `ConsumptionDay`'s own doc comment states the contract
+    // explicitly ("null if the store was closed that day"), and `suggestReorder`'s trimmed mean
+    // already only reads `quantityConsumed` when `!isClosureDay`, but a `null` here keeps the two
+    // fields consistent rather than relying on callers to always check `isClosureDay` first.
+    const consumptionHistory: ConsumptionDay[] = rawHistory.map((d) => {
+      const isClosureDay = isStoreClosedOn(d.date, storeTimezone, operatingHours);
+      return {
+        date: d.date,
+        quantityConsumed: isClosureDay ? null : quantity(d.amount, baseUnit),
+        isClosureDay,
+      };
+    });
 
     const leadTimeDays = {
       measuredLeadTimeDays: row.lead_time_days_measured,
@@ -267,6 +323,8 @@ const runReorderSuggestionsQuery = async (
       unit: row.base_unit_code,
       suggestion,
       explanationText: renderExplanation(suggestion, row.base_unit_code),
+      unitPrice: row.latest_unit_price,
+      currency,
     };
 
     const group = bySupplier.get(row.supplier_id) ?? { supplierId: row.supplier_id, supplierName: row.supplier_name, suggestions: [] };

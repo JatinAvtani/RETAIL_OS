@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { Decimal } from 'decimal.js';
-import { classifyLineMatch, highestSeverity, DEFAULT_MATCH_TOLERANCES, type MatchCandidate } from './three-way-match';
+import {
+  classifyLineMatch,
+  highestSeverity,
+  computeLineDollarImpact,
+  computeMatchDollarImpact,
+  DEFAULT_MATCH_TOLERANCES,
+  type MatchCandidate,
+  type LineForDollarImpact,
+} from './three-way-match';
 
 const d = (v: string) => new Decimal(v);
 
@@ -28,8 +36,8 @@ describe('classifyLineMatch', () => {
   });
 
   it('auto-accepts a price variance within the $5 absolute tolerance even if the percentage is large', () => {
-    // A cheap item, e.g. $0.50 -> $4.50: 800% off but within $5 absolute — still CLEAN per
-    // the plan's own "avoid alert fatigue on cents" framing.
+    // A cheap item, e.g. $0.50 -> $4.50: 800% off but within $5 absolute — still CLEAN,
+    // to avoid alert fatigue on cents.
     const result = classifyLineMatch(
       { quantity: d('1'), unitPrice: d('4.50') },
       { poUnitPrice: d('0.50'), receivedQuantity: d('1'), receiptFound: true }
@@ -114,5 +122,77 @@ describe('highestSeverity', () => {
     expect(highestSeverity(['NONE', 'MEDIUM', 'HIGH', 'LOW'])).toBe('HIGH');
     expect(highestSeverity(['NONE', 'NONE'])).toBe('NONE');
     expect(highestSeverity([])).toBe('NONE');
+  });
+});
+
+describe('computeLineDollarImpact', () => {
+  it('CLEAN has zero exposure', () => {
+    const line: LineForDollarImpact = { varianceType: 'CLEAN', priceVariance: null, quantityVariance: null, invoiceQuantity: d('10'), invoiceUnitPrice: d('4.50') };
+    expect(computeLineDollarImpact(line)?.toString()).toBe('0');
+  });
+
+  it('PRICE_VARIANCE prices the per-unit variance across the whole invoiced quantity', () => {
+    // $50/unit overcharge on 10 units invoiced -> $500 real exposure, not just $50.
+    const line: LineForDollarImpact = { varianceType: 'PRICE_VARIANCE', priceVariance: d('50'), quantityVariance: null, invoiceQuantity: d('10'), invoiceUnitPrice: d('100') };
+    expect(computeLineDollarImpact(line)?.toString()).toBe('500');
+  });
+
+  it('PRICE_VARIANCE is signed — a negative priceVariance (undercharge) is a real negative exposure, a credit owed to the operator', () => {
+    const line: LineForDollarImpact = { varianceType: 'PRICE_VARIANCE', priceVariance: d('-2'), quantityVariance: null, invoiceQuantity: d('10'), invoiceUnitPrice: d('48') };
+    expect(computeLineDollarImpact(line)?.toString()).toBe('-20');
+  });
+
+  it('QUANTITY_VARIANCE prices the extra/short quantity at what was actually invoiced per unit', () => {
+    // Invoiced 3 more than received, at $4.50/unit -> $13.50 real exposure.
+    const line: LineForDollarImpact = { varianceType: 'QUANTITY_VARIANCE', priceVariance: null, quantityVariance: d('3'), invoiceQuantity: d('13'), invoiceUnitPrice: d('4.50') };
+    expect(computeLineDollarImpact(line)?.toString()).toBe('13.5');
+  });
+
+  it('UNORDERED_ITEM prices the ENTIRE invoiced line, not a partial variance — there is nothing to compare against', () => {
+    const line: LineForDollarImpact = { varianceType: 'UNORDERED_ITEM', priceVariance: null, quantityVariance: null, invoiceQuantity: d('5'), invoiceUnitPrice: d('20') };
+    expect(computeLineDollarImpact(line)?.toString()).toBe('100');
+  });
+
+  it('INVOICED_NOT_RECEIVED prices the ENTIRE invoiced line — possible fraud/error, full exposure', () => {
+    const line: LineForDollarImpact = { varianceType: 'INVOICED_NOT_RECEIVED', priceVariance: null, quantityVariance: null, invoiceQuantity: d('8'), invoiceUnitPrice: d('12.50') };
+    expect(computeLineDollarImpact(line)?.toString()).toBe('100');
+  });
+
+  it('returns null (never a fabricated 0) when the formula\'s own required inputs are missing (I7)', () => {
+    const missingPriceVariance: LineForDollarImpact = { varianceType: 'PRICE_VARIANCE', priceVariance: null, quantityVariance: null, invoiceQuantity: d('10'), invoiceUnitPrice: d('4.50') };
+    expect(computeLineDollarImpact(missingPriceVariance)).toBeNull();
+
+    const missingInvoiceQuantity: LineForDollarImpact = { varianceType: 'UNORDERED_ITEM', priceVariance: null, quantityVariance: null, invoiceQuantity: null, invoiceUnitPrice: d('4.50') };
+    expect(computeLineDollarImpact(missingInvoiceQuantity)).toBeNull();
+  });
+});
+
+describe('computeMatchDollarImpact', () => {
+  it('sums every line\'s real impact', () => {
+    const lines: LineForDollarImpact[] = [
+      { varianceType: 'PRICE_VARIANCE', priceVariance: d('10'), quantityVariance: null, invoiceQuantity: d('5'), invoiceUnitPrice: d('20') }, // 50
+      { varianceType: 'CLEAN', priceVariance: null, quantityVariance: null, invoiceQuantity: d('3'), invoiceUnitPrice: d('9') }, // 0
+      { varianceType: 'UNORDERED_ITEM', priceVariance: null, quantityVariance: null, invoiceQuantity: d('2'), invoiceUnitPrice: d('15') }, // 30
+    ];
+    expect(computeMatchDollarImpact(lines)?.toString()).toBe('80');
+  });
+
+  it('a real partial sum survives one unknown line, rather than the whole total becoming unknown (I7)', () => {
+    const lines: LineForDollarImpact[] = [
+      { varianceType: 'PRICE_VARIANCE', priceVariance: d('10'), quantityVariance: null, invoiceQuantity: d('5'), invoiceUnitPrice: d('20') }, // 50, known
+      { varianceType: 'PRICE_VARIANCE', priceVariance: null, quantityVariance: null, invoiceQuantity: d('1'), invoiceUnitPrice: d('1') }, // unknown — missing priceVariance
+    ];
+    expect(computeMatchDollarImpact(lines)?.toString()).toBe('50');
+  });
+
+  it('is null only when EVERY line is unknown', () => {
+    const lines: LineForDollarImpact[] = [
+      { varianceType: 'PRICE_VARIANCE', priceVariance: null, quantityVariance: null, invoiceQuantity: d('1'), invoiceUnitPrice: d('1') },
+    ];
+    expect(computeMatchDollarImpact(lines)).toBeNull();
+  });
+
+  it('is a real zero (not null) for an empty line list', () => {
+    expect(computeMatchDollarImpact([])?.toString()).toBe('0');
   });
 });

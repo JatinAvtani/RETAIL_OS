@@ -31,7 +31,11 @@ import {
   NotificationRepository,
   NotificationRuleRepository,
   DocumentUploadBatchRepository,
+  InvestigationRepository,
+  MovementService,
+  supplierPrices,
 } from '@retailos/db';
+import { Decimal } from 'decimal.js';
 import { eq } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import { generateId } from '@retailos/domain';
@@ -74,6 +78,18 @@ export type ResourceScopedProcedure = {
     organizationId: string,
     db: Db
   ) => Record<string, unknown> | Promise<Record<string, unknown>>;
+  /**
+   * Environment variables this entry's endpoint genuinely cannot run without — the entry is
+   * SKIPPED (never failed) when any is absent, matching `assistant.test.ts`'s own established
+   * "skip the live-model case without a key" discipline.
+   *
+   * Only `financeController.investigate` needs this today: it gates on a real `GEMINI_API_KEY`
+   * before doing anything, so in a keyless environment (CI, a fresh clone) it returns 503 to BOTH
+   * the attacker and the owner. That reads as "the tenant check failed" when the tenant check
+   * never actually ran, which is a false alarm on the one suite whose whole job is to be trusted
+   * when it goes red.
+   */
+  requiresEnv?: readonly string[];
 };
 
 /** Seeds a real product (needs a real baseUnitId FK — 'each' is part of the seeded global vocabulary). */
@@ -315,6 +331,20 @@ const seedApprovedPurchaseOrder = async (db: Db, organizationId: string): Promis
   const purchaseOrderId = await seedPendingApprovalPurchaseOrder(db, organizationId);
   const repo = new PurchaseOrderRepository(db, organizationId);
   await repo.applyTransition(purchaseOrderId, 'APPROVE', 2);
+  return purchaseOrderId;
+};
+
+/**
+ * A real SENT purchase order, returning the PO id itself — `purchaseOrders.resend`'s own-resource
+ * starting state. Reached via `applyTransition` directly (not the router's `send` mutation, which
+ * would need a real storage/email round-trip this fixture doesn't need), which leaves
+ * `deliveryStatus` at its default `PENDING` — exactly the state `resend` requires (it refuses to
+ * run against an already-`DELIVERED` PO), so this fixture's own-resource case gets a genuine 200.
+ */
+const seedSentPurchaseOrder = async (db: Db, organizationId: string): Promise<string> => {
+  const purchaseOrderId = await seedApprovedPurchaseOrder(db, organizationId);
+  const repo = new PurchaseOrderRepository(db, organizationId);
+  await repo.applyTransition(purchaseOrderId, 'SEND', 3);
   return purchaseOrderId;
 };
 
@@ -716,7 +746,7 @@ const seedMappedCatalogCsvImport = async (db: Db, organizationId: string, import
 /**
  * a real `Conversation` — `assistant.getConversation`'s own-resource starting state, and
  * `assistant.ask`'s CONTINUING-an-existing-conversation case (see below). The real risk here is
- * exactly what the design's own "grounding bundle retained for dispute resolution" design creates a
+ * exactly what retaining the grounding bundle for dispute resolution creates a
  * NEW incentive to leak: a conversation transcript can carry real cited business figures, so
  * tenant B reading — or, for `assistant.ask`, APPENDING TO — tenant A's conversation by guessed/
  * observed `conversationId` is a genuine data leak/tamper risk, not just an access-control
@@ -734,6 +764,87 @@ const seedConversation = async (db: Db, organizationId: string): Promise<string>
   const conversationRepository = new ConversationRepository(db, organizationId);
   const { id } = await conversationRepository.create({ userId });
   return id;
+};
+
+/**
+ * A real, COMPLETE investigation with no draft — `financeController.getInvestigation`/
+ * `rejectDraftAction`'s own-resource fixture. Neither endpoint needs a resolvable draft (rejecting
+ * an empty one still succeeds — `reject` is unconditional), so this stays deliberately minimal
+ * rather than the full reorder-eligible chain `seedInvestigationWithApprovableDraft` below builds.
+ */
+const seedInvestigation = async (db: Db, organizationId: string): Promise<string> => {
+  const { storeId } = await seedStoreAndProduct(db, organizationId);
+  const repo = new InvestigationRepository(db, organizationId);
+  const { id } = await repo.createRunning({ storeId, question: 'Cross-tenant probe question — why did margin drop?' });
+  await repo.complete(id, { hopCount: 1, trace: [], draft: null });
+  return id;
+};
+
+/**
+ * `financeController.approveDraftAction`'s own-resource fixture — genuinely needs to reach a real
+ * 200, so (unlike `seedInvestigation` above) this builds the FULL chain `applyApprovedReorderDraft`
+ * actually requires: a confirmed supplier price (re-derived fresh at approval time, I2 — see
+ * `reorder-draft-approval-service.ts`'s own header) and real consumption history so
+ * `findReorderSuggestions` genuinely returns this candidate. Matches the exact fixture shape
+ * `reconciliation-batch-report.test.ts` already proved works (receipt + 10 days of real
+ * `SALE_CONSUMPTION` movements via `MovementService`, never a raw insert).
+ */
+const seedInvestigationWithApprovableDraft = async (db: Db, organizationId: string): Promise<{ investigationId: string; storeId: string }> => {
+  const { storeId, productId, variantId } = await seedStoreAndProduct(db, organizationId);
+  const supplierId = generateId();
+  await db.insert(suppliers).values({ id: supplierId, organizationId, name: `Cross-tenant probe supplier ${supplierId}`, leadTimeDaysContracted: 2, leadTimeDaysMeasured: 2 });
+  const supplierProductId = generateId();
+  await db.insert(supplierProducts).values({
+    id: supplierProductId,
+    organizationId,
+    supplierId,
+    productId,
+    supplierSku: `CROSS-TENANT-PROBE-${supplierProductId}`,
+    isConfirmed: true,
+  });
+  await db.insert(supplierPrices).values({
+    id: generateId(),
+    supplierProductId,
+    unitPrice: '2.00',
+    currency: 'USD',
+    validFrom: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+    validTo: null,
+  });
+
+  const movementService = new MovementService(db, organizationId);
+  await movementService.postMovement({
+    storeId,
+    productId,
+    variantId,
+    movementType: 'RECEIPT',
+    quantity: '5',
+    unitCost: '2.00',
+    currency: 'USD',
+    occurredAt: new Date(Date.now() - 20 * 24 * 60 * 60 * 1000),
+    sourceType: 'TEST',
+  });
+  for (let i = 0; i < 10; i++) {
+    await movementService.postMovement({
+      storeId,
+      productId,
+      variantId,
+      movementType: 'SALE_CONSUMPTION',
+      quantity: '-1',
+      currency: 'USD',
+      occurredAt: new Date(Date.now() - (i + 1) * 24 * 60 * 60 * 1000),
+      sourceType: 'TEST',
+    });
+  }
+
+  const investigationRepo = new InvestigationRepository(db, organizationId);
+  const { id: investigationId } = await investigationRepo.createRunning({ storeId, question: 'Cross-tenant probe: low stock reorder' });
+  await investigationRepo.complete(investigationId, {
+    hopCount: 1,
+    trace: [],
+    draft: { lines: [{ candidateId: supplierProductId, label: 'Cross-tenant probe product', quantity: new Decimal('10').toString(), unitLabel: 'kg' }] },
+  });
+
+  return { investigationId, storeId };
 };
 
 const seedNotificationRule = async (db: Db, organizationId: string): Promise<string> => {
@@ -1516,6 +1627,14 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     buildInput: (resourceId) => ({ purchaseOrderId: resourceId, expectedVersion: 3 }),
   },
   {
+    // No `expectedVersion` at all (see `resend`'s own doc comment — it never touches
+    // status/version) — the resource id alone is the whole attack surface here.
+    path: 'purchaseOrders.resend',
+    type: 'mutation',
+    seedResource: seedSentPurchaseOrder,
+    buildInput: (resourceId) => ({ purchaseOrderId: resourceId }),
+  },
+  {
     // id-scoped by purchaseOrderId — a DRAFT PO (never sent) is a valid own-resource case,
     // since `getPdfUrl` must return `{ url: null }` rather than error for one (I7), same as `get`.
     path: 'purchaseOrders.getPdfUrl',
@@ -1757,6 +1876,15 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     buildInput: (resourceId) => ({ id: resourceId }),
   },
   {
+    // tenant B resolving tenant A's real, still-open notification by guessed/observed id — would
+    // silently close an alert tenant A never actually addressed, hiding a real operational
+    // condition (a stockout, an invoice mismatch) from the tenant who needed to see it.
+    path: 'notifications.resolve',
+    type: 'mutation',
+    seedResource: seedNotification,
+    buildInput: (resourceId) => ({ id: resourceId }),
+  },
+  {
     // Tenant B silently reconfiguring tenant A's real alert rule (severity/recipients/
     // channels) by guessed/observed ruleId — would corrupt which of tenant A's own staff actually
     // gets notified about a real business condition, a genuinely dangerous tamper, not just a leak.
@@ -1849,5 +1977,59 @@ export const resourceScopedProcedures: ResourceScopedProcedure[] = [
     type: 'query',
     seedResource: seedStore,
     buildInput: (resourceId) => ({ storeId: resourceId, days: 90 }),
+  },
+  {
+    // tenant B reading tenant A's real investigation (a real financial trace — cited
+    // metric values, a real draft action) by guessed/observed investigationId.
+    path: 'financeController.getInvestigation',
+    type: 'query',
+    seedResource: async (db, organizationId) => seedInvestigation(db, organizationId),
+    buildInput: (resourceId) => ({ investigationId: resourceId }),
+  },
+  {
+    // tenant B asking a question inside tenant A's org by guessing tenant A's storeId — the
+    // store-ownership check must run before any real Gemini call, matching `assistant.ask`'s own
+    // precedent for a registry entry that calls a real external vendor (no card/cost risk, same
+    // free-tier key).
+    path: 'financeController.investigate',
+    type: 'mutation',
+    seedResource: seedStore,
+    buildInput: (resourceId) => ({ storeId: resourceId, question: 'Cross-tenant probe question — why did margin drop?' }),
+    // Gates on a real key before the store check runs, so without one BOTH the cross-org and the
+    // own-resource case return 503 and the entry reports a tenant-isolation failure that never
+    // happened. See `requiresEnv` on the type above.
+    requiresEnv: ['GEMINI_API_KEY'],
+  },
+  {
+    // tenant B APPROVING tenant A's real draft into a real purchase order by guessed/observed
+    // investigationId — the single highest-stakes endpoint in this epic (a genuine financial write,
+    // not just a leak). The own-resource case needs a genuinely approvable draft (real confirmed
+    // price + real consumption history), not just an existing row, to reach a real 200.
+    path: 'financeController.approveDraftAction',
+    type: 'mutation',
+    seedResource: async (db, organizationId) => (await seedInvestigationWithApprovableDraft(db, organizationId)).investigationId,
+    buildInput: async (resourceId, organizationId, db) => {
+      const repo = new InvestigationRepository(db, organizationId);
+      const investigation = await repo.findById(resourceId);
+      return { investigationId: resourceId, storeId: investigation!.storeId };
+    },
+  },
+  {
+    // tenant B rejecting tenant A's real draft by guessed/observed investigationId — a tamper risk
+    // distinct from approval (denying a real business action, not creating a fabricated one), on
+    // the same underlying resource shape as the entry above.
+    path: 'financeController.rejectDraftAction',
+    type: 'mutation',
+    seedResource: async (db, organizationId) => seedInvestigation(db, organizationId),
+    buildInput: (resourceId) => ({ investigationId: resourceId, reason: 'Cross-tenant probe rejection.' }),
+  },
+  {
+    // tenant B reading tenant A's real reconciliation batch report (real
+    // supplier names, real dollar-impact exceptions) by guessed/observed storeId — the same
+    // store-scoped shape `dashboard.summary`/`assistant.briefing` already established.
+    path: 'reconciliation.batchReport',
+    type: 'query',
+    seedResource: seedStore,
+    buildInput: (resourceId) => ({ storeId: resourceId }),
   },
 ];

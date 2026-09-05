@@ -1,4 +1,4 @@
--- the design's InvoiceMatch -- the three-way match result linking
+-- InvoiceMatch -- the three-way match result linking
 -- PO <-> Receipt <-> Document, with per-line variance classification.
 CREATE TABLE IF NOT EXISTS "invoice_matches" (
 	"id" uuid PRIMARY KEY NOT NULL,

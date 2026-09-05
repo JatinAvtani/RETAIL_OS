@@ -1,13 +1,16 @@
-import { and, eq, gte, isNotNull, lt, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, isNotNull, lt, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { Decimal } from 'decimal.js';
 import {
   classifyLineMatch,
   highestSeverity,
   generateId,
+  computeMatchDollarImpact,
   DEFAULT_MATCH_TOLERANCES,
   type MatchTolerances,
   type VarianceSeverity,
+  type LineForDollarImpact,
+  type VarianceType,
 } from '@retailos/domain';
 import * as schema from '../schema/index';
 import {
@@ -18,6 +21,7 @@ import {
   goodsReceiptLines,
   goodsReceipts,
   organizations,
+  products,
   purchaseOrderLines,
   suppliers,
   supplierProducts,
@@ -383,9 +387,17 @@ export class InvoiceMatchRepository {
       // A walk-in receipt has no PO line, so fall back to the confirmed supplier mapping's pack
       // conversion; a legacy mapping with no conversion continues to mean order unit == base unit.
       const receivedBase = new Decimal(receiptRow.receivedQuantityBaseUnits);
-      const conversionToBase = receiptRow.poConversionToBase ?? mapping.conversionToBase;
+      const conversionToBaseRaw = receiptRow.poConversionToBase ?? mapping.conversionToBase;
+      const conversionToBase = conversionToBaseRaw === null ? null : new Decimal(conversionToBaseRaw);
+      // A conversion factor of zero or less is invalid data, not a real order-unit relationship —
+      // dividing by it would throw (zero) or silently flip the sign (negative). Neither is a number
+      // this function should ever hand back with confidence, so it degrades to unknown (I7) instead.
       const receivedOrderUnits =
-        conversionToBase === null ? receivedBase : receivedBase.dividedBy(new Decimal(conversionToBase));
+        conversionToBase === null
+          ? receivedBase
+          : conversionToBase.lessThanOrEqualTo(0)
+            ? null
+            : receivedBase.dividedBy(conversionToBase);
 
       return {
         purchaseOrderId: receiptRow.purchaseOrderId ?? null,
@@ -447,12 +459,40 @@ export class InvoiceMatchRepository {
     );
   }
 
+  /**
+   * Left-joins `products` for a real name — `invoiceMatchLines.productId` is nullable (an
+   * unordered/unreceived item may never resolve to a real product at all), so `productName` is
+   * `null` for exactly those real "no match" cases, never a fabricated placeholder. The three-way
+   * match detail screen's own "unreadable SKU, no product name at all" gap this join closes.
+   */
   async findLines(invoiceMatchId: string) {
     return this.db.transaction((tx) =>
       withTenantContext(tx, this.organizationId, () =>
         tx
-          .select()
+          .select({
+            id: invoiceMatchLines.id,
+            organizationId: invoiceMatchLines.organizationId,
+            invoiceMatchId: invoiceMatchLines.invoiceMatchId,
+            invoiceLineIndex: invoiceMatchLines.invoiceLineIndex,
+            purchaseOrderLineId: invoiceMatchLines.purchaseOrderLineId,
+            goodsReceiptLineId: invoiceMatchLines.goodsReceiptLineId,
+            productId: invoiceMatchLines.productId,
+            productName: products.name,
+            invoiceSku: invoiceMatchLines.invoiceSku,
+            invoiceQuantity: invoiceMatchLines.invoiceQuantity,
+            invoiceUnitPrice: invoiceMatchLines.invoiceUnitPrice,
+            poUnitPrice: invoiceMatchLines.poUnitPrice,
+            receivedQuantity: invoiceMatchLines.receivedQuantity,
+            priceVariance: invoiceMatchLines.priceVariance,
+            quantityVariance: invoiceMatchLines.quantityVariance,
+            varianceType: invoiceMatchLines.varianceType,
+            varianceSeverity: invoiceMatchLines.varianceSeverity,
+            explanation: invoiceMatchLines.explanation,
+            createdAt: invoiceMatchLines.createdAt,
+            updatedAt: invoiceMatchLines.updatedAt,
+          })
           .from(invoiceMatchLines)
+          .leftJoin(products, eq(products.id, invoiceMatchLines.productId))
           .where(and(eq(invoiceMatchLines.organizationId, this.organizationId), eq(invoiceMatchLines.invoiceMatchId, invoiceMatchId)))
           .orderBy(invoiceMatchLines.invoiceLineIndex)
       )
@@ -467,23 +507,74 @@ export class InvoiceMatchRepository {
    * alone is not enough to express this, since a match can be `PENDING` and still have zero real
    * variance; the `highestSeverity <> 'NONE'` predicate is what actually encodes "worth a manager's
    * attention," using the same column `classifyLineMatch`/`highestSeverity` already computed.
+   *
+   * Joins `suppliers` for a real name (the queue's own "no supplier column at all" gap) and
+   * batch-fetches every returned match's lines in one second query (never N+1) to compute each
+   * match's real `dollarImpact` via `computeMatchDollarImpact` (I2 — the exact same pure function
+   * the match detail page would use, not a parallel formula re-derived here).
    */
   async findPending(storeId?: string) {
     return this.db.transaction((tx) =>
-      withTenantContext(tx, this.organizationId, () => {
+      withTenantContext(tx, this.organizationId, async () => {
         const base = and(
           eq(invoiceMatches.organizationId, this.organizationId),
           eq(invoiceMatches.status, 'PENDING'),
           sql`${invoiceMatches.highestSeverity} IS NOT NULL AND ${invoiceMatches.highestSeverity} <> 'NONE'`
         );
-        return tx
-          .select()
+        const matches = await tx
+          .select({
+            id: invoiceMatches.id,
+            organizationId: invoiceMatches.organizationId,
+            storeId: invoiceMatches.storeId,
+            documentId: invoiceMatches.documentId,
+            supplierId: invoiceMatches.supplierId,
+            supplierName: suppliers.name,
+            purchaseOrderId: invoiceMatches.purchaseOrderId,
+            status: invoiceMatches.status,
+            highestSeverity: invoiceMatches.highestSeverity,
+            matchedAt: invoiceMatches.matchedAt,
+          })
           .from(invoiceMatches)
+          .innerJoin(suppliers, eq(suppliers.id, invoiceMatches.supplierId))
           .where(storeId !== undefined ? and(base, eq(invoiceMatches.storeId, storeId)) : base)
           .orderBy(
             sql`CASE ${invoiceMatches.highestSeverity} WHEN 'HIGH' THEN 0 WHEN 'MEDIUM' THEN 1 WHEN 'LOW' THEN 2 ELSE 3 END`,
             sql`${invoiceMatches.matchedAt} DESC`
           );
+
+        if (matches.length === 0) return [];
+
+        const matchIds = matches.map((m) => m.id);
+        const allLines = await tx
+          .select({
+            invoiceMatchId: invoiceMatchLines.invoiceMatchId,
+            varianceType: invoiceMatchLines.varianceType,
+            priceVariance: invoiceMatchLines.priceVariance,
+            quantityVariance: invoiceMatchLines.quantityVariance,
+            invoiceQuantity: invoiceMatchLines.invoiceQuantity,
+            invoiceUnitPrice: invoiceMatchLines.invoiceUnitPrice,
+          })
+          .from(invoiceMatchLines)
+          .where(and(eq(invoiceMatchLines.organizationId, this.organizationId), inArray(invoiceMatchLines.invoiceMatchId, matchIds)));
+
+        const linesByMatch = new Map<string, LineForDollarImpact[]>();
+        for (const line of allLines) {
+          const forImpact: LineForDollarImpact = {
+            varianceType: line.varianceType as VarianceType,
+            priceVariance: line.priceVariance !== null ? new Decimal(line.priceVariance) : null,
+            quantityVariance: line.quantityVariance !== null ? new Decimal(line.quantityVariance) : null,
+            invoiceQuantity: line.invoiceQuantity !== null ? new Decimal(line.invoiceQuantity) : null,
+            invoiceUnitPrice: line.invoiceUnitPrice !== null ? new Decimal(line.invoiceUnitPrice) : null,
+          };
+          const existing = linesByMatch.get(line.invoiceMatchId);
+          if (existing) existing.push(forImpact);
+          else linesByMatch.set(line.invoiceMatchId, [forImpact]);
+        }
+
+        return matches.map((match) => ({
+          ...match,
+          dollarImpact: computeMatchDollarImpact(linesByMatch.get(match.id) ?? []),
+        }));
       })
     );
   }

@@ -59,6 +59,9 @@ importers:
       '@retailos/email':
         specifier: workspace:*
         version: link:../../packages/email
+      '@retailos/logger':
+        specifier: workspace:*
+        version: link:../../packages/logger
       '@retailos/metrics':
         specifier: workspace:*
         version: link:../../packages/metrics
@@ -190,6 +193,9 @@ importers:
       '@retailos/integrations':
         specifier: workspace:*
         version: link:../../packages/integrations
+      '@retailos/logger':
+        specifier: workspace:*
+        version: link:../../packages/logger
       '@retailos/metrics':
         specifier: workspace:*
         version: link:../../packages/metrics
@@ -208,6 +214,9 @@ importers:
       decimal.js:
         specifier: ^10.4.3
         version: 10.6.0
+      postgres:
+        specifier: ^3.4.5
+        version: 3.4.9
     devDependencies:
       '@aws-sdk/client-s3':
         specifier: ^3.700.0
@@ -404,6 +413,19 @@ importers:
       '@types/node':
         specifier: ^22.10.2
         version: 22.20.1
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)(lightningcss@1.32.0)
+
+  packages/logger:
+    dependencies:
+      pino:
+        specifier: ^9.6.0
+        version: 9.14.0
+    devDependencies:
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -3146,6 +3168,9 @@ packages:
     resolution: {integrity: sha512-RvwwcruNjI1ncT5xRakeyS9Lf8lcItv34KD+aif+VH9kduAyfYBipGh12274xtenIPZ119/R9BdTBa8gAwSh0A==}
     engines: {node: '>=12'}
 
+  pino-abstract-transport@2.0.0:
+    resolution: {integrity: sha512-F63x5tizV6WCh4R6RHyi2Ml+M70DNRXt/+HANowMflpgGFMAym/VKm6G7ZOQRjqN7XbGxK1Lg9t6ZrtzOaivMw==}
+
   pino-abstract-transport@3.0.0:
     resolution: {integrity: sha512-wlfUczU+n7Hy/Ha5j9a/gZNy7We5+cXp8YL+X+PG8S0KXxw7n/JXA3c46Y0zQznIJ83URJiwy7Lh56WLokNuxg==}
 
@@ -3154,6 +3179,10 @@ packages:
 
   pino@10.3.1:
     resolution: {integrity: sha512-r34yH/GlQpKZbU1BvFFqOjhISRo1MNx1tWYsYvmj6KIRHSPMT2+yHOEb1SG6NMvRoHRF0a07kCOox/9yakl1vg==}
+    hasBin: true
+
+  pino@9.14.0:
+    resolution: {integrity: sha512-8OEwKp5juEvb/MjpIc4hjqfgCNysrS94RIOMXYvpYCdm/jglrKEiAYmiumbmGhCvs+IcInsphYDFwqrjr7398w==}
     hasBin: true
 
   playwright-core@1.62.1:
@@ -3394,6 +3423,9 @@ packages:
 
   teamcity-service-messages@0.1.14:
     resolution: {integrity: sha512-29aQwaHqm8RMX74u2o/h1KbMLP89FjNiMxD9wbF2BbWOnbM+q+d1sCEC+MqCc4QW3NJykn77OMpTFw/xTHIc0w==}
+
+  thread-stream@3.2.0:
+    resolution: {integrity: sha512-zLBvqpwr4Esa0kRjcrzGU6zL25lePWaCLMx0RQFrmteozIfeNdaMLpG5U7PeHzvlFkAWaRKA9/KVW4F60iB+qw==}
 
   thread-stream@4.2.0:
     resolution: {integrity: sha512-e2zZ96wSChazBsbENf/Pcm/4swHt2cEKQ92rhUjkL9GCKiTDJIaTBenjE/m9DXi0QBmTMDkFDdOomUy20A1tDQ==}
@@ -5765,6 +5797,10 @@ snapshots:
 
   picomatch@4.0.5: {}
 
+  pino-abstract-transport@2.0.0:
+    dependencies:
+      split2: 4.2.0
+
   pino-abstract-transport@3.0.0:
     dependencies:
       split2: 4.2.0
@@ -5784,6 +5820,20 @@ snapshots:
       safe-stable-stringify: 2.5.0
       sonic-boom: 4.2.1
       thread-stream: 4.2.0
+
+  pino@9.14.0:
+    dependencies:
+      '@pinojs/redact': 0.4.0
+      atomic-sleep: 1.0.0
+      on-exit-leak-free: 2.1.2
+      pino-abstract-transport: 2.0.0
+      pino-std-serializers: 7.1.0
+      process-warning: 5.1.0
+      quick-format-unescaped: 4.0.4
+      real-require: 0.2.0
+      safe-stable-stringify: 2.5.0
+      sonic-boom: 4.2.1
+      thread-stream: 3.2.0
 
   playwright-core@1.62.1: {}
 
@@ -6049,6 +6099,10 @@ snapshots:
   tapable@2.3.3: {}
 
   teamcity-service-messages@0.1.14: {}
+
+  thread-stream@3.2.0:
+    dependencies:
+      real-require: 0.2.0
 
   thread-stream@4.2.0:
     dependencies:

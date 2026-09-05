@@ -7,11 +7,14 @@ import { shiftDecimalPoint } from '@/lib/format';
 import { Badge, Button, Card, CardHeader, EmptyState, ErrorNotice, Field, Input, LoadingState, PageHeader, Select, Table, Th, Td, Tr, Value, type BadgeTone } from '@/components/ui';
 
 type Tolerances = Awaited<ReturnType<typeof trpc.settings.getMatchTolerances.query>>;
+type SessionSummary = Awaited<ReturnType<typeof trpc.auth.listSessions.query>>[number];
 type Member = Awaited<ReturnType<typeof trpc.invitations.listMembers.query>>[number];
 type PendingInvitation = Awaited<ReturnType<typeof trpc.invitations.listPending.query>>[number];
 type NotificationPreferences = Awaited<ReturnType<typeof trpc.notifications.getPreferences.query>>;
 type TuningCandidate = Awaited<ReturnType<typeof trpc.notifications.listTuningCandidates.query>>[number];
 type ActionRateReport = Awaited<ReturnType<typeof trpc.notifications.actionRateReport.query>>;
+type StoreSummary = Awaited<ReturnType<typeof trpc.stores.list.query>>[number];
+type StoreDetail = Awaited<ReturnType<typeof trpc.stores.get.query>>;
 
 const DEFAULT_PRICE_PERCENT_LABEL = '2%';
 // No currency symbol: the tolerance compares against invoice amounts in the org's own currency,
@@ -31,6 +34,190 @@ const ROLE_LABELS: Record<(typeof ROLES)[number], string> = {
   MANAGER: 'Manager',
   STAFF: 'Staff',
   VIEWER_FINANCE: 'Finance viewer (read-only)',
+};
+
+/**
+ * A raw `navigator.userAgent` string ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
+ * (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36") is real data but unreadable as a device
+ * label — nobody scans that to tell two sessions apart. Deliberately simple substring checks, not a
+ * parsing library: this only needs to answer "which browser, which OS," not power any real
+ * decision, so a full UA-parser dependency would be a real cost for a cosmetic label.
+ */
+const describeDevice = (userAgent: string): string => {
+  const browser = userAgent.includes('Edg/')
+    ? 'Edge'
+    : userAgent.includes('Chrome/')
+      ? 'Chrome'
+      : userAgent.includes('Firefox/')
+        ? 'Firefox'
+        : userAgent.includes('Safari/')
+          ? 'Safari'
+          : 'Unknown browser';
+  const os = userAgent.includes('Windows')
+    ? 'Windows'
+    : userAgent.includes('Mac OS X')
+      ? 'macOS'
+      : userAgent.includes('Android')
+        ? 'Android'
+        : userAgent.includes('iPhone') || userAgent.includes('iPad')
+          ? 'iOS'
+          : userAgent.includes('Linux')
+            ? 'Linux'
+            : 'Unknown OS';
+  return `${browser} on ${os}`;
+};
+
+const describeLastSeen = (lastSeenAt: string): string => {
+  const minutes = Math.floor((Date.now() - new Date(lastSeenAt).getTime()) / 60000);
+  if (minutes < 1) return 'Active now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+};
+
+/**
+ * "Active sessions" — `SessionStore.listForUser`/`revoke` (packages/session) were real, fully
+ * built, and already used internally by logout/password-reset, but had no user-triggered exposure
+ * anywhere: a compromised or simply forgotten device (a shared café computer, an old phone) had no
+ * way to be reviewed or cut off short of resetting the account password (which revokes ALL
+ * sessions, including the one you're using right now). This panel is the missing "revoke just this
+ * one" path. `sessionHash` is a one-way hash of the real Redis token (`auth.ts`'s own
+ * `hashSessionToken`) — the raw token itself is never sent to the browser after login, so this UI
+ * never has the ability to display or leak a live credential, only to name a row for revocation.
+ *
+ * Revoking is a real, irreversible action (that device is logged out immediately, no undo) with no
+ * shared confirm-dialog component anywhere in this codebase yet (`Button`'s own `danger` variant
+ * comment says as much: "anything irreversible needs a confirmation step as well — the button's
+ * styling is not the safeguard"). Rather than block on building a modal for one panel, this uses an
+ * armed two-click pattern local to each row: the first click arms that row ("Confirm revoke?"), a
+ * second click on the SAME row within the armed state actually revokes, and clicking elsewhere
+ * (or the row re-rendering after `load()`) disarms it — cheap, and still a genuine extra step
+ * before an irreversible action fires.
+ */
+const SessionsPanel = () => {
+  const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [armedId, setArmedId] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    trpc.auth.listSessions
+      .query()
+      .then((result) => setSessions(result))
+      .catch((err) => {
+        setError(err instanceof TRPCClientError ? err.message : 'Could not load your active sessions.');
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const revoke = async (sessionHash: string) => {
+    if (armedId !== sessionHash) {
+      setArmedId(sessionHash);
+      return;
+    }
+
+    setBusyId(sessionHash);
+    setArmedId(null);
+    setError(null);
+    try {
+      await trpc.auth.revokeSession.mutate({ sessionHash });
+      if (sessions?.find((s) => s.sessionHash === sessionHash)?.isCurrent) {
+        // Revoking the session this very tab is using — the server already cleared the cookie;
+        // the next navigation would hit AuthGuard's own redirect anyway, but reloading now avoids
+        // a stale, already-dead session sitting in this tab's memory in the meantime.
+        window.location.href = '/login';
+        return;
+      }
+      load();
+    } catch (err) {
+      setError(err instanceof TRPCClientError ? err.message : 'Could not revoke that session.');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  if (loading) {
+    return (
+      <Card className="mb-6">
+        <CardHeader title="Active sessions" />
+        <LoadingState />
+      </Card>
+    );
+  }
+
+  if (error && !sessions) {
+    return (
+      <Card className="mb-6">
+        <CardHeader title="Active sessions" />
+        <ErrorNotice>{error}</ErrorNotice>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="mb-6">
+      <CardHeader title="Active sessions" />
+      {error && (
+        <div className="px-5 pt-4">
+          <ErrorNotice>{error}</ErrorNotice>
+        </div>
+      )}
+
+      {sessions && sessions.length === 0 ? (
+        <EmptyState title="No active sessions" hint="You aren't signed in anywhere right now." />
+      ) : (
+        <Table>
+          <thead>
+            <tr>
+              <Th>Device</Th>
+              <Th>Last active</Th>
+              <Th align="right">Actions</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {sessions?.map((session) => (
+              <Tr key={session.sessionHash}>
+                <Td className="max-w-xs">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="truncate" title={session.userAgent}>
+                      {describeDevice(session.userAgent)}
+                    </span>
+                    {session.isCurrent && <Badge tone="positive">This device</Badge>}
+                  </div>
+                  <div className="text-xs text-content-subtle">{session.ip}</div>
+                </Td>
+                <Td>{describeLastSeen(session.lastSeenAt)}</Td>
+                <Td align="right">
+                  <Button
+                    type="button"
+                    variant="danger"
+                    disabled={busyId === session.sessionHash}
+                    aria-pressed={armedId === session.sessionHash}
+                    onClick={() => revoke(session.sessionHash)}
+                  >
+                    {armedId === session.sessionHash ? 'Confirm revoke?' : session.isCurrent ? 'Log out this device' : 'Revoke'}
+                  </Button>
+                  {armedId === session.sessionHash && (
+                    <span role="status" className="sr-only">
+                      Click Revoke again to confirm — this cannot be undone.
+                    </span>
+                  )}
+                </Td>
+              </Tr>
+            ))}
+          </tbody>
+        </Table>
+      )}
+    </Card>
+  );
 };
 
 /**
@@ -247,6 +434,120 @@ const TeamPanel = () => {
           ))}
         </tbody>
       </Table>
+    </Card>
+  );
+};
+
+/**
+ * A store's own detail, keyed by id — the real gap `stores.get`'s own doc comment implies ("the
+ * first endpoint proving object-level store scoping") but that no page anywhere ever called: the
+ * app only ever showed a bare store-name dropdown for filtering (`useStores`), never a place to
+ * see a single store's timezone, address, or status. Deliberately a plain expand-in-place using
+ * the row already on screen for the collapsed state, and a real `stores.get` fetch (not the
+ * already-loaded `list` row) once expanded — the endpoint's whole reason to exist is the
+ * object-level access check on a single id, which reusing the list response would skip entirely.
+ */
+const StoreDetailRow = ({ store }: { store: StoreSummary }) => {
+  const [expanded, setExpanded] = useState(false);
+  const [detail, setDetail] = useState<StoreDetail | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const toggle = () => {
+    if (expanded) {
+      setExpanded(false);
+      return;
+    }
+    setExpanded(true);
+    if (detail) return;
+    setLoading(true);
+    setError(null);
+    trpc.stores.get
+      .query({ id: store.id })
+      .then(setDetail)
+      .catch(() => setError('Could not load this store.'))
+      .finally(() => setLoading(false));
+  };
+
+  return (
+    <li className="px-5 py-3">
+      <button
+        type="button"
+        onClick={toggle}
+        className="flex w-full items-center justify-between gap-3 text-left"
+        aria-expanded={expanded}
+      >
+        <span className="flex items-center gap-2.5">
+          <span className="text-sm font-medium text-content">{store.name}</span>
+          <Badge tone={store.status === 'active' ? 'positive' : 'neutral'}>{store.status}</Badge>
+        </span>
+        <span className="text-xs text-content-subtle">{expanded ? 'Hide' : 'View'} detail</span>
+      </button>
+      {expanded && (
+        <div className="mt-3 border-t border-border pt-3">
+          {loading && <p className="text-sm text-content-subtle">Loading…</p>}
+          {error && <p className="text-sm text-danger">{error}</p>}
+          {detail && (
+            <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-content-subtle">Timezone</dt>
+                <dd className="font-mono text-content">{detail.timezone}</dd>
+              </div>
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-content-subtle">Address</dt>
+                <dd className="text-content">
+                  <Value value={detail.address} />
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-content-subtle">Created</dt>
+                <dd className="text-content-muted">{new Date(detail.createdAt).toLocaleDateString()}</dd>
+              </div>
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-content-subtle">Status</dt>
+                <dd className="text-content-muted">{detail.status === 'active' ? 'Active' : 'Closed'}</dd>
+              </div>
+            </dl>
+          )}
+        </div>
+      )}
+    </li>
+  );
+};
+
+/**
+ * Every store the caller can access, each expandable to its own detail via `stores.get` — see
+ * `StoreDetailRow`'s own comment for why this is a real fetch rather than reusing `list`'s rows.
+ * No store-scoping gate needed here beyond what `stores.list` itself already applies (object-level
+ * `memberships.store_ids`, matching the router's own doc comment on why this endpoint needs no
+ * separate Permission check).
+ */
+const StoresPanel = () => {
+  const [stores, setStores] = useState<StoreSummary[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    trpc.stores.list
+      .query()
+      .then(setStores)
+      .catch(() => setError('Could not load stores.'));
+  }, []);
+
+  return (
+    <Card className="mb-6">
+      <CardHeader title="Stores" />
+      {error && <ErrorNotice>{error}</ErrorNotice>}
+      {!error && stores === null && <LoadingState />}
+      {!error && stores !== null && stores.length === 0 && (
+        <EmptyState title="No stores available" hint="Every workspace gets a store when it's created." />
+      )}
+      {!error && stores !== null && stores.length > 0 && (
+        <ul className="divide-y divide-border">
+          {stores.map((store) => (
+            <StoreDetailRow key={store.id} store={store} />
+          ))}
+        </ul>
+      )}
     </Card>
   );
 };
@@ -790,6 +1091,8 @@ export default function SettingsPage() {
       <>
         <PageHeader title="Settings" />
         <TeamPanel />
+        <SessionsPanel />
+        <StoresPanel />
         <NotificationPreferencesPanel />
         <ThresholdTuningPanel />
         <ActionRatePanel />
@@ -805,6 +1108,8 @@ export default function SettingsPage() {
       <>
         <PageHeader title="Settings" />
         <TeamPanel />
+        <SessionsPanel />
+        <StoresPanel />
         <NotificationPreferencesPanel />
         <ThresholdTuningPanel />
         <ActionRatePanel />
@@ -815,8 +1120,10 @@ export default function SettingsPage() {
 
   return (
     <>
-      <PageHeader title="Settings" description="Your team, notifications, and how we check invoices." />
+      <PageHeader title="Settings" description="Your team, stores, notifications, and how we check invoices." />
       <TeamPanel />
+      <SessionsPanel />
+      <StoresPanel />
       <NotificationPreferencesPanel />
       <ThresholdTuningPanel />
       <ActionRatePanel />

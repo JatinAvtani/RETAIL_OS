@@ -1,4 +1,4 @@
--- the design's GoodsReceipt/GoodsReceiptLine — "what physically arrived."
+-- GoodsReceipt/GoodsReceiptLine — "what physically arrived."
 CREATE TABLE IF NOT EXISTS "goods_receipts" (
 	"id" uuid PRIMARY KEY NOT NULL,
 	"organization_id" uuid NOT NULL,
@@ -107,9 +107,9 @@ EXCEPTION
 END $$;
 --> statement-breakpoint
 
--- earlier work's own deferred column (added back in earlier work, when the goods_receipt_lines table this FK
+-- A deferred column (added back when the goods_receipt_lines table this FK
 -- references didn't exist yet) — closed now, matching the same "add the column now, wire the real
--- FK once its target epic ships" precedent already used for unit_conversions.product_id.
+-- FK once its target table ships" precedent already used for unit_conversions.product_id.
 DO $$ BEGIN
  ALTER TABLE "lots" ADD CONSTRAINT "lots_goods_receipt_line_id_goods_receipt_lines_id_fk" FOREIGN KEY ("goods_receipt_line_id") REFERENCES "public"."goods_receipt_lines"("id") ON DELETE no action ON UPDATE no action;
 EXCEPTION

@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
-import { resolveDaypart, resolveLocalDate, resolveLocalDateRange, resolveLocalDaypart, resolveLocalHour, resolveUtcCronForLocalTime } from './store-time.js';
+import {
+  resolveDaypart,
+  resolveLocalDate,
+  resolveLocalDateRange,
+  resolveLocalDaypart,
+  resolveLocalDayOfWeek,
+  resolveLocalHour,
+  resolveUtcCronForLocalTime,
+  isStoreClosedOn,
+} from './store-time.js';
 
 describe('resolveLocalDate', () => {
   it('resolves the correct LOCAL date even when the UTC date differs', () => {
@@ -192,5 +201,75 @@ describe('resolveUtcCronForLocalTime', () => {
         }
       )
     );
+  });
+});
+
+describe('resolveLocalDayOfWeek', () => {
+  it('resolves a real known Sunday correctly', () => {
+    // Independently confirmed via Date.prototype.toLocaleDateString before writing this
+    // expectation: 2026-01-04 is a real Sunday.
+    expect(resolveLocalDayOfWeek(new Date('2026-01-04T12:00:00Z'), 'UTC')).toBe('sun');
+  });
+
+  it('resolves the LOCAL weekday, not the UTC one, across a timezone boundary', () => {
+    // Independently confirmed: 2026-01-05T02:00:00Z is Monday in UTC but still Sunday 21:00 the
+    // prior evening in America/New_York (UTC-5 in January) -- a real day-boundary crossing, the
+    // same class of case resolveLocalDate's own tests already cover for calendar dates.
+    const instant = new Date('2026-01-05T02:00:00Z');
+    expect(resolveLocalDayOfWeek(instant, 'UTC')).toBe('mon');
+    expect(resolveLocalDayOfWeek(instant, 'America/New_York')).toBe('sun');
+  });
+
+  it('is a real property: every UTC instant resolves to one of the seven real weekday codes', () => {
+    const validCodes = new Set(['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']);
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 0, max: 1_800_000_000_000 }),
+        fc.constantFrom('UTC', 'America/New_York', 'Asia/Tokyo', 'Asia/Kolkata', 'Pacific/Chatham'),
+        (ms, timezone) => {
+          expect(validCodes.has(resolveLocalDayOfWeek(new Date(ms), timezone))).toBe(true);
+        }
+      )
+    );
+  });
+});
+
+describe('isStoreClosedOn', () => {
+  const sundayInstant = new Date('2026-01-04T12:00:00Z'); // a real, independently-confirmed Sunday
+  const mondayInstant = new Date('2026-01-05T12:00:00Z'); // a real, independently-confirmed Monday
+
+  it('a store with NO configured operatingHours is treated as open every day — absence of configuration is not evidence of closure', () => {
+    expect(isStoreClosedOn(sundayInstant, 'UTC', null)).toBe(false);
+    expect(isStoreClosedOn(sundayInstant, 'UTC', undefined)).toBe(false);
+    expect(isStoreClosedOn(sundayInstant, 'UTC', [])).toBe(false);
+  });
+
+  it('a store whose schedule does not list Sunday is closed on a real Sunday, open on a real Monday', () => {
+    const sixDayWeek = [
+      { day: 'mon' as const, open: '09:00', close: '18:00' },
+      { day: 'tue' as const, open: '09:00', close: '18:00' },
+      { day: 'wed' as const, open: '09:00', close: '18:00' },
+      { day: 'thu' as const, open: '09:00', close: '18:00' },
+      { day: 'fri' as const, open: '09:00', close: '18:00' },
+      { day: 'sat' as const, open: '09:00', close: '18:00' },
+    ];
+    expect(isStoreClosedOn(sundayInstant, 'UTC', sixDayWeek)).toBe(true);
+    expect(isStoreClosedOn(mondayInstant, 'UTC', sixDayWeek)).toBe(false);
+  });
+
+  it('respects the STORE-LOCAL day, not the UTC day, for the closure check', () => {
+    // 2026-01-05T02:00:00Z is UTC Monday but LOCAL Sunday in America/New_York (same case as
+    // resolveLocalDayOfWeek's own boundary-crossing test above).
+    const instant = new Date('2026-01-05T02:00:00Z');
+    const sixDayWeek = [
+      { day: 'mon' as const, open: '09:00', close: '18:00' },
+      { day: 'tue' as const, open: '09:00', close: '18:00' },
+      { day: 'wed' as const, open: '09:00', close: '18:00' },
+      { day: 'thu' as const, open: '09:00', close: '18:00' },
+      { day: 'fri' as const, open: '09:00', close: '18:00' },
+      { day: 'sat' as const, open: '09:00', close: '18:00' },
+    ];
+    expect(isStoreClosedOn(instant, 'America/New_York', sixDayWeek)).toBe(true);
+    expect(isStoreClosedOn(instant, 'UTC', sixDayWeek)).toBe(false);
   });
 });

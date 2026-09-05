@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { TRPCClientError } from '@trpc/client';
 import { trpc } from '@/lib/trpc';
+import { humanizeEnum } from '@/lib/format';
 import {
   Badge,
   Button,
@@ -91,7 +92,7 @@ function LotsContent() {
         quantity: wasteQuantity,
         reasonCode: wasteReason,
       });
-      setWasteResult(`Logged ${wasteQuantity} from this lot as ${wasteReason.toLowerCase().replace(/_/g, ' ')}.`);
+      setWasteResult(`Logged ${wasteQuantity} from this lot as ${humanizeEnum(wasteReason)}.`);
       setWasteLotId(null);
       setWasteQuantity('');
       reload();
@@ -176,7 +177,7 @@ function LotsContent() {
                       </Td>
                       <Td>
                         <Badge tone={STATUS_TONES[lot.status] ?? 'neutral'}>
-                          {lot.status.toLowerCase().replace(/_/g, ' ')}
+                          {humanizeEnum(lot.status)}
                         </Badge>
                       </Td>
                       <Td variant="numeric">
@@ -250,7 +251,7 @@ function LotsContent() {
                               >
                                 {WASTE_REASONS.map((reason) => (
                                   <option key={reason} value={reason}>
-                                    {reason.toLowerCase().replace(/_/g, ' ')}
+                                    {humanizeEnum(reason)}
                                   </option>
                                 ))}
                               </Select>

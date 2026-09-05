@@ -14,7 +14,7 @@ const REAL_PDF_BYTES = Buffer.from('%PDF-1.4\n%%EOF');
 // as 'OTHER' with no live Gemini call, so this suite's assertions don't depend on model behavior.
 delete process.env.GEMINI_API_KEY;
 
-describe('documents — createUploadBatch/getBatchProgress (012-02)', () => {
+describe('documents — createUploadBatch/getBatchProgress', () => {
   let app: FastifyInstance;
   const { db } = createDb(process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/retailos');
   const redis = createRedisClient(process.env.REDIS_URL ?? 'redis://localhost:6379');

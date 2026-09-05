@@ -4,9 +4,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
 import { useStores } from '@/lib/use-stores';
+import { humanizeEnum } from '@/lib/format';
 import { Badge, Button, Card, EmptyState, ErrorNotice, Input, PageHeader, SkeletonRows, Select, StatTile, Table, Th, Td, Tr, Value } from '@/components/ui';
 
 type Telemetry = Awaited<ReturnType<typeof trpc.documents.accuracyTelemetry.query>>;
+type StuckDocument = Awaited<ReturnType<typeof trpc.documents.listApprovedNotPosted.query>>[number];
 
 type DocumentRow = Awaited<ReturnType<typeof trpc.documents.search.query>>[number];
 
@@ -135,10 +137,35 @@ export default function DocumentsPage() {
   const [searchInput, setSearchInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [telemetry, setTelemetry] = useState<Telemetry | null>(null);
+  const [stuckDocuments, setStuckDocuments] = useState<StuckDocument[] | null>(null);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
 
   useEffect(() => {
     trpc.documents.accuracyTelemetry.query({ days: 30 }).then(setTelemetry).catch(() => undefined);
   }, []);
+
+  // Org-wide, not store-scoped — a document approved but never posted (a crash or failure between
+  // the approve commit and PostingService's own transaction) is a real recovery case, and stays
+  // stranded until someone can see it and retry. Silent before this: nothing anywhere fetched
+  // `documents.listApprovedNotPosted`, even though `retryPosting` already existed to fix it.
+  const loadStuck = useCallback(() => {
+    trpc.documents.listApprovedNotPosted.query().then(setStuckDocuments).catch(() => setStuckDocuments(null));
+  }, []);
+
+  useEffect(loadStuck, [loadStuck]);
+
+  const retryPosting = async (documentId: string) => {
+    setRetryingId(documentId);
+    try {
+      await trpc.documents.retryPosting.mutate({ documentId });
+      loadStuck();
+      load();
+    } catch {
+      // The row stays in the list — a failed retry is visible by the document simply still being there.
+    } finally {
+      setRetryingId(null);
+    }
+  };
 
   // Debounced — a search-as-you-type box firing a real request on every keystroke would hammer the
   // server; 300ms is long enough to let a user finish a word, short enough to still feel live.
@@ -277,6 +304,41 @@ export default function DocumentsPage() {
 
       {telemetry && <TelemetryPanel telemetry={telemetry} />}
 
+      {stuckDocuments && stuckDocuments.length > 0 && (
+        <Card className="mb-6 border-l-[3px] border-l-warning">
+          <div className="flex items-center justify-between border-b border-border px-5 py-3">
+            <h2 className="text-base font-semibold text-content">Stuck in posting</h2>
+            <Badge tone="warning">{stuckDocuments.length}</Badge>
+          </div>
+          <p className="px-5 pt-3 text-sm text-content-muted">
+            These were approved but a crash or failure stopped them short of actually posting to
+            stock and the ledger. Retrying runs the exact same posting path a normal approval uses.
+          </p>
+          <ul className="divide-y divide-border">
+            {stuckDocuments.map((doc) => (
+              <li key={doc.id} className="flex items-center justify-between gap-3 px-5 py-3">
+                <div className="min-w-0">
+                  <Link href={`/documents/${doc.id}`} className="text-sm font-medium text-accent hover:underline">
+                    {humanizeEnum(doc.type)}
+                  </Link>
+                  <p className="mt-0.5 text-xs text-content-subtle">
+                    Approved {new Date(doc.updatedAt).toLocaleString()}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={retryingId === doc.id}
+                  onClick={() => void retryPosting(doc.id)}
+                >
+                  {retryingId === doc.id ? 'Retrying…' : 'Retry posting'}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
       {error && <ErrorNotice>{error}</ErrorNotice>}
 
       {!storesLoading && stores.length === 0 && (
@@ -360,7 +422,7 @@ export default function DocumentsPage() {
               <option value="">All types</option>
               {DOCUMENT_TYPES.map((type) => (
                 <option key={type} value={type}>
-                  {type}
+                  {humanizeEnum(type)}
                 </option>
               ))}
             </Select>
@@ -411,7 +473,7 @@ export default function DocumentsPage() {
               {documents.map((doc) => (
                 <Tr key={doc.id}>
                   <Td>{new Date(doc.createdAt).toLocaleString()}</Td>
-                  <Td className="text-content-muted">{doc.type}</Td>
+                  <Td className="text-content-muted">{humanizeEnum(doc.type)}</Td>
                   <Td>
                     <Value
                       value={doc.classificationConfidence !== null ? `${(Number(doc.classificationConfidence) * 100).toFixed(0)}%` : null}

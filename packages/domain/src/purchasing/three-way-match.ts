@@ -1,18 +1,17 @@
 import { Decimal } from 'decimal.js';
 
 /**
- * "the financial control that catches real money."
+ * Three-way match is the financial control that catches real money.
  * A pure function (I1 — no I/O, no business number computed anywhere but here) classifying ONE
  * invoice line's variance against what was ordered (PO) and what arrived (receipt). The caller
  * is responsible for finding the candidate PO/receipt line — this function
  * only classifies, given already-resolved inputs, matching `validateExtraction`'s own separation
  * of "find the comparison data" (repository) from "decide what it means" (domain).
  *
- * Tolerances default to the plan's own literal example ("e.g. ≤2% or ≤$5 auto-accept") — a real,
- * cited default, not an arbitrary number invented for this task. earlier work (configurable match
- * tolerances) is the real place a per-org override gets built; this function already accepts a
- * `tolerances` parameter so that task only needs to plumb a config value through, not touch this
- * classification logic.
+ * Tolerances default to a real, deliberate baseline ("e.g. <=2% or <=$5 auto-accept"), not an
+ * arbitrary number invented for this task. Configurable per-org match tolerances can build on top
+ * of this: this function already accepts a `tolerances` parameter so that work only needs to plumb
+ * a config value through, not touch this classification logic.
  */
 
 export interface MatchTolerances {
@@ -55,10 +54,10 @@ export interface LineMatchResult {
 }
 
 /**
- * Classifies one invoice line per the plan's variance table. Order of checks matters: an unordered
+ * Classifies one invoice line per the variance table above. Order of checks matters: an unordered
  * item (no PO/receipt match resolved at all) is checked before price/quantity comparisons, since
- * there is nothing to compare against. `INVOICED_NOT_RECEIVED` — the plan's own "possible
- * fraud/error" framing — fires when a PO line was matched (so the item genuinely was ordered) but
+ * there is nothing to compare against. `INVOICED_NOT_RECEIVED` — flagging a "possible
+ * fraud/error" — fires when a PO line was matched (so the item genuinely was ordered) but
  * no receipt exists for it; `UNORDERED_ITEM` is the case with no PO match either.
  *
  * Unparseable invoice values (I7: never coerced to 0 or skipped silently) produce their own
@@ -166,4 +165,65 @@ export const classifyLineMatch = (
 export const highestSeverity = (severities: VarianceSeverity[]): VarianceSeverity => {
   const order: VarianceSeverity[] = ['NONE', 'LOW', 'MEDIUM', 'HIGH'];
   return severities.reduce<VarianceSeverity>((worst, current) => (order.indexOf(current) > order.indexOf(worst) ? current : worst), 'NONE');
+};
+
+/** The already-classified per-line facts `computeLineDollarImpact` needs — the exact shape `classifyLineMatch`'s own result carries, plus the raw invoiced quantity/price it was computed from (I2: this never re-classifies, only prices what was already decided). */
+export interface LineForDollarImpact {
+  varianceType: VarianceType;
+  priceVariance: Decimal | null;
+  quantityVariance: Decimal | null;
+  invoiceQuantity: Decimal | null;
+  invoiceUnitPrice: Decimal | null;
+}
+
+/**
+ * The real dollar exposure of one already-classified invoice line's variance — the missing figure
+ * behind the variance queue's "estimated impact" column, and behind a match's own total exposure.
+ * Never re-derives price/quantity variance itself (`classifyLineMatch` already did that, I2); this
+ * only prices the ALREADY-decided classification, per variance type:
+ *
+ * - `PRICE_VARIANCE`: `priceVariance × invoiceQuantity` — the real total overcharge/undercharge
+ *   across everything actually invoiced, not just the per-unit difference.
+ * - `QUANTITY_VARIANCE`: `quantityVariance × invoiceUnitPrice` — the dollar value of the extra/
+ *   short quantity, priced at what was actually billed for it.
+ * - `UNORDERED_ITEM` / `INVOICED_NOT_RECEIVED`: `invoiceQuantity × invoiceUnitPrice` — the ENTIRE
+ *   invoiced line is the exposure here, not a partial variance: nothing was ordered to compare
+ *   against (unordered) or nothing arrived to offset against (invoiced-not-received), so there is
+ *   no smaller "difference" to price — nothing this codebase would call CLEAN.
+ * - `CLEAN`: no exposure.
+ *
+ * Signed, not absolute (I7 discipline extended, not weakened): a negative result is real money
+ * owed back to the operator (undercharged/over-received), a positive result is real money at risk
+ * (overcharged/under-received) — collapsing the sign would make a credit and a loss look identical
+ * on the queue. Returns `null` only when the inputs the formula needs are themselves null (an
+ * unparseable line, matching `classifyLineMatch`'s own UNORDERED_ITEM-on-unparseable-line case) —
+ * never a fabricated `0` standing in for a genuinely unknown exposure.
+ */
+export const computeLineDollarImpact = (line: LineForDollarImpact): Decimal | null => {
+  switch (line.varianceType) {
+    case 'CLEAN':
+      return new Decimal(0);
+    case 'PRICE_VARIANCE':
+      if (line.priceVariance === null || line.invoiceQuantity === null) return null;
+      return line.priceVariance.times(line.invoiceQuantity);
+    case 'QUANTITY_VARIANCE':
+      if (line.quantityVariance === null || line.invoiceUnitPrice === null) return null;
+      return line.quantityVariance.times(line.invoiceUnitPrice);
+    case 'UNORDERED_ITEM':
+    case 'INVOICED_NOT_RECEIVED':
+      if (line.invoiceQuantity === null || line.invoiceUnitPrice === null) return null;
+      return line.invoiceQuantity.times(line.invoiceUnitPrice);
+  }
+};
+
+/**
+ * A match's total dollar exposure — the sum of every line's real impact. `null` only if EVERY line
+ * is unknown (I7); a real total from the lines that DO have a known impact is never discarded just
+ * because one line's inputs were unparseable, matching `aggregateNotificationContent`'s own
+ * established "a partial real sum beats a fabricated unknown" rule.
+ */
+export const computeMatchDollarImpact = (lines: LineForDollarImpact[]): Decimal | null => {
+  const known = lines.map(computeLineDollarImpact).filter((impact): impact is Decimal => impact !== null);
+  if (known.length === 0) return lines.length === 0 ? new Decimal(0) : null;
+  return known.reduce((sum, impact) => sum.plus(impact), new Decimal(0));
 };

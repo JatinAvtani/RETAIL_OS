@@ -34,6 +34,8 @@ import {
   InvoiceMatchRepository,
   PurchaseOrderRepository,
   SupplierPerformanceEventRepository,
+  notifications,
+  notificationRules,
 } from '@retailos/db';
 import { executeMetric } from '../catalog/index.js';
 import './catalog-entries.js';
@@ -78,6 +80,11 @@ describe('registered purchasing metrics', () => {
       await adminDb.delete(products).where(eq(products.organizationId, orgId));
       await adminDb.delete(categories).where(eq(categories.organizationId, orgId));
       await adminDb.delete(suppliers).where(eq(suppliers.organizationId, orgId));
+      // `notifications.store_id` references `stores`, so these must go BEFORE the store rows.
+      // This org grew notifications only once the investigation trigger began sweeping more rule
+      // types; the fixture itself never creates one, which is why the FK held until then.
+      await adminDb.delete(notifications).where(eq(notifications.organizationId, orgId));
+      await adminDb.delete(notificationRules).where(eq(notificationRules.organizationId, orgId));
       await adminDb.delete(stores).where(eq(stores.organizationId, orgId));
       await adminDb.delete(organizations).where(eq(organizations.id, orgId));
     }

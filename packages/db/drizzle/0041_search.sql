@@ -1,10 +1,10 @@
--- the design Lexical search infrastructure only (FTS + trigram) — the semantic/vector
--- half is earlier work's separate scope. pg_trgm/vector extensions are already enabled
+-- Lexical search infrastructure only (FTS + trigram) — the semantic/vector
+-- half is a separate scope. pg_trgm/vector extensions are already enabled
 -- (docker/postgres/init/01-extensions.sql); this migration is the first thing to actually USE them.
 --
 -- products/suppliers get a real GENERATED ALWAYS AS STORED tsvector column — Postgres keeps it in
 -- sync on every write automatically, so there is no application-level sync-drift risk (the exact
--- property the design calls out as the reason for choosing Postgres-native search at all).
+-- property that makes Postgres-native search the right choice here).
 -- purchase_orders is deliberately NOT given a generated tsvector — its only real free-text field is
 -- po_number, a single short identifier better served by trigram similarity + exact match than FTS
 -- tokenization.

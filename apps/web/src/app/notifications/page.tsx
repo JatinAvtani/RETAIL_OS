@@ -3,8 +3,8 @@
 import { useEffect, useState } from 'react';
 import { trpc } from '@/lib/trpc';
 import { useStores } from '@/lib/use-stores';
-import { Badge, Card, EmptyState, ErrorNotice, LoadingState, PageHeader, Select, type BadgeTone } from '@/components/ui';
-import { formatMoney } from '@/lib/format';
+import { Badge, Card, EmptyState, ErrorNotice, LoadingState, PageHeader, Select, StatTile, StatTileGrid, type BadgeTone } from '@/components/ui';
+import { formatMoney, humanizeEnum } from '@/lib/format';
 
 type Notification = Awaited<ReturnType<typeof trpc.notifications.list.query>>[number];
 
@@ -34,6 +34,7 @@ export default function NotificationsPage() {
   const [notifications, setNotifications] = useState<Notification[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [armedResolveId, setArmedResolveId] = useState<string | null>(null);
 
   const load = () => {
     if (!selectedStoreId) return;
@@ -64,6 +65,25 @@ export default function NotificationsPage() {
       .catch(() => {});
   };
 
+  /**
+   * `resolve` is a real, irreversible-feeling action — closing an alert a human decided is done
+   * with, distinct from `markActed`'s "I clicked through" signal. Same armed-two-click pattern
+   * `settings/page.tsx`'s session revoke already established for this codebase's one other
+   * no-shared-confirm-dialog irreversible action: first click arms the row, a second click on the
+   * SAME row actually resolves.
+   */
+  const resolve = (id: string) => {
+    if (armedResolveId !== id) {
+      setArmedResolveId(id);
+      return;
+    }
+    setArmedResolveId(null);
+    trpc.notifications.resolve
+      .mutate({ id })
+      .then(() => setNotifications((list) => list?.filter((n) => n.id !== id) ?? null))
+      .catch(() => {});
+  };
+
   const sorted = notifications
     ? [...notifications].sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 99) - (SEVERITY_ORDER[b.severity] ?? 99))
     : null;
@@ -88,6 +108,36 @@ export default function NotificationsPage() {
 
       {error && <ErrorNotice>{error}</ErrorNotice>}
 
+      {!storesLoading && !loading && !error && sorted !== null && sorted.length > 0 && (
+        <StatTileGrid className="mb-6">
+          <StatTile
+            label="Unread"
+            value={String(sorted.filter((n) => !n.readAt).length)}
+            unknownReason="No notifications recorded yet"
+          />
+          <StatTile
+            label="Critical / high"
+            value={String(sorted.filter((n) => n.severity === 'CRITICAL' || n.severity === 'HIGH').length)}
+            unknownReason="No notifications recorded yet"
+          />
+          <StatTile
+            label="Not yet acted on"
+            value={String(sorted.filter((n) => !n.actedAt).length)}
+            unknownReason="No notifications recorded yet"
+          />
+          <StatTile
+            label="Total at risk"
+            value={formatMoney(
+              sorted.reduce((sum, n) => sum + (n.dollarImpact !== null ? Number(n.dollarImpact) : 0), 0),
+              undefined,
+              { precision: 'currency' }
+            )}
+            hint="Sum of every alert's stated dollar impact"
+            unknownReason="No notifications carry a dollar impact yet"
+          />
+        </StatTileGrid>
+      )}
+
       <Card>
         {(storesLoading || loading) && <LoadingState label="Loading notifications…" />}
 
@@ -110,7 +160,9 @@ export default function NotificationsPage() {
                   onClick={() => !notification.readAt && markRead(notification.id)}
                   className="flex min-w-0 flex-1 items-start gap-3 text-left"
                 >
-                  <Badge tone={SEVERITY_TONE[notification.severity] ?? 'neutral'}>{notification.severity}</Badge>
+                  <Badge tone={SEVERITY_TONE[notification.severity] ?? 'neutral'}>
+                    {humanizeEnum(notification.severity)}
+                  </Badge>
                   <span className="min-w-0 flex-1">
                     <span className="block text-sm font-semibold text-content">{notification.title}</span>
                     <span className="mt-0.5 block text-sm text-content-muted">{notification.body}</span>
@@ -120,17 +172,32 @@ export default function NotificationsPage() {
                     </span>
                   </span>
                 </button>
-                {!notification.actedAt ? (
+                <div className="flex shrink-0 items-center gap-2">
+                  {!notification.actedAt ? (
+                    <button
+                      type="button"
+                      onClick={() => markActed(notification.id)}
+                      className="rounded-control border border-border-strong px-3 py-1.5 text-xs font-medium text-content-muted transition-colors hover:bg-surface-sunken hover:text-content"
+                    >
+                      Mark acted
+                    </button>
+                  ) : (
+                    <span className="text-xs text-content-subtle">Acted</span>
+                  )}
                   <button
                     type="button"
-                    onClick={() => markActed(notification.id)}
-                    className="shrink-0 rounded-control border border-border-strong px-3 py-1.5 text-xs font-medium text-content-muted transition-colors hover:bg-surface-sunken hover:text-content"
+                    onClick={() => resolve(notification.id)}
+                    aria-pressed={armedResolveId === notification.id}
+                    className="rounded-control border border-border-strong px-3 py-1.5 text-xs font-medium text-content-muted transition-colors hover:border-danger/40 hover:bg-danger-soft hover:text-danger"
                   >
-                    Mark acted
+                    {armedResolveId === notification.id ? 'Confirm resolve?' : 'Resolve'}
                   </button>
-                ) : (
-                  <span className="shrink-0 text-xs text-content-subtle">Acted</span>
-                )}
+                  {armedResolveId === notification.id && (
+                    <span role="status" className="sr-only">
+                      Click Resolve again to confirm — this cannot be undone.
+                    </span>
+                  )}
+                </div>
               </li>
             ))}
           </ul>

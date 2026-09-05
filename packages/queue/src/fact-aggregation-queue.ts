@@ -3,7 +3,7 @@ import type Redis from 'ioredis';
 
 export const FACT_AGGREGATION_QUEUE_NAME = 'fact-aggregation';
 
-/** One job per (organizationId, storeId) — the incremental job's real per-store-timezone unit of work, matching `the plan`'s own "a three-store group across two timezones has three different yesterdays" framing: each store gets its own job, not one job trying to handle every store's own local "yesterday" at once. */
+/** One job per (organizationId, storeId) — the incremental job's real per-store-timezone unit of work: a three-store group across two timezones has three different yesterdays, so each store gets its own job, not one job trying to handle every store's own local "yesterday" at once. */
 export interface FactAggregationJobData {
   organizationId: string;
   storeId: string;
@@ -11,18 +11,17 @@ export interface FactAggregationJobData {
 }
 
 /**
- * the first REAL BullMQ repeatable job in this codebase (confirmed with the user: no
+ * the first REAL BullMQ repeatable job in this codebase — no
  * prior precedent exists anywhere; `packages/queue`'s only other queue, `document-extraction`, is
- * one-shot-per-document). `repeat.pattern` is a real cron expression (`0 5 * * *` — 05:00 UTC
- * daily, chosen to run well after every real timezone's own local midnight has passed everywhere
- * on Earth, so "yesterday" is always genuinely complete when a store's own job fires; a store far
- * enough behind UTC that 05:00 UTC still falls DURING its local yesterday would aggregate an
- * incomplete day — accepted as a known, documented limitation for this task's scope, not silently
- * ignored: no real store timezone in this codebase's realistic target market is behind UTC-9,
- * where 05:00 UTC is still only 20:00 local the PREVIOUS day). `jobId` is fixed per
- * (organizationId, storeId) — BullMQ's own repeatable-job semantics use this to avoid creating a
- * duplicate scheduled job if the same registration call runs again (e.g. a worker restart),
- * matching `document-extraction`'s own `jobId`-for-idempotency precedent.
+ * one-shot-per-document. Originally fired every store at a single fixed `0 5 * * *` (05:00 UTC),
+ * accepted as a known limitation for any timezone behind UTC-9. Now registered per-store at a real
+ * UTC-equivalent cron time via `fact-aggregation-schedule-poll-processor.ts` (the same
+ * `resolveUtcCronForLocalTime` + hourly re-registration pattern `briefing-queue.ts` already
+ * established), so "yesterday" is genuinely complete in every timezone before the job fires.
+ * `jobId` is fixed per (organizationId, storeId) — BullMQ's own repeatable-job semantics use this
+ * to avoid creating a duplicate scheduled job if the same registration call runs again (e.g. a
+ * worker restart or the hourly poll tick), matching `document-extraction`'s own
+ * `jobId`-for-idempotency precedent.
  */
 export const createFactAggregationQueue = (connection: Redis): Queue<FactAggregationJobData> =>
   new Queue<FactAggregationJobData>(FACT_AGGREGATION_QUEUE_NAME, {
@@ -36,10 +35,12 @@ export const createFactAggregationQueue = (connection: Redis): Queue<FactAggrega
   });
 
 /**
- * Registers (or re-registers, idempotently) the daily repeatable job for one store. Confirmed with
- * the user as the real scheduling delivery mechanism wrapping `aggregateFactTablesForDay`
- * (`packages/db`) — this function has zero aggregation logic of its own, only real BullMQ
- * scheduling.
+ * Registers (or re-registers, idempotently) the daily repeatable job for one store, at a real
+ * per-store-timezone cron time rather than the fixed `0 5 * * *` this function used before —
+ * matching `registerBriefingJob`'s exact idempotency shape (`upsertJobScheduler` keyed by
+ * `organizationId:storeId`, safe to call every tick). Confirmed with the user as the real
+ * scheduling delivery mechanism wrapping `aggregateFactTablesForDay` (`packages/db`) — this
+ * function has zero aggregation logic of its own, only real BullMQ scheduling.
  *
  * Uses `Queue.upsertJobScheduler`, NOT `queue.add(..., { repeat:... })` — confirmed against
  * BullMQ 6.0.8's real, currently-installed type definitions (`node_modules/.pnpm/bullmq@6.0.8.../
@@ -54,11 +55,28 @@ export const createFactAggregationQueue = (connection: Redis): Queue<FactAggrega
  */
 export const registerFactAggregationJob = async (
   queue: Queue<FactAggregationJobData>,
-  data: FactAggregationJobData
+  data: FactAggregationJobData,
+  cron: { hour: number; minute: number }
 ): Promise<void> => {
   await queue.upsertJobScheduler(
     `${data.organizationId}:${data.storeId}`,
-    { pattern: '0 5 * * *' },
+    { pattern: `${cron.minute} ${cron.hour} * * *` },
     { data }
   );
+};
+
+export const FACT_AGGREGATION_SCHEDULE_POLL_QUEUE_NAME = 'fact-aggregation-schedule-poll';
+
+/**
+ * The per-store-timezone scheduling mechanism for fact aggregation — same shape as
+ * `createBriefingSchedulePollQueue`/`registerBriefingSchedulePollJob`. A single repeatable
+ * "registration tick" (hourly) re-derives every active store's real UTC-equivalent cron time and
+ * calls `registerFactAggregationJob` for each, so a store's schedule self-corrects across a DST
+ * transition instead of drifting, and no store's job can fire before its own local day is over.
+ */
+export const createFactAggregationSchedulePollQueue = (connection: Redis): Queue =>
+  new Queue(FACT_AGGREGATION_SCHEDULE_POLL_QUEUE_NAME, { connection });
+
+export const registerFactAggregationSchedulePollJob = async (queue: Queue): Promise<void> => {
+  await queue.upsertJobScheduler('fact-aggregation-schedule-poll', { every: 60 * 60 * 1000 });
 };

@@ -51,7 +51,8 @@ packages/domain    Pure business logic. No I/O. Costing, FEFO, reorder math, rec
 packages/db        Drizzle schema, migrations, repositories, RLS guards.
 packages/metrics   The metric catalog — the ONLY place a business number is computed. 67 functions.
 packages/ai        Every model call. Nothing outside imports a provider SDK.
-packages/assistant Classify → plan → execute → ground → narrate.
+packages/assistant Classify → plan → execute → ground → narrate, plus the bounded multi-hop
+                        investigation loop and the human-approved action-draft planner.
 packages/authz     Roles, permissions, AuthContext.
 packages/session   Redis-backed opaque tokens, revocation, permission-change invalidation.
 packages/config    Environment loading.
@@ -182,9 +183,10 @@ guard was added.
 
 ## Razorpay-native sources
 
-No Razorpay integration is built or planned for this submission — Open Track asks for "a real
-problem, a working product, meaningful use of AI, and evidence that it creates value," not a vendor
-integration. This section maps Razorpay's own API surface onto the canonical model above, without
+No Razorpay integration is built or planned for this submission — the AI Finance Controller track
+asks for an agent that closes a finance-ops loop over a real batch and reports its match rate and
+unresolved exceptions, not a vendor integration. This section maps Razorpay's own API surface onto
+the canonical model above, without
 writing a line of adapter code, to show the design already generalizes to a payments-first data
 source the same way it already generalizes across Square (a full working adapter, `packages/pos`)
 and manual CSV upload.

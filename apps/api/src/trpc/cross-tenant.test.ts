@@ -15,6 +15,7 @@ import {
   invitations,
   invoiceMatchLines,
   invoiceMatches,
+  investigations,
   supplierPerformanceEvents,
   lots,
   memberships,
@@ -46,6 +47,7 @@ import {
   purchaseOrders,
   storageLocations,
   stores,
+  supplierPrices,
   supplierProducts,
   suppliers,
   unmappedSales,
@@ -65,13 +67,13 @@ import type { FastifyInstance } from 'fastify';
  * never 200. Two enforcement mechanisms in one file:
  *
  * 1. A completeness check: every `query`/`mutation` procedure actually registered on `appRouter`
- *    that takes an `id`-shaped input MUST appear in `resourceScopedProcedures` — this is what
- *    makes "every future endpoint inherits it automatically" true rather than aspirational. Add a
- *    new resource-fetching endpoint without registering it here, and this suite fails loudly on
- *    the next run, not silently.
+ * that takes an `id`-shaped input MUST appear in `resourceScopedProcedures` — this is what
+ * makes "every future endpoint inherits it automatically" true rather than aspirational. Add a
+ * new resource-fetching endpoint without registering it here, and this suite fails loudly on
+ * the next run, not silently.
  * 2. The actual attack, run once per registered entry: seed a real resource in tenant A, log in as
- *    a real tenant B user, call the real endpoint over real HTTP with tenant B's session against
- *    tenant A's resource id, assert the response is never a 200.
+ * a real tenant B user, call the real endpoint over real HTTP with tenant B's session against
+ * tenant A's resource id, assert the response is never a 200.
  */
 describe('cross-tenant suite (merge gate)', () => {
   let app: FastifyInstance;
@@ -118,7 +120,7 @@ describe('cross-tenant suite (merge gate)', () => {
     // position of every earlier seeded-resource cleanup, none of which reference users), which
     // genuinely failed with a real FK violation and — because afterEach itself threw — silently
     // corrupted every subsequent test's isolation in the same run, cascading into failures on
-    // entries this session never touched (stores.get, products.get, ...).
+    // entries never touched by this change (stores.get, products.get, ...).
     for (const orgId of createdOrgIds) {
       const orgCounts = await db.select({ id: stockCounts.id }).from(stockCounts).where(eq(stockCounts.organizationId, orgId));
       for (const c of orgCounts) {
@@ -240,6 +242,12 @@ describe('cross-tenant suite (merge gate)', () => {
       // deleted there) — this delete only needs to handle the remaining lots rows.
       await db.delete(lots).where(eq(lots.organizationId, orgId));
       await db.delete(outboxEvents).where(eq(outboxEvents.organizationId, orgId));
+      // financeController.getInvestigation/investigate/approveDraftAction/
+      // rejectDraftAction's registry entries now seed real investigations rows — references BOTH
+      // stores AND notifications (source_notification_id), so must be gone before EITHER the
+      // notifications delete on the next line or the stores delete further down in this same loop.
+      // The same recurring FK-teardown-order class this shared fixture keeps hitting.
+      await db.delete(investigations).where(eq(investigations.organizationId, orgId));
       // notifications.ruleId references notification_rules — child before parent, the same
       // recurring FK-teardown-order class this shared fixture keeps hitting. notification_deliveries
       // (which references BOTH notifications and users) is already cleaned up in the earlier
@@ -253,6 +261,16 @@ describe('cross-tenant suite (merge gate)', () => {
       }
       await db.delete(recipes).where(eq(recipes.organizationId, orgId));
 
+      // financeController.approveDraftAction's registry entry now seeds a real
+      // supplier_prices row (via seedInvestigationWithApprovableDraft) — supplier_prices has NO
+      // organizationId column of its own (scoped via supplier_product_id, same reasoning as
+      // reconciliation-batch-report.test.ts's own identical cleanup), so it's found via this org's
+      // supplier_products first. Must be gone BEFORE the supplierProducts delete on the next line —
+      // the same recurring FK-teardown-order class this shared fixture keeps hitting.
+      const orgSupplierProductIds = await db.select({ id: supplierProducts.id }).from(supplierProducts).where(eq(supplierProducts.organizationId, orgId));
+      for (const sp of orgSupplierProductIds) {
+        await db.delete(supplierPrices).where(eq(supplierPrices.supplierProductId, sp.id));
+      }
       // documents.confirmLineMapping's registry entry now seeds real supplier_products
       // rows (references both products AND suppliers) — must be gone before either parent table's
       // rows are deleted below.
@@ -329,6 +347,14 @@ describe('cross-tenant suite (merge gate)', () => {
     return { organizationId, sessionCookie };
   };
 
+  /**
+   * Env vars an entry declared it cannot run without, that this environment does not have. A
+   * non-empty result means the endpoint would fail its gate before the tenant check ever runs, so
+   * the probe proves nothing — skipped rather than reported as an isolation failure.
+   */
+  const missingRequiredEnv = (procedure: { requiresEnv?: readonly string[] }): string[] =>
+    (procedure.requiresEnv ?? []).filter((name) => !process.env[name]);
+
   it('every registered id-shaped procedure is covered by the cross-tenant registry', () => {
     const registeredPaths = new Set(resourceScopedProcedures.map((p) => p.path));
 
@@ -369,6 +395,14 @@ describe('cross-tenant suite (merge gate)', () => {
   it.each(resourceScopedProcedures)(
     'tenant B is denied fetching tenant A\'s resource via $path',
     async (procedure) => {
+      const missing = missingRequiredEnv(procedure);
+      if (missing.length > 0) {
+        // Not an assertion-free pass by accident: this endpoint gates on `missing` BEFORE the
+        // tenant check, so probing it here would test the gate, not the isolation. See
+        // `requiresEnv` in the registry.
+        console.warn(`Skipping cross-tenant probe for ${procedure.path} — no ${missing.join(', ')} in this environment.`);
+        return;
+      }
       const tenantA = await setUpRealTenant('Tenant-A');
       const tenantB = await setUpRealTenant('Tenant-B');
 
@@ -397,6 +431,14 @@ describe('cross-tenant suite (merge gate)', () => {
   it.each(resourceScopedProcedures)(
     'tenant A can still fetch their OWN resource via $path (the check is not blocking everyone)',
     async (procedure) => {
+      const missing = missingRequiredEnv(procedure);
+      if (missing.length > 0) {
+        // Not an assertion-free pass by accident: this endpoint gates on `missing` BEFORE the
+        // tenant check, so probing it here would test the gate, not the isolation. See
+        // `requiresEnv` in the registry.
+        console.warn(`Skipping cross-tenant probe for ${procedure.path} — no ${missing.join(', ')} in this environment.`);
+        return;
+      }
       const tenantA = await setUpRealTenant('Tenant-A');
 
       const resourceId = await procedure.seedResource(db, tenantA.organizationId);

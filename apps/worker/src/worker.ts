@@ -3,6 +3,7 @@ import {
   createQueueRedisConnection,
   EXTRACTION_QUEUE_NAME,
   FACT_AGGREGATION_QUEUE_NAME,
+  FACT_AGGREGATION_SCHEDULE_POLL_QUEUE_NAME,
   EMBEDDING_QUEUE_NAME,
   RELAY_QUEUE_NAME,
   RELAY_POLL_QUEUE_NAME,
@@ -10,6 +11,15 @@ import {
   BRIEFING_QUEUE_NAME,
   BRIEFING_SCHEDULE_POLL_QUEUE_NAME,
   SQUARE_SYNC_QUEUE_NAME,
+  STOCK_MOVEMENTS_PARTITION_QUEUE_NAME,
+  LOT_EXPIRY_SWEEP_QUEUE_NAME,
+  NEGATIVE_STOCK_SWEEP_QUEUE_NAME,
+  SALES_ANOMALY_SWEEP_QUEUE_NAME,
+  MARGIN_DROP_SWEEP_QUEUE_NAME,
+  UNMAPPED_POS_ITEMS_SWEEP_QUEUE_NAME,
+  DOCUMENT_REVIEW_REQUIRED_SWEEP_QUEUE_NAME,
+  SALES_CONSUMPTION_RETRY_SWEEP_QUEUE_NAME,
+  INVESTIGATION_TRIGGER_QUEUE_NAME,
   type ExtractionJobData,
   type FactAggregationJobData,
   type EmbeddingJobData,
@@ -26,8 +36,18 @@ import { createRelayPollProcessor } from './relay-poll-processor';
 import { createRuleEvaluationProcessor } from './rule-evaluation-processor';
 import { createNotificationDeliveryProcessor } from './notification-delivery-processor';
 import { createBriefingSchedulePollProcessor } from './briefing-schedule-poll-processor';
+import { createFactAggregationSchedulePollProcessor } from './fact-aggregation-schedule-poll-processor';
 import { createBriefingProcessor } from './briefing-processor';
 import { createSquareSyncProcessor } from './square-sync-processor';
+import { createStockMovementsPartitionProcessor } from './stock-movements-partition-processor';
+import { createLotExpirySweepProcessor } from './lot-expiry-sweep-processor';
+import { createNegativeStockSweepProcessor } from './negative-stock-sweep-processor';
+import { createSalesAnomalySweepProcessor } from './sales-anomaly-sweep-processor';
+import { createUnmappedPosItemsSweepProcessor } from './unmapped-pos-items-sweep-processor';
+import { createDocumentReviewRequiredSweepProcessor } from './document-review-required-sweep-processor';
+import { createSalesConsumptionRetryProcessor } from './sales-consumption-retry-processor';
+import { createInvestigationTriggerProcessor } from './investigation-trigger-processor';
+import { createMarginDropSweepProcessor } from './margin-drop-sweep-processor';
 
 /**
  * Factory, not a side-effecting module — mirrors `apps/api`'s `server.ts`/`start.ts` split so this
@@ -143,6 +163,17 @@ export const buildBriefingSchedulePollWorker = (config: { redisUrl: string; data
 };
 
 /**
+ * Same genuine per-store-timezone scheduling shape as `buildBriefingSchedulePollWorker`, driving
+ * `fact-aggregation`'s own schedule instead of `daily-briefing`'s.
+ */
+export const buildFactAggregationSchedulePollWorker = (config: { redisUrl: string; databaseUrl: string }): Worker => {
+  const connection = createQueueRedisConnection(config.redisUrl);
+  const processor = createFactAggregationSchedulePollProcessor({ databaseUrl: config.databaseUrl, redisUrl: config.redisUrl });
+
+  return new Worker(FACT_AGGREGATION_SCHEDULE_POLL_QUEUE_NAME, processor, { connection, concurrency: 1 });
+};
+
+/**
  * The eighth real `Worker` in this process, consuming individual per-store daily-briefing
  * generation jobs — the real scheduled-delivery half of the briefing feature, reusing the exact
  * `rankExceptions`/`toBriefingBundle`/`narrateAndValidate` machinery the `assistant.briefing`
@@ -167,4 +198,139 @@ export const buildSquareSyncWorker = (config: { redisUrl: string; databaseUrl: s
   const processor = createSquareSyncProcessor({ databaseUrl: config.databaseUrl });
 
   return new Worker<SquareSyncJobData>(SQUARE_SYNC_QUEUE_NAME, processor, { connection, concurrency: 2 });
+};
+
+/**
+ * The tenth real `Worker` in this process, consuming the repeatable stock-movements-partition-
+ * maintenance job — closes the gap `0014_stock_movements.sql` names explicitly in its own header
+ * (only one real monthly partition is ever pre-created by that migration; keeping ahead of the
+ * calendar is "an operational job," made real here). A pure "tick" job like
+ * `buildRelayPollWorker`'s own poll worker — no meaningful per-invocation `job.data`, since it
+ * always ensures the same fixed month-ahead window exists.
+ *
+ * Takes `adminDatabaseUrl` (the `postgres` superuser role, same as `db:migrate`), NOT the
+ * `databaseUrl` (retailos_app) every other worker in this file uses — `CREATE TABLE ... PARTITION
+ * OF` is DDL, and `retailos_app` was never granted CREATE on this schema by design.
+ */
+export const buildStockMovementsPartitionWorker = (config: { redisUrl: string; adminDatabaseUrl: string }): Worker => {
+  const connection = createQueueRedisConnection(config.redisUrl);
+  const processor = createStockMovementsPartitionProcessor({ adminDatabaseUrl: config.adminDatabaseUrl });
+
+  return new Worker(STOCK_MOVEMENTS_PARTITION_QUEUE_NAME, processor, { connection, concurrency: 1 });
+};
+
+/**
+ * The eleventh real `Worker` in this process, consuming the repeatable lot-expiry-sweep job —
+ * `lot_expiring`'s real trigger (see `lot-expiry-sweep-processor.ts`'s own header: no outbox event
+ * fires "a lot is now N days from expiry," time simply passes, so this is a scheduled sweep rather
+ * than an event consumer). Takes `adminDatabaseUrl`, not the app-role `databaseUrl` — `findExpiryQueue`
+ * (`packages/db`) is a deliberately cross-tenant sweep across every organization in one query, the
+ * same reasoning `buildStockMovementsPartitionWorker` above already established for this file's other
+ * admin-connection consumer.
+ */
+export const buildLotExpirySweepWorker = (config: { redisUrl: string; adminDatabaseUrl: string }): Worker => {
+  const connection = createQueueRedisConnection(config.redisUrl);
+  const processor = createLotExpirySweepProcessor({ databaseUrl: config.adminDatabaseUrl, redisUrl: config.redisUrl });
+
+  return new Worker(LOT_EXPIRY_SWEEP_QUEUE_NAME, processor, { connection, concurrency: 1 });
+};
+
+/**
+ * The twelfth real `Worker` in this process, consuming the repeatable negative-stock-sweep job —
+ * `negative_stock`'s real trigger (see `negative-stock-sweep-processor.ts`'s own header: `findNegativeStock`
+ * is a real, already-happened data-integrity signal with no `stock.negative` outbox event to consume).
+ * Takes `adminDatabaseUrl` for the same cross-tenant-sweep reason as the lot-expiry worker above —
+ * `findNegativeStock` reads across every organization's `stock_levels` in one query.
+ */
+export const buildNegativeStockSweepWorker = (config: { redisUrl: string; adminDatabaseUrl: string }): Worker => {
+  const connection = createQueueRedisConnection(config.redisUrl);
+  const processor = createNegativeStockSweepProcessor({ databaseUrl: config.adminDatabaseUrl, redisUrl: config.redisUrl });
+
+  return new Worker(NEGATIVE_STOCK_SWEEP_QUEUE_NAME, processor, { connection, concurrency: 1 });
+};
+
+/**
+ * The thirteenth real `Worker` in this process, consuming the repeatable sales-anomaly-sweep job —
+ * `sales_anomaly`'s real trigger (see `sales-anomaly-sweep-processor.ts`'s own header: the already-
+ * registered `sales_anomaly` metric does the real statistical detection; this worker only turns an
+ * already-flagged day into a notification). Takes `adminDatabaseUrl` for the same cross-tenant-sweep
+ * reason as the two sweep workers above — `findActiveStoresForScheduling` reads across every
+ * organization's `stores` in one query, and `executeMetric` itself is called once per store under a
+ * synthetic auth context, not a real per-tenant session.
+ */
+export const buildSalesAnomalySweepWorker = (config: { redisUrl: string; adminDatabaseUrl: string }): Worker => {
+  const connection = createQueueRedisConnection(config.redisUrl);
+  const processor = createSalesAnomalySweepProcessor({ databaseUrl: config.adminDatabaseUrl, redisUrl: config.redisUrl });
+
+  return new Worker(SALES_ANOMALY_SWEEP_QUEUE_NAME, processor, { connection, concurrency: 1 });
+};
+
+/**
+ * `margin_drop`'s real trigger worker — same cross-tenant admin-connection shape as
+ * `buildSalesAnomalySweepWorker` (a synthetic OWNER-equivalent auth context per store, not a real
+ * per-tenant session).
+ */
+export const buildMarginDropSweepWorker = (config: { redisUrl: string; adminDatabaseUrl: string }): Worker => {
+  const connection = createQueueRedisConnection(config.redisUrl);
+  const processor = createMarginDropSweepProcessor({ databaseUrl: config.adminDatabaseUrl, redisUrl: config.redisUrl });
+
+  return new Worker(MARGIN_DROP_SWEEP_QUEUE_NAME, processor, { connection, concurrency: 1 });
+};
+
+/**
+ * The fourteenth real `Worker` in this process, consuming the repeatable unmapped-pos-items-sweep
+ * job — `unmapped_pos_items`'s real trigger (see `unmapped-pos-items-sweep-processor.ts`'s own
+ * header: `findUnmappedRankedByVolume` already does the real detection; this worker only turns the
+ * existing per-store list into a notification). Takes `adminDatabaseUrl` for the same cross-tenant-
+ * sweep reason as the sweep workers above — `findActiveStoresForScheduling` reads across every
+ * organization's `stores` in one query.
+ */
+export const buildUnmappedPosItemsSweepWorker = (config: { redisUrl: string; adminDatabaseUrl: string }): Worker => {
+  const connection = createQueueRedisConnection(config.redisUrl);
+  const processor = createUnmappedPosItemsSweepProcessor({ databaseUrl: config.adminDatabaseUrl, redisUrl: config.redisUrl });
+
+  return new Worker(UNMAPPED_POS_ITEMS_SWEEP_QUEUE_NAME, processor, { connection, concurrency: 1 });
+};
+
+/**
+ * The fifteenth real `Worker` in this process, consuming the repeatable
+ * document-review-required-sweep job — `document_review_required`'s real trigger (see
+ * `document-review-required-sweep-processor.ts`'s own header: `findDocumentsReviewRequired` already
+ * does the real detection; this worker only turns the existing per-store list into a notification).
+ * Takes `adminDatabaseUrl` for the same cross-tenant-sweep reason as the sweep workers above.
+ */
+export const buildDocumentReviewRequiredSweepWorker = (config: { redisUrl: string; adminDatabaseUrl: string }): Worker => {
+  const connection = createQueueRedisConnection(config.redisUrl);
+  const processor = createDocumentReviewRequiredSweepProcessor({ databaseUrl: config.adminDatabaseUrl, redisUrl: config.redisUrl });
+
+  return new Worker(DOCUMENT_REVIEW_REQUIRED_SWEEP_QUEUE_NAME, processor, { connection, concurrency: 1 });
+};
+
+/**
+ * The real repair tooling for `sale to consumption handoff` — consuming the repeatable
+ * sales-consumption-retry-sweep job. `findPendingConsumptionTransactions` and the
+ * `consumption_status` column both existed with no worker ever calling them; this closes that gap.
+ * Takes `adminDatabaseUrl` for the same cross-tenant-sweep reason as every other sweep worker.
+ */
+export const buildSalesConsumptionRetryWorker = (config: { redisUrl: string; adminDatabaseUrl: string }): Worker => {
+  const connection = createQueueRedisConnection(config.redisUrl);
+  const processor = createSalesConsumptionRetryProcessor({ databaseUrl: config.adminDatabaseUrl });
+
+  return new Worker(SALES_CONSUMPTION_RETRY_SWEEP_QUEUE_NAME, processor, { connection, concurrency: 1 });
+};
+
+/**
+ * The real proactive investigation trigger — a downstream consumer of the already-live
+ * `sales-anomaly-sweep` worker above, never a modification of it. Takes `adminDatabaseUrl` for the
+ * same cross-tenant-sweep reason as every other sweep worker in this file —
+ * `findUninvestigatedNotifications` reads across every organization's open notifications in one
+ * query. `concurrency: 1` matches every other sweep worker here, deliberately conservative since
+ * each notification this processor picks up makes a real, non-trivial LLM call (a bounded multi-hop
+ * investigation), not a cheap DB-only detection pass.
+ */
+export const buildInvestigationTriggerWorker = (config: { redisUrl: string; adminDatabaseUrl: string; geminiApiKey: string | undefined }): Worker => {
+  const connection = createQueueRedisConnection(config.redisUrl);
+  const processor = createInvestigationTriggerProcessor({ databaseUrl: config.adminDatabaseUrl, geminiApiKey: config.geminiApiKey });
+
+  return new Worker(INVESTIGATION_TRIGGER_QUEUE_NAME, processor, { connection, concurrency: 1 });
 };

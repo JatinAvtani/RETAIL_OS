@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
+import { humanizeEnum } from '@/lib/format';
 import {
   Badge,
   Button,
@@ -12,6 +13,8 @@ import {
   Input,
   PageHeader,
   SkeletonRows,
+  StatTile,
+  StatTileGrid,
   Table,
   Td,
   Th,
@@ -56,6 +59,31 @@ export default function ProductsPage() {
       />
 
       {error && <ErrorNotice>{error}</ErrorNotice>}
+
+      {!loading && !error && !search && products.length > 0 && (
+        <StatTileGrid className="mb-6">
+          <StatTile
+            label="Total products"
+            value={String(products.length)}
+            unknownReason="No products recorded yet"
+          />
+          <StatTile
+            label="Ingredients"
+            value={String(products.filter((p) => p.type === 'INGREDIENT').length)}
+            unknownReason="No products recorded yet"
+          />
+          <StatTile
+            label="Sellable"
+            value={String(products.filter((p) => p.type === 'SELLABLE').length)}
+            unknownReason="No products recorded yet"
+          />
+          <StatTile
+            label="Both"
+            value={String(products.filter((p) => p.type === 'BOTH').length)}
+            unknownReason="No products recorded yet"
+          />
+        </StatTileGrid>
+      )}
 
       <div className="mb-4 max-w-xs">
         <Input
@@ -108,7 +136,7 @@ export default function ProductsPage() {
                   <Td className="font-medium">{product.name}</Td>
                   <Td>
                     <Badge tone={TYPE_TONES[product.type] ?? 'neutral'}>
-                      {product.type.toLowerCase()}
+                      {humanizeEnum(product.type)}
                     </Badge>
                   </Td>
                   <Td variant="actions">

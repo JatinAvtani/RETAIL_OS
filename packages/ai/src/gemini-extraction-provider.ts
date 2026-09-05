@@ -40,12 +40,12 @@ const INVOICE_SCHEMA = {
 };
 
 /**
- * Verbatim (mechanically ported) from the a later milestone extraction spike's validated prompt
+ * Verbatim (mechanically ported) from an earlier extraction spike's validated prompt
  * (`spikes/extraction/src/providers/gemini.ts`) — this exact wording is what the spike's measured
- * 100%/85.7%→100% accuracy numbers were produced against. Confirmed separately (earlier work, this
- * session) that Gemini's `inlineData` genuinely reads a real PDF's content directly — a real
- * invoice PDF classified correctly at 0.95 confidence via the same inline-data mechanism used here
- * — so no PDF-to-image conversion step is needed, unlike the spike's own corpus generation (which
+ * 100%/85.7%→100% accuracy numbers were produced against. Confirmed separately that Gemini's
+ * `inlineData` genuinely reads a real PDF's content directly — a real invoice PDF classified
+ * correctly at 0.95 confidence via the same inline-data mechanism used here — so no
+ * PDF-to-image conversion step is needed, unlike the spike's own corpus generation (which
  * rendered PNGs via Playwright for a different reason: producing a *degraded-photo* variant to test
  * against, not because Gemini can't read PDFs).
  */
@@ -63,7 +63,11 @@ Extract every field defined in the response schema. Rules:
 
 Return only the structured JSON matching the schema.`;
 
-const MODEL = 'gemini-flash-lite-latest';
+// Versioned tag, not the `-latest` alias (2026-09-04) — see model-config.ts's own doc comment for
+// the full reasoning and live verification (a vision+JSON-schema call against a real invoice PDF
+// correctly classified it on this exact tag before switching; this file uses the same underlying
+// vision+structured-output capability with a richer schema).
+const MODEL = 'gemini-3.5-flash-lite';
 
 /**
  * Without an explicit timeout, a slow (not just erroring) Gemini response can block the circuit

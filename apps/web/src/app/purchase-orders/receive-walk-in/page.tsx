@@ -6,7 +6,8 @@ import { TRPCClientError } from '@trpc/client';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
 import { useStores } from '@/lib/use-stores';
-import { Button, Card, ErrorNotice, Field, Input, LoadingState, PageHeader, Select, Table, Td, Th, Tr } from '@/components/ui';
+import { humanizeEnum } from '@/lib/format';
+import { Button, Card, ErrorNotice, Field, Input, LoadingState, PageHeader, Select, Table, Td, Th, Tr, Value } from '@/components/ui';
 
 type Product = Awaited<ReturnType<typeof trpc.products.list.query>>[number];
 type Supplier = Awaited<ReturnType<typeof trpc.suppliers.list.query>>[number];
@@ -205,7 +206,7 @@ export default function ReceiveWalkInPage() {
                 <option value="">None</option>
                 {DISCREPANCY_CODES.map((code) => (
                   <option key={code} value={code}>
-                    {code.replace(/_/g, ' ')}
+                    {humanizeEnum(code)}
                   </option>
                 ))}
               </Select>
@@ -236,7 +237,9 @@ export default function ReceiveWalkInPage() {
                     <Td variant="numeric">
                       {line.unitCost}
                     </Td>
-                    <Td>{line.discrepancyCode || '—'}</Td>
+                    <Td>
+                      <Value value={line.discrepancyCode ? humanizeEnum(line.discrepancyCode) : null} />
+                    </Td>
                     <Td align="right">
                       <Button type="button" variant="ghost" onClick={() => removeDraftLine(line.key)}>
                         Remove

@@ -4,6 +4,7 @@ import {
   createDb,
   PosConnectionRepository,
   SalesIngestionPipeline,
+  SalesTransactionRepository,
   MovementService,
   posConnections,
   posItems,
@@ -55,9 +56,16 @@ export type SquareReconciliationResult = SquareOrdersSyncResult;
  * `SalesIngestionPipeline`/`SaleConsumptionService`/`MovementService.consumeFefo` each open their
  * own transaction internally, and composing an already-transacted call into this function's own
  * transaction would silently produce two commits, not one (the same lesson that already forced
- * `recordOrderInTx` to write raw tables instead of reusing `SalesTransactionRepository`). A
- * consumption or reversal failure for one line does not fail the whole sync — each is caught and
- * counted, matching `SaleConsumptionService`'s own per-ingredient failure isolation.
+ * `recordOrderInTx` to write raw tables instead of reusing `SalesTransactionRepository`).
+ *
+ * A consumption failure for one TRANSACTION never aborts the rest of the batch — each is wrapped
+ * in its own try/catch and the outcome is recorded on `sales_transactions.consumption_status`
+ * (`COMPLETED`/`FAILED`), never left silently at `PENDING` forever. This is deliberately a
+ * transaction-level guarantee, not a per-line one: `SaleConsumptionService.recordSaleConsumption`
+ * already isolates failures at the per-INGREDIENT level within one line (an unresolvable ingredient
+ * degrades that line's cost to `'unknown'`, it does not throw), so the only way this catch actually
+ * fires is a genuinely unexpected failure (a DB error, a thrown bug) — not the normal missing-data
+ * cases, which `SaleConsumptionService` already handles by returning a structured result.
  */
 export const syncSquareOrders = async (
   db: Db,
@@ -280,8 +288,20 @@ const runOrdersWindow = async (
     cursor = page.nextCursor;
   } while (cursor !== undefined);
 
+  const salesTransactionRepository = new SalesTransactionRepository(db, organizationId);
   for (const transactionId of newlyRecordedTransactionIds) {
-    await triggerConsumptionForTransaction(db, organizationId, storeId, transactionId);
+    // Sale rows for `transactionId` are already durably committed by this point (the page
+    // transaction above). A consumption failure here must never (a) abort the loop — every OTHER
+    // newly-recorded transaction in this batch still deserves its own attempt — or (b) vanish
+    // silently: `consumption_status` records the real outcome so a stuck/failed transaction is a
+    // queryable fact for a retry sweep, not invisible lost work.
+    try {
+      await triggerConsumptionForTransaction(db, organizationId, storeId, transactionId);
+      await salesTransactionRepository.markConsumptionCompleted(transactionId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await salesTransactionRepository.markConsumptionFailed(transactionId, message);
+    }
   }
 
   return { ordersSeen, transactionsRecorded, transactionsDuplicate, refundsProcessed };
@@ -373,11 +393,20 @@ const recordOrderInTx = async (
  * on what THIS line's `pos_items` row actually says today, matching the sale's own line quantities
  * and revenue exactly rather than recomputing from the recipe.
  */
-const triggerConsumptionForTransaction = async (
+/**
+ * `checkRetry` (2026-09 addition): the normal real-time sync path below NEVER sets this — a fresh
+ * transaction's lines consume exactly as they always have, including the case where two lines
+ * share the same raw ingredient (each consumption is a genuine, separate draw). Only
+ * `apps/worker/src/sales-consumption-retry-processor.ts`'s dedicated retry sweep sets it, for a
+ * transaction that already has a real `PENDING`/`FAILED` `consumption_status` from a PRIOR attempt
+ * — retry-safety only matters there, never on the healthy first-attempt path.
+ */
+export const triggerConsumptionForTransaction = async (
   db: Db,
   organizationId: string,
   storeId: string,
-  transactionId: string
+  transactionId: string,
+  checkRetry = false
 ): Promise<void> => {
   // A plain read, but still against RLS-protected tables — needs app.current_org_id set the same
   // way every TenantScopedRepository query does, even though this join isn't itself a repository
@@ -419,6 +448,7 @@ const triggerConsumptionForTransaction = async (
       occurredAt: row.occurredAt,
       sourceType: 'pos-sync',
       sourceId: transactionId,
+      ...(checkRetry ? { checkRetry: true } : {}),
     });
   }
 };

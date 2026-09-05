@@ -141,13 +141,63 @@ describe('runPipeline', () => {
     }
   });
 
-  it('an ACTION_DRAFT-intent question returns unsupported — draft actions are not built yet', async () => {
+  it('an ACTION_DRAFT-intent question returns unsupported when the caller supplied NO orderable candidates', async () => {
     const provider = sequencedProvider([ok({ intent: 'ACTION_DRAFT', confidence: 0.9 })]);
 
+    // No 6th argument — `actionCandidates` defaults to `[]`, matching every real caller with zero
+    // confirmed supplier-product mappings yet. A genuinely different fact from "the model found no
+    // match" (that's the `draft` outcome with empty `lines`, tested below) — there was nothing to
+    // draft against at all.
     const outcome = await runPipeline('Order more flour', provider, 'classify-model', 'plan-model', auth, ctx, stores);
 
     expect(outcome.kind).toBe('unsupported');
     if (outcome.kind === 'unsupported') expect(outcome.intent).toBe('ACTION_DRAFT');
+  });
+
+  it('an ACTION_DRAFT-intent question with real candidates produces a genuine draft — never a mutation (I9)', async () => {
+    const provider = sequencedProvider([
+      ok({ intent: 'ACTION_DRAFT', confidence: 0.9 }),
+      ok({ lines: [{ candidateId: 'sp-flour-1', quantity: 3, unitLabel: 'bags' }] }),
+    ]);
+    const candidates = [{ candidateId: 'sp-flour-1', label: 'All-purpose flour (25kg bag) (Acme Supplies)' }];
+
+    const outcome = await runPipeline('Order 3 bags of flour', provider, 'classify-model', 'plan-model', auth, ctx, stores, [], candidates);
+
+    expect(outcome.kind).toBe('draft');
+    if (outcome.kind === 'draft') {
+      expect(outcome.intent).toBe('ACTION_DRAFT');
+      expect(outcome.draft.lines).toHaveLength(1);
+      expect(outcome.draft.lines[0]).toMatchObject({ candidateId: 'sp-flour-1', label: 'All-purpose flour (25kg bag) (Acme Supplies)', unitLabel: 'bags' });
+      expect(outcome.draft.lines[0]!.quantity.toString()).toBe('3');
+      expect(outcome.draft.rejected).toHaveLength(0);
+    }
+  });
+
+  it('an ACTION_DRAFT question proposing a candidateId NOT in the real supplied list is rejected, never fabricated into a draft line', async () => {
+    const provider = sequencedProvider([
+      ok({ intent: 'ACTION_DRAFT', confidence: 0.9 }),
+      ok({ lines: [{ candidateId: 'sp-invented-999', quantity: 2, unitLabel: 'bags' }] }),
+    ]);
+    const candidates = [{ candidateId: 'sp-flour-1', label: 'All-purpose flour (25kg bag) (Acme Supplies)' }];
+
+    const outcome = await runPipeline('Order 2 bags of something not on the list', provider, 'classify-model', 'plan-model', auth, ctx, stores, [], candidates);
+
+    expect(outcome.kind).toBe('draft');
+    if (outcome.kind === 'draft') {
+      expect(outcome.draft.lines).toHaveLength(0);
+      expect(outcome.draft.rejected).toHaveLength(1);
+      expect(outcome.draft.rejected[0]!.candidateId).toBe('sp-invented-999');
+    }
+  });
+
+  it('an ACTION_DRAFT question where the provider call itself fails returns a real error outcome, never a fabricated empty draft', async () => {
+    const provider = sequencedProvider([ok({ intent: 'ACTION_DRAFT', confidence: 0.9 }), failed('simulated provider failure')]);
+    const candidates = [{ candidateId: 'sp-flour-1', label: 'All-purpose flour (25kg bag) (Acme Supplies)' }];
+
+    const outcome = await runPipeline('Order flour', provider, 'classify-model', 'plan-model', auth, ctx, stores, [], candidates);
+
+    expect(outcome.kind).toBe('error');
+    if (outcome.kind === 'error') expect(outcome.reason).toBe('simulated provider failure');
   });
 
   it('an UNSUPPORTED-intent question returns unsupported with a real reason, never a forced answer', async () => {

@@ -55,8 +55,8 @@ import {
   SalesTransactionRepository,
   SalesIngestionPipeline,
 } from '@retailos/db';
-import { generateId } from '@retailos/domain';
-import type { CurrencyCode } from '@retailos/domain';
+import { generateId, resolveUtcCronForLocalTime } from '@retailos/domain';
+import type { CurrencyCode, StoreTimezone } from '@retailos/domain';
 import { eq } from 'drizzle-orm';
 import { createQueueRedisConnection, createFactAggregationQueue, registerFactAggregationJob } from '@retailos/queue';
 // `.mjs`, not `.mts`: this package emits real `.mjs` output, so the built specifier must match, and
@@ -343,7 +343,10 @@ for (const store of meta.stores) {
   });
   storeIdByCode.set(store.code, storeId);
   // Store creation is still the only real trigger point for the daily fact-aggregation job.
-  await registerFactAggregationJob(factQueue, { organizationId, storeId, storeTimezone: store.timezone });
+  // Same 01:00-local computation `fact-aggregation-schedule-poll-processor.ts`'s own real poll
+  // tick uses — the seed script registers it immediately rather than waiting for that tick.
+  const factAggregationCron = resolveUtcCronForLocalTime(new Date(), store.timezone as StoreTimezone, 1, 0);
+  await registerFactAggregationJob(factQueue, { organizationId, storeId, storeTimezone: store.timezone }, factAggregationCron);
 }
 await factQueue.close();
 await factConnection.quit();

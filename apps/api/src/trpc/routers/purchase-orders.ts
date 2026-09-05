@@ -81,6 +81,56 @@ const addLineInput = z.object({
 const getInput = z.object({ purchaseOrderId: z.string().uuid() });
 const transitionInput = z.object({ purchaseOrderId: z.string().uuid(), expectedVersion: z.number().int().min(1) });
 const rejectOrCancelInput = transitionInput.extend({ reason: z.string().trim().max(1000).optional() });
+const resendInput = z.object({ purchaseOrderId: z.string().uuid() });
+
+/**
+ * The real PDF-generation + (mocked) email-send side effect of a SEND — shared between `send`
+ * (which runs it immediately after the state transition commits) and `resend` (which re-runs the
+ * SAME side effect, with no further state-machine event, against a PO already sitting at `SENT`).
+ * Deliberately returns a discriminated result instead of throwing: both callers need to record a
+ * real `deliveryStatus` outcome (via `recordSent`/`recordDeliveryFailure`) no matter which way this
+ * goes, so the decision of "throw a TRPCError after recording" belongs to the caller, not here.
+ */
+const attemptPurchaseOrderDelivery = async (
+  repo: PurchaseOrderRepository,
+  purchaseOrderId: string,
+  organizationId: string
+): Promise<{ ok: true; pdfKey: string; contactEmail: string } | { ok: false; error: string }> => {
+  const pdfInput = await repo.buildPdfInput(purchaseOrderId);
+  if (!pdfInput) {
+    return { ok: false, error: 'Purchase order was sent, but its PDF could not be generated (order not found on re-read).' };
+  }
+  if (pdfInput.supplier.contactEmail === null) {
+    return { ok: false, error: 'This supplier has no contact email on file — add one before it can be emailed.' };
+  }
+
+  let pdfBytes: Uint8Array;
+  try {
+    pdfBytes = await generatePurchaseOrderPdf(pdfInput);
+    await ensurePdfBucketOnce();
+  } catch (err) {
+    return { ok: false, error: `PDF generation failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  const pdfKey = buildPurchaseOrderPdfKey(organizationId, purchaseOrderId);
+  try {
+    await putObjectBytes(storageClient, PURCHASE_ORDER_PDFS_BUCKET, pdfKey, Buffer.from(pdfBytes), 'application/pdf');
+  } catch (err) {
+    return { ok: false, error: `Storing the generated PDF failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  const emailResult = await poEmailSender.send({
+    to: pdfInput.supplier.contactEmail,
+    subject: `Purchase Order ${pdfInput.poNumber}`,
+    bodyText: `Please find attached Purchase Order ${pdfInput.poNumber}.`,
+    attachment: { filename: `${pdfInput.poNumber}.pdf`, contentType: 'application/pdf', bytes: pdfBytes },
+  });
+  if (!emailResult.ok) {
+    return { ok: false, error: `Email failed: ${emailResult.error}` };
+  }
+
+  return { ok: true, pdfKey, contactEmail: pdfInput.supplier.contactEmail };
+};
 
 /**
  * Same fix as `inventory.ts`/`stocktake.ts`'s own `assertStoreAccess` — `canAccessStore` alone
@@ -117,8 +167,8 @@ const assertSupplierExists = async (db: typeof Db, organizationId: string, suppl
 };
 
 /**
- * the first real caller of `canApproveAmount` (`packages/authz`, built ahead of any
- * consumer since a later milestone/004) — the design's "PO approval up to a configured threshold."
+ * The first real caller of `canApproveAmount` (`packages/authz`, built ahead of any
+ * consumer) — implements "PO approval up to a configured threshold."
  * Deliberately reads the CURRENT `approvalLimit` fresh from `memberships` at approval time via
  * `MembershipRepository.findByUserAndOrg`, never a value cached on the session at login — a
  * manager's limit can change after they logged in, and `ctx.session` doesn't carry it at all
@@ -281,13 +331,23 @@ export const purchaseOrdersRouter = router({
   }),
 
   /**
-   * the design, "SENT triggers PDF generation + email to the supplier contact." The
+   * "SENT triggers PDF generation + email to the supplier contact." The
    * state transition itself (immutability boundary) happens first and is authoritative regardless
-   * of what follows — matching `recordSent`'s own doc comment: a PDF/email failure after a genuine
-   * SEND must not leave the PO stuck in a half-transitioned state, since the design's optimistic
-   * lock has already been consumed by a real, valid transition. `contactEmail === null` (no
-   * confirmed supplier contact on file) is a real, visible failure — I7: this project never
-   * silently treats "no email to send to" as "sent successfully."
+   * of what follows, since the optimistic lock has
+   * already been consumed by a real, valid transition. `contactEmail === null` (no confirmed
+   * supplier contact on file) is a real, visible failure — I7: this project never silently treats
+   * "no email to send to" as "sent successfully."
+   *
+   * Previously, a PDF-generation or email-send failure here left `status` at `SENT` with no
+   * distinct fact anywhere recording that delivery never actually happened — the database said
+   * "sent" while nothing had reached the supplier, with no way to see or retry it. Now every
+   * outcome — success AND failure — is recorded on `deliveryStatus` via `recordSent`/
+   * `recordDeliveryFailure` (see `purchase-orders.ts` schema, `purchaseOrderDeliveryStatusEnum`),
+   * and a failure still returns 200 with the state-transition result (the transition genuinely did
+   * succeed) rather than throwing — throwing here would tell the caller the whole mutation failed
+   * when the part that actually matters for the optimistic-lock contract (did the version bump)
+   * did not. The response's `delivery` field is how the caller learns delivery itself failed and a
+   * `resend` is needed.
    */
   send: protectedProcedure.input(transitionInput).mutation(async ({ ctx, input }) => {
     requirePermission(ctx.session.permissions, 'purchasing:write');
@@ -297,35 +357,49 @@ export const purchaseOrdersRouter = router({
       throw new TRPCError({ code: result.reason.includes('not found') ? 'NOT_FOUND' : 'CONFLICT', message: result.reason });
     }
 
-    const pdfInput = await repo.buildPdfInput(input.purchaseOrderId);
-    if (!pdfInput) {
-      throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Purchase order was sent, but its PDF could not be generated (order not found on re-read).' });
-    }
-    if (pdfInput.supplier.contactEmail === null) {
-      throw new TRPCError({
-        code: 'PRECONDITION_FAILED',
-        message: 'Purchase order was sent, but this supplier has no contact email on file — add one before it can be emailed.',
-      });
+    const delivery = await attemptPurchaseOrderDelivery(repo, input.purchaseOrderId, ctx.session.organizationId);
+    if (!delivery.ok) {
+      await repo.recordDeliveryFailure(input.purchaseOrderId, delivery.error);
+      return { ...result, delivery: { ok: false as const, error: delivery.error } };
     }
 
-    const pdfBytes = await generatePurchaseOrderPdf(pdfInput);
-    await ensurePdfBucketOnce();
-    const pdfKey = buildPurchaseOrderPdfKey(ctx.session.organizationId, input.purchaseOrderId);
-    await putObjectBytes(storageClient, PURCHASE_ORDER_PDFS_BUCKET, pdfKey, Buffer.from(pdfBytes), 'application/pdf');
+    await repo.recordSent(input.purchaseOrderId, delivery.pdfKey, delivery.contactEmail);
+    return { ...result, delivery: { ok: true as const } };
+  }),
 
-    const emailResult = await poEmailSender.send({
-      to: pdfInput.supplier.contactEmail,
-      subject: `Purchase Order ${pdfInput.poNumber}`,
-      bodyText: `Please find attached Purchase Order ${pdfInput.poNumber}.`,
-      attachment: { filename: `${pdfInput.poNumber}.pdf`, contentType: 'application/pdf', bytes: pdfBytes },
-    });
-    if (!emailResult.ok) {
-      throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: `Purchase order was sent and its PDF generated, but the email failed: ${emailResult.error}` });
+  /**
+   * The retry path for the failure `send` can now leave behind: re-attempts PDF generation + email
+   * for a PO that is already, correctly, `SENT` but whose `deliveryStatus` is `FAILED` (or still
+   * `PENDING` — e.g. the process crashed between the state transition committing and the delivery
+   * attempt ever running). Deliberately requires no `expectedVersion`/state-machine event at all —
+   * `recordSent`/`recordDeliveryFailure` never touch `status`/`version`, so there is no optimistic
+   * lock to race here, only the delivery attempt itself. Refuses to run against a PO that is not
+   * `SENT` (nothing to resend for a DRAFT) or whose delivery already succeeded (resending a
+   * genuinely delivered PO is a real, separate, deliberate action a human should take via `send`
+   * on a NEW PO, not something this endpoint silently repeats).
+   */
+  resend: protectedProcedure.input(resendInput).mutation(async ({ ctx, input }) => {
+    requirePermission(ctx.session.permissions, 'purchasing:write');
+    const repo = new PurchaseOrderRepository(ctx.db, ctx.session.organizationId);
+    const purchaseOrder = await repo.findById(input.purchaseOrderId);
+    if (!purchaseOrder) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Purchase order not found.' });
+    }
+    if (purchaseOrder.status !== 'SENT') {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'Only a purchase order in SENT status can be resent.' });
+    }
+    if (purchaseOrder.deliveryStatus === 'DELIVERED') {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'This purchase order was already delivered.' });
     }
 
-    await repo.recordSent(input.purchaseOrderId, pdfKey, pdfInput.supplier.contactEmail);
+    const delivery = await attemptPurchaseOrderDelivery(repo, input.purchaseOrderId, ctx.session.organizationId);
+    if (!delivery.ok) {
+      await repo.recordDeliveryFailure(input.purchaseOrderId, delivery.error);
+      return { delivery: { ok: false as const, error: delivery.error } };
+    }
 
-    return result;
+    await repo.recordSent(input.purchaseOrderId, delivery.pdfKey, delivery.contactEmail);
+    return { delivery: { ok: true as const } };
   }),
 
   getPdfUrl: protectedProcedure.input(getInput).query(async ({ ctx, input }) => {

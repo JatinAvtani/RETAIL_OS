@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
+import { getMetric } from '@retailos/metrics';
 import {
   auditLogs,
   createDb,
@@ -275,6 +276,20 @@ describe('dashboard.summary', () => {
     expect(body.contributionMarginPercentage).toBe(80);
     expect(body.foodCostPercentage).toBe(20);
     expect(Number(body.averageTransactionValue.amount)).toBe(50);
+
+    // The "How calculated" drawer's real data (§04 audit item) — a real catalog description (not
+    // fabricated here, a live lookup against the SAME catalog entry executeMetric just ran), the
+    // real store timezone, and real source-table provenance, for every KPI that already has a
+    // DrillThroughPanel.
+    expect(body.provenance.netRevenue.description).toBe(getMetric('net_revenue')?.description);
+    expect(body.provenance.netRevenue.description).toBeTruthy();
+    expect(body.provenance.netRevenue.storeTimezone).toBe('America/New_York');
+    expect(body.provenance.netRevenue.sources.length).toBeGreaterThan(0);
+    expect(body.provenance.netRevenue.freshness).toBeTruthy();
+    expect(body.provenance.contributionMargin.description).toBe(getMetric('contribution_margin')?.description);
+    expect(body.provenance.foodCostPercentage.description).toBe(getMetric('food_cost_percentage')?.description);
+    expect(body.provenance.stockValue).not.toBeNull();
+    expect(body.provenance.stockValue.storeTimezone).toBe('America/New_York');
   });
 
   it('a consumption event with no recorded lot cost makes COGS and every derived figure unknown, never zero', async () => {
@@ -715,6 +730,126 @@ describe('dashboard.summary', () => {
     expect(body.itemsByContribution[0].menuItemId).toBe(menuItemId);
     expect(body.itemsByContribution[0].menuItemName).toBe('Contribution Test Item');
     expect(body.itemsByContribution[0].totalContribution).toBeNull();
+  });
+
+  it('marginAttribution decomposes a real period-over-period price increase into a real, non-zero priceEffect', async () => {
+    const { organizationId, storeId } = await setUpOrg();
+    const [eachUnit] = await db.select({ id: units.id }).from(units).where(eq(units.code, 'each'));
+    const unitId = eachUnit!.id;
+
+    // A real, confirmed recipe cost — WITHOUT one, computeMarginAttribution excludes the item from
+    // EVERY effect (including priceEffect, which the formula itself doesn't even need cost for),
+    // by design (I7: an item with unknown cost in either period is excluded from the whole
+    // decomposition, never defaulted to a fabricated $0 cost). One ingredient at a known price,
+    // yield 1, so the recipe's own per-unit cost is exactly its ingredient cost: $2.00.
+    const productId = generateId();
+    await db.insert(products).values({ id: productId, organizationId, sku: `DASH-MA-${productId}`, name: 'Margin Attribution Ingredient', baseUnitId: unitId, type: 'INGREDIENT' });
+    const variantId = generateId();
+    await db.insert(productVariants).values({ id: variantId, productId, name: 'Default', isDefault: true });
+    const supplierId = generateId();
+    await db.insert(suppliers).values({ id: supplierId, organizationId, name: 'Margin Attribution Supplier' });
+    const supplierProductId = generateId();
+    await db.insert(supplierProducts).values({
+      id: supplierProductId,
+      organizationId,
+      supplierId,
+      productId,
+      supplierSku: 'MA-1',
+      packSize: '1',
+      packUnitId: unitId,
+      conversionToBase: '1',
+      isConfirmed: true,
+    });
+    await db.insert(supplierPrices).values({
+      id: generateId(),
+      supplierProductId,
+      unitPrice: '2.0000',
+      currency: 'USD',
+      validFrom: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000),
+    });
+
+    const recipeGroupId = generateId();
+    const recipeId = generateId();
+    await db.insert(recipes).values({
+      id: recipeId,
+      recipeGroupId,
+      organizationId,
+      name: 'Margin Attribution Recipe',
+      yieldQuantity: '1',
+      yieldUnitId: unitId,
+      validFrom: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000),
+    });
+    await db.insert(recipeComponents).values({ id: generateId(), recipeId, componentType: 'PRODUCT', productId, quantity: '1', unitId });
+
+    const menuItemId = generateId();
+    const posItemId = generateId();
+    await db.insert(menuItems).values({
+      id: menuItemId,
+      organizationId,
+      name: 'Margin Attribution Test Item',
+      recipeGroupId,
+      price: '10.0000',
+      priceValidFrom: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000),
+    });
+    await db.insert(posItems).values({
+      id: posItemId,
+      organizationId,
+      storeId,
+      source: 'square',
+      externalId: `DASH-MA-${posItemId}`,
+      name: 'Margin Attribution Test Item',
+      mappingStatus: 'MAPPED',
+      menuItemId,
+    });
+
+    const salesRepo = new SalesTransactionRepository(db, organizationId);
+    // Base (prior) period: 10 units at $10.00 each.
+    await salesRepo.recordIfNew({
+      storeId,
+      source: 'square',
+      externalId: `DASH-MA-BASE-${organizationId}`,
+      occurredAt: new Date(Date.now() - 45 * 24 * 60 * 60 * 1000),
+      subtotal: '100.0000',
+      discount: '0.0000',
+      tax: '0.0000',
+      total: '100.0000',
+      currency: 'USD',
+      lines: [{ posItemId, quantity: '10.000000', unitPrice: '10.0000', discount: '0.0000', lineTotal: '100.0000' }],
+    });
+    // Comparison (current) period: the SAME 10 units, but at a real, higher $15.00 each — a genuine
+    // price increase with quantity held constant, so any real priceEffect must be positive and any
+    // real volumeEffect must be zero (Q₁ = Q₀).
+    await salesRepo.recordIfNew({
+      storeId,
+      source: 'square',
+      externalId: `DASH-MA-COMPARISON-${organizationId}`,
+      occurredAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
+      subtotal: '150.0000',
+      discount: '0.0000',
+      tax: '0.0000',
+      total: '150.0000',
+      currency: 'USD',
+      lines: [{ posItemId, quantity: '10.000000', unitPrice: '15.0000', discount: '0.0000', lineTotal: '150.0000' }],
+    });
+
+    const cookie = await issueSession(organizationId);
+    const body = JSON.parse((await fetchSummary(storeId, cookie)).body).result.data;
+
+    expect(body.marginAttribution).not.toBeNull();
+    // A real $5/unit price increase across 10 unchanged units, with a real UNCHANGED $2.00/unit
+    // cost and unchanged quantity — every effect this decomposition produces is independently
+    // provable: priceEffect is the full $50 ((15-10) x 10), costEffect is exactly 0 (cost never
+    // moved), volumeEffect is exactly 0 (quantity never moved, only price), and mixEffect is 0
+    // (a single item is always 100% of its own mix in both periods). totalChange must equal
+    // priceEffect exactly, since every other effect is genuinely zero here — the reconciliation
+    // guarantee `computeMarginAttribution`'s own header promises, proven end to end through this
+    // real HTTP router, not just the domain function's own unit tests.
+    expect(Number(body.marginAttribution.priceEffect.amount)).toBeCloseTo(50, 4);
+    expect(Number(body.marginAttribution.costEffect.amount)).toBeCloseTo(0, 4);
+    expect(Number(body.marginAttribution.mixEffect.amount)).toBeCloseTo(0, 4);
+    expect(Number(body.marginAttribution.volumeEffect.amount)).toBeCloseTo(0, 4);
+    expect(Number(body.marginAttribution.totalChange.amount)).toBeCloseTo(50, 4);
+    expect(body.marginAttribution.baseContributionMargin).not.toBeNull();
   });
 
   it("one org's data never appears in another org's dashboard", async () => {

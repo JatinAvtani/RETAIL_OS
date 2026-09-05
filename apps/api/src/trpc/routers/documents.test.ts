@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import {
   auditLogs,
   createDb,
@@ -543,9 +543,9 @@ describe('documents router — review', () => {
     const { organizationId, storeId, sessionCookie } = await setUpOrgWithStore('MANAGER');
     // seedDocumentAwaitingReview's fixture has `lines: []` — no line items, so PostingService
     // trivially posts nothing per-line and moves straight to POSTED (never getting stuck at
-    // APPROVED). posting-service.test.ts and the dedicated earlier work describe block below cover the
+    // APPROVED). posting-service.test.ts and the dedicated describe block below cover the
     // real per-line posting math; this test only proves the status transition genuinely reaches
-    // POSTED via the real HTTP endpoint, not just APPROVED as it did before earlier work existed.
+    // POSTED via the real HTTP endpoint, not just APPROVED.
     const documentId = await seedDocumentAwaitingReview(organizationId, storeId, sessionCookie);
 
     const response = await app.inject({
@@ -610,7 +610,7 @@ describe('documents router — review', () => {
 /**
  * correction capture → supplier-SKU mapping table. Real Postgres + real
  * Redis + real MinIO. `documents.confirmLineMapping` is the endpoint that turns an extraction
- * line's SKU into a PERMANENT `supplier_products` row — the input earlier work's posting engine needs.
+ * line's SKU into a PERMANENT `supplier_products` row — the input the posting engine needs.
  */
 describe('documents router — corrections / supplier-SKU mapping', () => {
   let app: FastifyInstance;
@@ -638,7 +638,7 @@ describe('documents router — corrections / supplier-SKU mapping', () => {
       await db.delete(auditLogs).where(eq(auditLogs.organizationId, orgId));
       await db.delete(outboxEvents).where(eq(outboxEvents.organizationId, orgId));
       await db.delete(documents).where(eq(documents.organizationId, orgId));
-      // earlier work's own new writes: supplier_products references products (FK) and suppliers (FK) —
+      // supplier_products references products (FK) and suppliers (FK) —
       // must be gone before those parent rows are deleted below. Same recurring FK-teardown-order
       // class this project has hit repeatedly.
       await db.delete(supplierProducts).where(eq(supplierProducts.organizationId, orgId));
@@ -848,7 +848,14 @@ describe('documents router — corrections / supplier-SKU mapping', () => {
     const secondMapping = asSuccess(second.json()) as { id: string };
     expect(secondMapping.id).toBe(firstMapping.id);
 
-    const rows = await db.select().from(supplierProducts).where(eq(supplierProducts.supplierSku, 'REPEAT-SKU'));
+    // Org-scoped, not a bare SKU match. `supplier_sku` is unique per ORGANIZATION, not globally, so
+    // a leftover 'REPEAT-SKU' row from another org (an earlier aborted run, a sibling test) made
+    // this assert 2 and report a duplicate-write bug that never happened. The claim under test is
+    // "this org has exactly one row for this SKU" — so that is what it now asks.
+    const rows = await db
+      .select()
+      .from(supplierProducts)
+      .where(and(eq(supplierProducts.organizationId, organizationId), eq(supplierProducts.supplierSku, 'REPEAT-SKU')));
     expect(rows).toHaveLength(1);
   });
 
@@ -1006,7 +1013,7 @@ describe('documents router — approve triggers posting', () => {
     const productRepository = new ProductRepository(db, organizationId);
     const product = await productRepository.create({ id: generateId(), sku: `POST-E2E-${generateId()}`, name: 'Posting E2E Ingredient', baseUnitId: eachUnit!.id, type: 'INGREDIENT' });
 
-    // earlier work's own real endpoint creates the confirmed mapping — proving the two tasks compose, not just each in isolation.
+    // The real endpoint creates the confirmed mapping — proving the two flows compose, not just each in isolation.
     const requestResponse = await app.inject({
       method: 'POST',
       url: '/trpc/documents.requestUpload',
@@ -1081,7 +1088,7 @@ describe('documents router — approve triggers posting', () => {
 
   /**
    * `approve` also runs the real three-way match for an INVOICE-type document, immediately
-   * after posting, in the SAME request — confirmed with the user as the trigger point. Forces
+   * after posting, in the SAME request. Forces
    * `type: 'INVOICE'` directly via the DB (this suite deliberately unsets `GEMINI_API_KEY`, so
    * real classification never runs — see this file's own header comment) since the match-trigger
    * gate reads the document's real `type` column, not the extraction's raw `fields`.

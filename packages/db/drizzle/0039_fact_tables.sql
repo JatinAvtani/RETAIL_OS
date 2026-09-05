@@ -1,11 +1,10 @@
 -- Hand-written, not `drizzle-kit generate` output — same reason as every prior partitioned-table
 -- migration (0014_stock_movements.sql): the snapshot chain has been stale since migration 0005.
 --
--- Fact tables (earlier work, the design, the design's explicit "Fact tables: Monthly range,
--- rebuild/backfill per partition" guidance). Five tables, matching the plan Phase 1's list minus
--- `fact_supplier_events` (confirmed with the user as redundant with the already-existing
--- `supplier_performance_events`, earlier work — see `packages/db/src/schema/fact-tables.ts`'s own header
--- for the full reasoning). Every table follows `stock_movements`' exact partitioning template:
+-- Fact tables, following the "monthly range, rebuild/backfill per partition" design
+-- guidance. Five tables — `fact_supplier_events` is deliberately omitted as redundant with the
+-- already-existing `supplier_performance_events` (see `packages/db/src/schema/fact-tables.ts`'s
+-- own header for the full reasoning). Every table follows `stock_movements`' exact partitioning template:
 -- `PARTITION BY RANGE (date)`, `PRIMARY KEY (id, date)` (the partition key must be in the PK),
 -- one pre-created current-month partition + a DEFAULT catch-all, a BRIN index on `date`, plain
 -- (non-CONCURRENTLY) indexes since every partition starts empty, RLS enabled+forced on the parent

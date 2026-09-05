@@ -2,9 +2,9 @@ import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import { Decimal } from 'decimal.js';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import * as schema from '../schema/index';
-import { organizations, productVariants, products, stockCountLines, stockCounts, stockLevels, storageLocations, units } from '../schema/index';
+import { organizations, outboxEvents, productVariants, products, stockCountLines, stockCounts, stockLevels, storageLocations, units } from '../schema/index';
 import { withTenantContext } from '../tenant-context';
-import { generateId, type CurrencyCode, type Unit } from '@retailos/domain';
+import { generateId, LARGE_VARIANCE_THRESHOLD, type CurrencyCode, type Unit } from '@retailos/domain';
 import { MovementService, UnknownCostSurplusError } from './movement-service';
 
 export class EmptyCountScopeError extends Error {
@@ -15,9 +15,6 @@ export class EmptyCountScopeError extends Error {
 }
 
 type Db = ReturnType<typeof drizzle<typeof schema>>;
-
-/** A variance whose magnitude is at least this fraction of the T0 theoretical quantity requires a reason code before approval. */
-const LARGE_VARIANCE_THRESHOLD = 0.1;
 
 export class InvalidStockCountTransitionError extends Error {
   constructor(from: string, to: string) {
@@ -41,21 +38,21 @@ export class MissingVarianceReasonError extends Error {
 }
 
 /**
- * the stocktake workflow, `DRAFT → IN_PROGRESS → SUBMITTED → APPROVED |
- * REJECTED`. Built as ONE transactional service (mirroring `MovementService`'s own reasoning,
- * earlier work) rather than a plain repository, since `startCount`/`submitCount`/`approveCount` each need
+ * The stocktake workflow, `DRAFT → IN_PROGRESS → SUBMITTED → APPROVED |
+ * REJECTED`. Built as ONE transactional service (mirroring `MovementService`'s own reasoning)
+ * rather than a plain repository, since `startCount`/`submitCount`/`approveCount` each need
  * multi-table atomic writes (the count row, its lines, and — for approval — real `stock_movements`/
  * `stock_levels`/`lots` writes via `MovementService`).
  *
- * **The T0 snapshot is the entire reason this feature exists** (the plan's own words: "sales
- * continue during a count... comparing a count taken at 9am against a theoretical balance read at
- * 11am produces phantom variance"). `startCount` (the `DRAFT → IN_PROGRESS` transition) is the
+ * **The T0 snapshot is the entire reason this feature exists**: sales
+ * continue during a count, so comparing a count taken at 9am against a theoretical balance read at
+ * 11am produces phantom variance. `startCount` (the `DRAFT → IN_PROGRESS` transition) is the
  * ONLY place `theoreticalQuantityT0`/`t0UnitCost` are ever written — frozen once, from
  * `stock_levels` at that exact moment, and never recomputed even if the projection changes before
  * approval. Any stock movement after `t0At` is real, correct activity — deliberately excluded from
  * variance, not folded in as apparent shrinkage.
  *
- * Approval reconciles lots FEFO-style, confirmed with the user rather than guessed: a shortfall
+ * Approval reconciles lots FEFO-style, by design rather than guessed: a shortfall
  * (`counted < theoretical`) draws down existing ACTIVE lots via `MovementService.consumeFefo`'s
  * exact mechanism at each lot's real cost; a surplus (`counted > theoretical`) has no originating
  * lot to draw from, so a NEW adjustment lot is created at the line's frozen `t0UnitCost` (the best
@@ -114,11 +111,10 @@ export class StockCountService {
   }
 
   /**
-   * earlier work (the design's own count-creation step names "full | by category | by storage
-   * location" as the SAME workflow, not a separate mechanism — confirmed with the user rather than
-   * assumed): resolves every non-deleted product in this category, at this store, into
-   * `productVariantPairs`, then delegates to `createCount` unchanged. "Full counts are impractical
-   * weekly" (the design's own reasoning for this feature) is exactly why a manager needs a scoped
+   * "full | by category | by storage location" are the SAME workflow, not a separate
+   * mechanism: resolves every non-deleted product in this category, at this store, into
+   * `productVariantPairs`, then delegates to `createCount` unchanged. Full counts are impractical
+   * weekly, which is exactly why a manager needs a scoped
    * subset rather than re-running the entire state machine from scratch — the state machine,
    * T0 snapshot, variance, and approval logic are identical either way.
    *
@@ -150,7 +146,7 @@ export class StockCountService {
     });
   }
 
-  /** Same reasoning as `createCountByCategory`, scoped by `storageLocationId` instead — the design's other named scope. */
+  /** Same reasoning as `createCountByCategory`, scoped by `storageLocationId` instead. */
   async createCountByStorageLocation(input: { storeId: string; storageLocationId: string; createdByUserId?: string }) {
     const pairs = await this.db.transaction((tx) =>
       withTenantContext(tx, this.organizationId, async () => {
@@ -304,6 +300,15 @@ export class StockCountService {
           .from(stockCountLines)
           .where(eq(stockCountLines.stockCountId, stockCountId));
 
+        // Tracks the single line with the largest real variance MAGNITUDE across the whole count —
+        // the same figure `evaluateStocktakeVariance` (packages/domain) compares against
+        // `LARGE_VARIANCE_THRESHOLD` to decide whether this submission is worth alerting on. `null`
+        // stays `null` unless a line actually produces a real, known magnitude (I7); ties keep the
+        // first line found, since only the MAGNITUDE crossing the threshold matters, not which
+        // specific line reported it first.
+        let maxVarianceMagnitude: Decimal | null = null;
+        let largestVarianceDollarValue: Decimal | null = null;
+
         for (const line of lineRows) {
           if (line.countedQuantity === null) {
             throw new Error(`Stock count line '${line.id}' has not been counted yet — cannot submit an incomplete count.`);
@@ -332,6 +337,15 @@ export class StockCountService {
               updatedAt: new Date(),
             })
             .where(eq(stockCountLines.id, line.id));
+
+          if (varianceQuantity !== null && line.theoreticalQuantityT0 !== null) {
+            const theoretical = new Decimal(line.theoreticalQuantityT0);
+            const magnitude = theoretical.isZero() ? null : varianceQuantity.abs().dividedBy(theoretical.abs());
+            if (magnitude !== null && (maxVarianceMagnitude === null || magnitude.greaterThan(maxVarianceMagnitude))) {
+              maxVarianceMagnitude = magnitude;
+              largestVarianceDollarValue = varianceValue;
+            }
+          }
         }
 
         const updatedRows = await tx
@@ -344,7 +358,27 @@ export class StockCountService {
           })
           .where(eq(stockCounts.id, stockCountId))
           .returning();
-        return updatedRows[0]!;
+        const updated = updatedRows[0]!;
+
+        // Same transaction as the status transition (I8) — `stocktake_variance`'s real trigger.
+        // `evaluateStocktakeVariance` (packages/domain) decides downstream whether this magnitude
+        // actually clears the alerting bar; this event fires unconditionally on every submission,
+        // the same "the event is cheap, the evaluation decides" shape `po.submitted` already uses.
+        await tx.insert(outboxEvents).values({
+          id: generateId(),
+          organizationId: this.organizationId,
+          aggregateType: 'stock_count',
+          aggregateId: stockCountId,
+          eventType: 'stocktake.submitted',
+          payload: {
+            stockCountId,
+            storeId: updated.storeId,
+            maxVarianceMagnitude: maxVarianceMagnitude !== null ? maxVarianceMagnitude.toFixed(6) : null,
+            largestVarianceDollarValue: largestVarianceDollarValue !== null ? largestVarianceDollarValue.toFixed(4) : null,
+          },
+        });
+
+        return updated;
       })
     );
   }

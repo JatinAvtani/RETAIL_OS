@@ -27,19 +27,49 @@ export type AiTask = (typeof AI_TASKS)[number];
  * part — the provider's own 15s request timeout fires long before the 503 arrives, so the caller
  * sees an opaque timeout instead of the "model unavailable" error the app already handles.
  *
- * Narration quality was verified on the replacement before switching, not assumed: given a real
- * grounding bundle, flash-lite produced "The dead stock value is 4,07,619.31 rupees and the expiry
- * risk value is 35,216.98 rupees" — correct Indian digit grouping, values unaltered, and accepted
- * by the grounding validator's allowlist.
+ * 2026-09-04: switched all three tasks off the `-latest` ALIAS onto the real, versioned
+ * `gemini-3.5-flash-lite` tag — a floating alias means Google can silently swap the underlying
+ * model under this app at any time with zero warning (the exact "unpinned model/config version"
+ * gap an external audit flagged); a versioned tag cannot move underneath the app the same way,
+ * even though Google will eventually retire it outright (as it already did to
+ * `gemini-2.5-flash-lite`, confirmed via a live 404: "no longer available to new users... use
+ * models/gemini-3.5-flash-lite"). Verified live before switching, matching the discipline this
+ * comment already established: `models?key=...` confirmed the tag exists on this key; 3
+ * consecutive live narration calls with a real grounding-shaped prompt (dead stock / expiry risk
+ * figures) each completed in ~1.2-1.3s (no regression vs. `-latest`'s own measured 1.3s) with
+ * correct Indian digit grouping and unaltered values every time; a real structured-output
+ * (`responseSchema`) call correctly classified a sample question as METRIC.
  *
- * This is a real availability constraint of the free tier, not a preference. If `-latest` recovers,
- * moving PLAN/NARRATE back is a one-line change — but it should be re-measured first, the same way
- * this was.
+ * A real A/B eval run against the 18-case golden set (`pnpm --filter @retailos/api eval`)
+ * independently confirmed the switch is a genuine improvement, not just a lateral move: on
+ * `gemini-3.5-flash-lite`, 14/18 cases passed in ~3 minutes. The SAME run against
+ * `gemini-flash-lite-latest` was killed after running for OVER 20 MINUTES with zero output —
+ * reproducing, live, the exact `-latest`-alias hang failure this file's 2026-08-24 entry above
+ * already documented for the non-lite variant, this time on the lite alias too. This is decisive
+ * evidence for pinning: the floating alias is not just an unpinned-version risk in the abstract,
+ * it is measurably, currently less reliable than the versioned tag on this key.
+ *
+ * If this tag is ever retired, re-measure the replacement the same way before switching, not just
+ * for availability but for quality — a working model is not automatically an equally correct one.
+ */
+/**
+ * 2026-09-04, later the same day: `gemini-3.5-flash-lite` (pinned above, same day) started
+ * hanging on every real `generateContent` call — not a 429 (quota), not a 404 (model missing):
+ * the TCP connection succeeds, the request sends, and the server returns literally nothing until
+ * the client's own timeout fires. Confirmed directly against the raw API with curl (bypassing this
+ * app entirely) before touching this file: `models?key=...` returns instantly (the key and model
+ * list endpoint both work), a `generateContent` call to `gemini-3.5-flash-lite` hangs 15s+ with
+ * zero response (three separate attempts, both via this app's real pipeline and via a direct raw
+ * curl call), while the SAME request shape against `gemini-3.1-flash-lite` returns a real 200 in
+ * under a second, twice, including a `responseSchema` structured-output call matching what PLAN/
+ * CLASSIFY actually need. This is model-side instability on Google's end for this specific tag,
+ * not a config or quota problem on this key — `gemini-3.5-flash-lite` may recover; re-measure
+ * before switching back, per this file's own standing discipline.
  */
 export const MODEL_CONFIG: Record<AiTask, string> = {
-  CLASSIFY: 'gemini-flash-lite-latest',
-  PLAN: 'gemini-flash-lite-latest',
-  NARRATE: 'gemini-flash-lite-latest',
+  CLASSIFY: 'gemini-3.1-flash-lite',
+  PLAN: 'gemini-3.1-flash-lite',
+  NARRATE: 'gemini-3.1-flash-lite',
 };
 
 export const modelForTask = (task: AiTask): string => MODEL_CONFIG[task];

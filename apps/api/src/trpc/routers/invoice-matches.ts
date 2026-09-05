@@ -1,8 +1,19 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
+import { Decimal } from 'decimal.js';
 import { canAccessStore } from '@retailos/authz';
 import { DocumentRepository, InvoiceMatchRepository, StoreRepository } from '@retailos/db';
+import { computeLineDollarImpact, computeMatchDollarImpact, type LineForDollarImpact, type VarianceType } from '@retailos/domain';
 import { protectedProcedure, router } from '../trpc';
+
+/** tRPC's plain-JSON transport cannot carry a Decimal instance — `null !== null ? .toFixed(4) : null` at every call site, exactly matching how `invoiceMatches.pending` already handles its own dollarImpact field, never a parallel formula (I2: `computeLineDollarImpact`/`computeMatchDollarImpact` are the single source, this only re-shapes their real output for HTTP). */
+const toLineForImpact = (line: { varianceType: string; priceVariance: string | null; quantityVariance: string | null; invoiceQuantity: string | null; invoiceUnitPrice: string | null }): LineForDollarImpact => ({
+  varianceType: line.varianceType as VarianceType,
+  priceVariance: line.priceVariance !== null ? new Decimal(line.priceVariance) : null,
+  quantityVariance: line.quantityVariance !== null ? new Decimal(line.quantityVariance) : null,
+  invoiceQuantity: line.invoiceQuantity !== null ? new Decimal(line.invoiceQuantity) : null,
+  invoiceUnitPrice: line.invoiceUnitPrice !== null ? new Decimal(line.invoiceUnitPrice) : null,
+});
 
 const getInput = z.object({ invoiceMatchId: z.string().uuid() });
 const getByDocumentInput = z.object({ documentId: z.string().uuid() });
@@ -20,8 +31,8 @@ const requirePermission = (permissions: string[], permission: string) => {
 
 /**
  * the real read surface for `InvoiceMatchRepository`.
- * `runMatch` itself has no endpoint here — it runs automatically inside `documents.approve`
- * (confirmed with the user), not as a manually-triggered mutation, so this router is
+ * `runMatch` itself has no endpoint here — it runs automatically inside `documents.approve`,
+ * not as a manually-triggered mutation, so this router is
  * read-only, matching `documents.ts`'s own `accuracyTelemetry`-style reporting endpoints.
  */
 export const invoiceMatchesRouter = router({
@@ -32,8 +43,14 @@ export const invoiceMatchesRouter = router({
     if (!invoiceMatch || !canAccessStore(ctx.session, invoiceMatch.storeId)) {
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice match not found.' });
     }
-    const lines = await repo.findLines(input.invoiceMatchId);
-    return { invoiceMatch, lines };
+    const rawLines = await repo.findLines(input.invoiceMatchId);
+    // Every line's real dollar impact, plus the match's own real total — the three-way-match
+    // screen's own "no totals row" gap. Computed here, once, from the exact same pure function
+    // the variance queue already uses (I2), never a second formula re-derived in the frontend.
+    const forImpact = rawLines.map(toLineForImpact);
+    const lines = rawLines.map((line, i) => ({ ...line, dollarImpact: computeLineDollarImpact(forImpact[i]!)?.toFixed(4) ?? null }));
+    const totalDollarImpact = computeMatchDollarImpact(forImpact)?.toFixed(4) ?? null;
+    return { invoiceMatch, lines, totalDollarImpact };
   }),
 
   /**
@@ -79,11 +96,17 @@ export const invoiceMatchesRouter = router({
       }
     }
     const repo = new InvoiceMatchRepository(ctx.db, ctx.session.organizationId);
-    return repo.findPending(input.storeId);
+    const pending = await repo.findPending(input.storeId);
+    // tRPC's plain-JSON transport cannot carry a Decimal instance — every other money-shaped field
+    // this router returns is already a plain string by the time it leaves the repository; this is
+    // the one field `findPending` still hands back as a real Decimal, so it's converted here at the
+    // router boundary rather than inside the repository (which other, non-HTTP callers may want as
+    // a real Decimal to do further arithmetic on).
+    return pending.map((match) => ({ ...match, dollarImpact: match.dollarImpact !== null ? match.dollarImpact.toFixed(4) : null }));
   }),
 
   /**
-   * the one real resolution action, confirmed with the user — one mutation, a REQUIRED
+   * the one real resolution action — one mutation, a REQUIRED
    * note, `PENDING` straight to `RESOLVED`. Gated on `purchasing:approve` (not the broader
    * `purchasing:write`) since resolving a flagged variance is a real financial-control decision —
    * matching this project's existing pattern of reserving `purchasing:approve` for PO approval,

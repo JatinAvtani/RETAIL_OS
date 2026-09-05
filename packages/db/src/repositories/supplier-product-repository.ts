@@ -1,7 +1,7 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import * as schema from '../schema/index';
-import { supplierProducts } from '../schema/index';
+import { supplierProducts, products, suppliers } from '../schema/index';
 import { TenantScopedRepository } from '../tenant-repository';
 
 /**
@@ -71,6 +71,29 @@ export class SupplierProductRepository extends TenantScopedRepository<typeof sup
         .from(supplierProducts)
         .where(scopedWhere(and(eq(supplierProducts.supplierId, supplierId), eq(supplierProducts.isConfirmed, true))))
     );
+  }
+
+  /**
+   * Every CONFIRMED mapping across the whole org, joined to its real product/supplier names — the
+   * candidate list `planActionDraft` (`packages/assistant`) requires: that function only ever
+   * accepts a `candidateId` the CALLER supplied verbatim, never one the model invents, so a real
+   * caller needs a real list to hand it. Confirmed-only for the same I7 reason
+   * `findConfirmedForProduct`/`findConfirmedBySupplier` already established — an unconfirmed
+   * mapping has no reliable pack size/conversion, so drafting an order line against one would let
+   * unit-conversion data the model never saw silently reach a real PO line later. Excludes a
+   * soft-deleted product (`isNull(products.deletedAt)`) — a discontinued product should not appear
+   * as something new to order.
+   */
+  async findAllConfirmedWithLabels(): Promise<{ candidateId: string; label: string }[]> {
+    const rows = await this.runScoped((db, scopedWhere) =>
+      db
+        .select({ id: supplierProducts.id, productName: products.name, supplierName: suppliers.name })
+        .from(supplierProducts)
+        .innerJoin(products, eq(products.id, supplierProducts.productId))
+        .innerJoin(suppliers, eq(suppliers.id, supplierProducts.supplierId))
+        .where(scopedWhere(and(eq(supplierProducts.isConfirmed, true), isNull(products.deletedAt))))
+    );
+    return rows.map((row) => ({ candidateId: row.id, label: `${row.productName} (${row.supplierName})` }));
   }
 
   async create(input: {

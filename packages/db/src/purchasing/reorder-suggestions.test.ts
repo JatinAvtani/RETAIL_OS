@@ -6,6 +6,8 @@ import { generateId } from '@retailos/domain';
 import * as schema from '../schema/index';
 import {
   auditLogs,
+  notificationRules,
+  notifications,
   organizations,
   outboxEvents,
   products,
@@ -97,6 +99,12 @@ describe('findReorderSuggestions', () => {
     // the org row itself can be deleted.
     await adminDb.delete(outboxEvents).where(eq(outboxEvents.organizationId, organizationId));
     await adminDb.delete(auditLogs).where(eq(auditLogs.organizationId, organizationId));
+    // `notifications.store_id` references `stores`, so these must go BEFORE the store rows. This
+    // org grew notifications only once the investigation trigger began sweeping more rule types —
+    // the fixture itself never creates one, which is why the FK held until then. Deleting by
+    // organization (not by store) also catches any org-scoped notification with a null store_id.
+    await adminDb.delete(notifications).where(eq(notifications.organizationId, organizationId));
+    await adminDb.delete(notificationRules).where(eq(notificationRules.organizationId, organizationId));
     await adminDb.delete(suppliers).where(eq(suppliers.organizationId, organizationId));
     await adminDb.delete(stores).where(eq(stores.organizationId, organizationId));
     await adminDb.delete(organizations).where(eq(organizations.id, organizationId));
@@ -136,12 +144,14 @@ describe('findReorderSuggestions', () => {
     productId: string,
     variantId: string,
     days: number,
-    dailyAmount: string
+    dailyAmount: string,
+    /** Defaults to the shared describe-block store — every pre-existing caller relies on this. Only the closure-day test below passes its own dedicated store. */
+    targetStoreId: string = storeId
   ) => {
     for (let i = 0; i < days; i++) {
       const occurredAt = new Date(Date.now() - (i + 1) * 24 * 60 * 60 * 1000);
       await movementService.postMovement({
-        storeId,
+        storeId: targetStoreId,
         productId,
         variantId,
         movementType: 'SALE_CONSUMPTION',
@@ -348,6 +358,66 @@ describe('findReorderSuggestions', () => {
 
     await adminDb.delete(supplierProducts).where(eq(supplierProducts.supplierId, secondSupplierId));
     await adminDb.delete(suppliers).where(eq(suppliers.id, secondSupplierId));
+  });
+
+  it('a store configured with real operatingHours excludes closure days from the consumption history entirely — never a fabricated zero-consumption reading', async () => {
+    const adminDb = drizzle(adminClient, { schema });
+    // A dedicated store closed every Sunday, distinct from the shared `storeId` (whose
+    // `operatingHours` is unset — open-every-day, the honest default other tests rely on).
+    const closedSundayStoreId = generateId();
+    await adminDb.insert(stores).values({
+      id: closedSundayStoreId,
+      organizationId,
+      name: 'Sunday-Closed Store',
+      timezone: 'UTC',
+      operatingHours: [
+        { day: 'mon', open: '09:00', close: '18:00' },
+        { day: 'tue', open: '09:00', close: '18:00' },
+        { day: 'wed', open: '09:00', close: '18:00' },
+        { day: 'thu', open: '09:00', close: '18:00' },
+        { day: 'fri', open: '09:00', close: '18:00' },
+        { day: 'sat', open: '09:00', close: '18:00' },
+        // 'sun' deliberately absent — the store is closed Sundays.
+      ],
+    });
+
+    try {
+      const { productId, variantId } = await seedProduct(adminDb, 'REORDER-TEST-CLOSURE');
+      await seedSupplierProduct(adminDb, productId, 'SUP-REORDER-CLOSURE');
+
+      const movementService = new MovementService(createScopedDb(client), organizationId);
+      await movementService.postMovement({
+        storeId: closedSundayStoreId,
+        productId,
+        variantId,
+        movementType: 'RECEIPT',
+        quantity: '5',
+        unitCost: '3.00',
+        currency: 'USD',
+        occurredAt: new Date(Date.now() - 20 * 24 * 60 * 60 * 1000),
+        sourceType: 'TEST',
+      });
+      // Real consumption posted for EVERY calendar day in the last 10 days, Sundays included — a
+      // real receiving/POS system could genuinely record a movement on a day the store's own
+      // configured schedule says is closed (a late correction, a staff member coming in anyway).
+      // The fix under test is that `findReorderSuggestions` treats that Sunday's real movement as
+      // a closure day regardless — `isStoreClosedOn` is schedule-derived, not movement-derived.
+      await seedDailyConsumption(movementService, productId, variantId, 10, '2', closedSundayStoreId);
+
+      const groups = await findReorderSuggestions(createScopedDb(client), organizationId, closedSundayStoreId);
+      const row = groups.flatMap((g) => g.suggestions).find((s) => s.productId === productId);
+      expect(row).toBeDefined();
+      // The suggestion still resolves — closures don't block a suggestion, they only affect which
+      // days count toward the confidence classification and the trimmed-mean input set.
+      expect(row!.suggestion.quantity.amount.greaterThan(0)).toBe(true);
+    } finally {
+      // Child-before-parent: stock_movements/stock_levels reference stores, and the file-level
+      // `afterEach` above only ever cleans up rows scoped to the SHARED `storeId`, never this
+      // test's own dedicated store.
+      await adminDb.delete(stockMovements).where(eq(stockMovements.storeId, closedSundayStoreId));
+      await adminDb.delete(stockLevels).where(eq(stockLevels.storeId, closedSundayStoreId));
+      await adminDb.delete(stores).where(eq(stores.id, closedSundayStoreId));
+    }
   });
 
   it('a different organization\'s store never sees another org\'s suggestions (I4)', async () => {

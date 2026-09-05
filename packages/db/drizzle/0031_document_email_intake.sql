@@ -1,8 +1,8 @@
 -- Hand-written, matching every migration since 0005 (stale drizzle-kit snapshot chain).
 --
 -- inbound email intake for supplier invoices. `document_email_intake`
--- records every verified webhook delivery this server accepted (the design's "sender allowlist per
--- tenant with quarantine for unknown senders"), whether accepted, quarantined, or unresolved to any
+-- records every verified webhook delivery this server accepted (a sender allowlist per
+-- tenant with quarantine for unknown senders), whether accepted, quarantined, or unresolved to any
 -- organization at all. `organization_id` is deliberately nullable — a genuinely unresolvable
 -- recipient slug means there is no tenant to scope the row to (see documents.ts schema comment for
 -- the full reasoning) — so this table does NOT get the standard tenant_isolation RLS policy every

@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import * as schema from '../schema/index';
 import {
   auditLogs,
@@ -411,8 +411,8 @@ describe('MovementService', () => {
     });
 
     it('the projection reflects both a posted RECEIPT and consumeFefo\'s consumption exactly (the ledger-projection consistency invariant, end to end)', async () => {
-      // A real receiving flow posts the RECEIPT movement AND creates the lot together (earlier work's
-      // job); this test does both explicitly to prove the projection tracks the full ledger, not
+      // A real receiving flow posts the RECEIPT movement AND creates the lot together;
+      // this test does both explicitly to prove the projection tracks the full ledger, not
       // just consumeFefo's own writes in isolation.
       const service = new MovementService(createScopedDb(client), organizationId);
       await service.postMovement({
@@ -460,6 +460,147 @@ describe('MovementService', () => {
         .where(eq(stockMovements.organizationId, organizationId));
       const ledgerSum = ledgerRows.reduce((sum, r) => sum + Number(r.quantity), 0);
       expect(ledgerSum).toBe(12);
+    });
+
+    describe('checkIdempotent (retry safety, 2026-09)', () => {
+      it('a second call with the SAME sourceId+productId and checkIdempotent:true does NOT double-consume — real proof against the actual stock level', async () => {
+        const lotRepo = new LotRepository(createScopedDb(client), organizationId);
+        await lotRepo.receive({
+          id: generateId(),
+          storeId,
+          productId,
+          variantId,
+          receivedAt: new Date(),
+          initialQuantity: '20.000000',
+          unitCost: '1.5000',
+          currency: 'USD',
+        });
+
+        const service = new MovementService(createScopedDb(client), organizationId);
+        const sourceId = generateId();
+        const consumeCall = () =>
+          service.consumeFefo({
+            storeId,
+            productId,
+            variantId,
+            requiredQuantity: '5.000000',
+            unit: 'g',
+            occurredAt: new Date(),
+            sourceType: 'pos-sync',
+            sourceId,
+            checkIdempotent: true,
+          });
+
+        const first = await consumeCall();
+        expect(first.alreadyConsumed).toBe(false);
+        expect(first.movements).toHaveLength(1);
+
+        // This is the retry — same sourceId, same productId, as a real sales-consumption-retry
+        // sweep tick would issue for a transaction whose OWN prior attempt already succeeded for
+        // this ingredient (e.g. a LATER ingredient in the same sale is what actually failed).
+        const second = await consumeCall();
+        expect(second.alreadyConsumed).toBe(true);
+        expect(second.movements).toHaveLength(1);
+        expect(second.movements[0]?.id).toBe(first.movements[0]?.id);
+        // Same real cost as the original, reconstructed from the already-posted row, not re-derived.
+        expect(second.totalCost?.amount.toString()).toBe(first.totalCost?.amount.toString());
+
+        // The real proof: exactly ONE draw happened against the lot, not two. `receive` (unlike a
+        // real goods-receipt flow) never posts a RECEIPT movement/touches stock_levels itself — the
+        // projection here reflects ONLY consumeFefo's own SALE_CONSUMPTION draws, starting from 0.
+        const levelRepo = new StockLevelRepository(createScopedDb(client), organizationId);
+        const level = await levelRepo.find(storeId, productId, variantId);
+        expect(level?.quantity).toBe('-5.000000');
+
+        const adminDb = drizzle(adminClient, { schema });
+        const movementRows = await adminDb
+          .select()
+          .from(stockMovements)
+          .where(and(eq(stockMovements.organizationId, organizationId), eq(stockMovements.sourceId, sourceId)));
+        expect(movementRows).toHaveLength(1);
+      });
+
+      it('without checkIdempotent, a second call with the SAME sourceId genuinely double-consumes — proving the flag, not incidental behavior, is what prevents it', async () => {
+        const lotRepo = new LotRepository(createScopedDb(client), organizationId);
+        await lotRepo.receive({
+          id: generateId(),
+          storeId,
+          productId,
+          variantId,
+          receivedAt: new Date(),
+          initialQuantity: '20.000000',
+          unitCost: '1.5000',
+          currency: 'USD',
+        });
+
+        const service = new MovementService(createScopedDb(client), organizationId);
+        const sourceId = generateId();
+        const consumeCall = () =>
+          service.consumeFefo({
+            storeId,
+            productId,
+            variantId,
+            requiredQuantity: '5.000000',
+            unit: 'g',
+            occurredAt: new Date(),
+            sourceType: 'pos-sync',
+            sourceId,
+            // checkIdempotent deliberately omitted — this is the real, pre-2026-09 gap this pair
+            // of tests exists to prove: without the flag, a naive retry really does double-consume.
+          });
+
+        await consumeCall();
+        await consumeCall();
+
+        const levelRepo = new StockLevelRepository(createScopedDb(client), organizationId);
+        const level = await levelRepo.find(storeId, productId, variantId);
+        expect(level?.quantity).toBe('-10.000000'); // -5 + -5, the real double-consumption
+      });
+
+      it('checkIdempotent with a DIFFERENT sourceId for the same product is a genuinely new consumption, not skipped', async () => {
+        const lotRepo = new LotRepository(createScopedDb(client), organizationId);
+        await lotRepo.receive({
+          id: generateId(),
+          storeId,
+          productId,
+          variantId,
+          receivedAt: new Date(),
+          initialQuantity: '20.000000',
+          unitCost: '1.5000',
+          currency: 'USD',
+        });
+
+        const service = new MovementService(createScopedDb(client), organizationId);
+        const first = await service.consumeFefo({
+          storeId,
+          productId,
+          variantId,
+          requiredQuantity: '5.000000',
+          unit: 'g',
+          occurredAt: new Date(),
+          sourceType: 'pos-sync',
+          sourceId: generateId(),
+          checkIdempotent: true,
+        });
+        expect(first.alreadyConsumed).toBe(false);
+
+        const second = await service.consumeFefo({
+          storeId,
+          productId,
+          variantId,
+          requiredQuantity: '5.000000',
+          unit: 'g',
+          occurredAt: new Date(),
+          sourceType: 'pos-sync',
+          sourceId: generateId(), // a genuinely different transaction
+          checkIdempotent: true,
+        });
+        expect(second.alreadyConsumed).toBe(false);
+
+        const levelRepo = new StockLevelRepository(createScopedDb(client), organizationId);
+        const level = await levelRepo.find(storeId, productId, variantId);
+        expect(level?.quantity).toBe('-10.000000'); // two real, distinct consumptions
+      });
     });
   });
 

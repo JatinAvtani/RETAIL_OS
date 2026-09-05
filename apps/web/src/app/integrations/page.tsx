@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { TRPCClientError } from '@trpc/client';
 import { trpc } from '@/lib/trpc';
+import { humanizeEnum } from '@/lib/format';
 import {
   Badge,
   Button,
@@ -10,10 +11,13 @@ import {
   ErrorNotice,
   LoadingState,
   PageHeader,
+  StatTile,
+  StatTileGrid,
   Table,
   Td,
   Th,
   Tr,
+  Value,
   type BadgeTone,
 } from '@/components/ui';
 
@@ -110,6 +114,31 @@ export default function IntegrationsPage() {
         </div>
       )}
 
+      {stores.length > 0 && (
+        <StatTileGrid className="mb-6">
+          <StatTile
+            label="Connected"
+            value={String(health.filter((h) => h.status === 'CONNECTED').length)}
+            unknownReason="No stores available"
+          />
+          <StatTile
+            label="Expired or degraded"
+            value={String(health.filter((h) => h.status === 'EXPIRED' || h.status === 'DEGRADED').length)}
+            unknownReason="No stores available"
+          />
+          <StatTile
+            label="Failed"
+            value={String(health.filter((h) => h.status === 'FAILED').length)}
+            unknownReason="No stores available"
+          />
+          <StatTile
+            label="Not connected"
+            value={String(stores.length - health.length)}
+            unknownReason="No stores available"
+          />
+        </StatTileGrid>
+      )}
+
       <Card>
         <Table>
           <thead>
@@ -133,32 +162,35 @@ export default function IntegrationsPage() {
                     {connectionHealth ? (
                       <div className="space-y-1">
                         <Badge tone={STATUS_TONES[connectionHealth.status]}>
-                          {connectionHealth.status.toLowerCase()}
+                          {humanizeEnum(connectionHealth.status)}
                         </Badge>
                         {connectionHealth.error && (
                           <p className="text-xs text-danger">{connectionHealth.error.message}</p>
                         )}
                       </div>
                     ) : (
-                      <Badge tone="neutral">not connected</Badge>
+                      <Badge tone="neutral">Not connected</Badge>
                     )}
                   </Td>
                   <Td className="text-content-muted">
-                    {connectionHealth ? describeFreshness(connectionHealth.freshness) : '—'}
+                    <Value value={connectionHealth ? describeFreshness(connectionHealth.freshness) : null} />
                   </Td>
                   <Td className="text-content-muted">
                     {connectionHealth ? (
-                      <>
-                        {connectionHealth.unmappedItemCount > 0 && (
-                          <span className="mr-2">{connectionHealth.unmappedItemCount} unmapped items</span>
-                        )}
-                        {connectionHealth.quarantineCount > 0 && (
-                          <span>{connectionHealth.quarantineCount} quarantined sales</span>
-                        )}
-                        {connectionHealth.unmappedItemCount === 0 && connectionHealth.quarantineCount === 0 && '—'}
-                      </>
+                      connectionHealth.unmappedItemCount === 0 && connectionHealth.quarantineCount === 0 ? (
+                        <Badge tone="positive">All clean</Badge>
+                      ) : (
+                        <>
+                          {connectionHealth.unmappedItemCount > 0 && (
+                            <span className="mr-2">{connectionHealth.unmappedItemCount} unmapped items</span>
+                          )}
+                          {connectionHealth.quarantineCount > 0 && (
+                            <span>{connectionHealth.quarantineCount} quarantined sales</span>
+                          )}
+                        </>
+                      )
                     ) : (
-                      '—'
+                      <Value value={null} />
                     )}
                   </Td>
                   <Td align="right">

@@ -18,6 +18,9 @@ import type { CurrencyCode } from '../primitives/currency.js';
 /** UTF-8 BOM (EF BB BF) — Excel's own CSV export writes this; Papa Parse doesn't strip it automatically. */
 const stripBom = (text: string): string => (text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
 
+/** Every currency this codebase's `CurrencyCode` union actually accepts — kept in sync with `primitives/currency.ts` by hand, matching this file's own unit-code validation precedent. */
+const REAL_CURRENCY_CODES = ['USD', 'EUR', 'GBP', 'INR'] as const;
+
 export type DetectedCsvHeaders = {
   headers: string[];
   /** First few DATA rows (never the header row itself), raw string cells — the mapping UI's own preview, before any column mapping is applied. */
@@ -234,6 +237,10 @@ export const parseCsvRows = (
     }
 
     const currencyRaw = currencyIdx !== -1 ? cells[currencyIdx]?.trim().toUpperCase() : undefined;
+    if (currencyRaw && !(REAL_CURRENCY_CODES as readonly string[]).includes(currencyRaw)) {
+      issues.push({ rowIndex, reason: `unrecognized currency '${currencyRaw}' — must be one of ${REAL_CURRENCY_CODES.join(', ')}` });
+      return;
+    }
     const currency = (currencyRaw as CurrencyCode | undefined) ?? defaultCurrency;
 
     const quantityStr = quantity.toFixed(6);

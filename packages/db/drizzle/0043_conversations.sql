@@ -2,7 +2,7 @@
 -- ("retaining the bundle is what makes disputes resolvable").
 --
 -- messages.organization_id is a deliberate deviation from a first literal SQL sketch (which
--- has only conversation_id) — confirmed with the user: every other tenant-scoped child table in
+-- has only conversation_id) — every other tenant-scoped child table in
 -- this codebase that could derive its tenant via a parent join instead carries its own
 -- organization_id directly (sales_transaction_lines, document_extractions, recipe_components),
 -- for real RLS + defense-in-depth (I4), matching every existing table's flat

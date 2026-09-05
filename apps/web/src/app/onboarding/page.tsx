@@ -14,6 +14,7 @@ import {
   LoadingState,
   PageHeader,
   StepRail,
+  Value,
   WorkflowFooter,
 } from '@/components/ui';
 import { OnboardingHealthPanel } from '@/components/onboarding-health';
@@ -467,8 +468,12 @@ const ParLevelsStep = ({
                 <span className="font-medium text-content">
                   {productNameById.get(row.productId) ?? `Product ${row.productId.slice(0, 8)}…`}
                 </span>
-                <span>par {row.parLevel ?? '—'}</span>
-                <span>reorder at {row.reorderPoint ?? '—'}</span>
+                <span>
+                  par <Value value={row.parLevel} />
+                </span>
+                <span>
+                  reorder at <Value value={row.reorderPoint} />
+                </span>
               </li>
             ))}
           </ul>

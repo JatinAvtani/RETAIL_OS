@@ -31,3 +31,7 @@ mock-data/*
 
 # Local database backups — never committed (they can contain full tenant data).
 .backups/
+
+# Locally-generated reports and exports (submission PDFs, audit output). Reproducible artifacts,
+# not source — and a broad `git add -A` would otherwise sweep them into a public repository.
+output/

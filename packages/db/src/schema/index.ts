@@ -38,3 +38,4 @@ export * from './fact-tables';
 export * from './conversations';
 export * from './notifications';
 export * from './onboarding';
+export * from './investigations';

@@ -69,6 +69,16 @@ export default function ManagerDashboardPage() {
       .finally(() => setLoading(false));
   }, [selectedStoreId, days]);
 
+  /**
+   * A real, recorded zero for today — distinct from `null` ("unknown"). Nothing has been rung up
+   * yet, which is a normal state (early morning, a closed store, a POS sync that hasn't run), not
+   * a decline worth flagging against the trailing average.
+   */
+  const todayHasNoSalesYet =
+    summary?.todayVsAverage.today !== null &&
+    summary?.todayVsAverage.today !== undefined &&
+    Number(summary.todayVsAverage.today.amount) === 0;
+
   return (
     <>
       <PageHeader
@@ -111,16 +121,32 @@ export default function ManagerDashboardPage() {
       {!loading && !error && summary && (
         <>
           <StatTileGrid className="mb-6">
+            {/* A day with genuinely nothing rung up yet is not a business decline, but a bare
+                "0.00" under a red "down vs trailing average" badge reads as exactly that — the
+                comparison implies a verdict the data doesn't support (early morning, a closed
+                store, a POS sync that hasn't run). The figure is still shown truthfully; only the
+                DELTA is withheld, matching `direction: null`'s own established meaning elsewhere
+                on this dashboard: no real comparison basis, so no verdict. */}
             <StatTile
               label="Today vs. trailing average"
               value={fmt(summary.todayVsAverage.today)}
               unknownReason="No priced sales recorded today"
               hint={
-                summary.todayVsAverage.trailingDailyAverage
-                  ? `avg ${fmt(summary.todayVsAverage.trailingDailyAverage)}/day over ${summary.period.days} days`
-                  : 'No trailing average yet'
+                todayHasNoSalesYet
+                  ? 'Nothing rung up yet today'
+                  : summary.todayVsAverage.trailingDailyAverage
+                    ? `avg ${fmt(summary.todayVsAverage.trailingDailyAverage)}/day over ${summary.period.days} days`
+                    : 'No trailing average yet'
               }
-              delta={{ direction: summary.todayVsAverage.direction, label: 'vs trailing average', higherIsBetter: true }}
+              {...(todayHasNoSalesYet
+                ? {}
+                : {
+                    delta: {
+                      direction: summary.todayVsAverage.direction,
+                      label: 'vs trailing average',
+                      higherIsBetter: true,
+                    },
+                  })}
             />
             {/* These are counts, so zero is a real and good value rather than an absence. The state
                 rides in a badge beneath rather than recolouring the digit — see `StatTile`. */}

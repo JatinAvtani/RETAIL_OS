@@ -6,6 +6,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { TRPCClientError } from '@trpc/client';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
+import { humanizeEnum } from '@/lib/format';
 import { Button, Card, ErrorNotice, Field, Input, LoadingState, PageHeader, Select, Table, Td, Th, Tr } from '@/components/ui';
 
 type GetPoResult = Awaited<ReturnType<typeof trpc.purchaseOrders.get.query>>;
@@ -200,7 +201,7 @@ export default function ReceivePurchaseOrderPage() {
                 return (
                   <Tr key={line.id}>
                     <Td>{productName(line.productId)}</Td>
-                    <Td>{String(line.discrepancyCode).replace(/_/g, ' ')}</Td>
+                    <Td>{humanizeEnum(String(line.discrepancyCode))}</Td>
                     <Td>{photoKeys.length} attached</Td>
                     <Td align="right">
                       <input
@@ -247,72 +248,96 @@ export default function ReceivePurchaseOrderPage() {
           <p className="text-sm text-content-subtle">Every line on this purchase order has already been fully received.</p>
         </Card>
       ) : (
-        <Card>
-          <Table>
-            <thead>
-              <tr>
-                <Th>Product</Th>
-                <Th align="right">Outstanding</Th>
-                <Th align="right">Received qty</Th>
-                <Th>Lot number</Th>
-                <Th>Expiry</Th>
-                <Th>Discrepancy</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {outstandingLines.map((line) => {
-                const draft = drafts[line.id];
-                if (!draft) return null;
-                return (
-                  <Tr key={line.id}>
-                    <Td>{productName(line.productId)}</Td>
-                    <Td variant="numeric">
-                      {remainingBaseUnits(line)}
-                    </Td>
-                    <Td align="right">
-                      <Input
-                        type="text"
-                        value={draft.receivedQuantityBaseUnits}
-                        onChange={(e) => updateDraft(line.id, { receivedQuantityBaseUnits: e.target.value })}
-                        className="w-24 text-right"
-                      />
-                    </Td>
-                    <Td>
-                      <Input type="text" value={draft.lotNumber} onChange={(e) => updateDraft(line.id, { lotNumber: e.target.value })} className="w-32" />
-                    </Td>
-                    <Td>
-                      <Input type="date" value={draft.expiryDate} onChange={(e) => updateDraft(line.id, { expiryDate: e.target.value })} className="w-36" />
-                    </Td>
-                    <Td>
-                      <Select
-                        value={draft.discrepancyCode}
-                        onChange={(e) => updateDraft(line.id, { discrepancyCode: e.target.value as LineDraft['discrepancyCode'] })}
-                        className="w-32"
-                      >
-                        <option value="">None</option>
-                        {DISCREPANCY_CODES.map((code) => (
-                          <option key={code} value={code}>
-                            {code.replace(/_/g, ' ')}
-                          </option>
-                        ))}
-                      </Select>
-                      {draft.discrepancyCode && (
-                        <Field label="Notes">
-                          <Input
-                            type="text"
-                            value={draft.discrepancyNotes}
-                            onChange={(e) => updateDraft(line.id, { discrepancyNotes: e.target.value })}
-                            placeholder="What happened?"
-                          />
-                        </Field>
-                      )}
-                    </Td>
-                  </Tr>
-                );
-              })}
-            </tbody>
-          </Table>
-        </Card>
+        <>
+          {/* Desktop/tablet-landscape: the full table. Hidden below `sm` — 6 columns, 4 of them
+              real form controls including a conditionally-revealed nested field, cannot reflow
+              onto a narrow screen without either horizontal scroll (hiding the product name mid-
+              entry, the same real failure mode as the stocktake table) or controls too small to
+              tap reliably. */}
+          <Card className="hidden sm:block">
+            <Table>
+              <thead>
+                <tr>
+                  <Th>Product</Th>
+                  <Th align="right">Outstanding</Th>
+                  <Th align="right">Received qty</Th>
+                  <Th>Lot number</Th>
+                  <Th>Expiry</Th>
+                  <Th>Discrepancy</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {outstandingLines.map((line) => {
+                  const draft = drafts[line.id];
+                  if (!draft) return null;
+                  return (
+                    <Tr key={line.id}>
+                      <Td>{productName(line.productId)}</Td>
+                      <Td variant="numeric">
+                        {remainingBaseUnits(line)}
+                      </Td>
+                      <Td align="right">
+                        <Input
+                          type="text"
+                          value={draft.receivedQuantityBaseUnits}
+                          onChange={(e) => updateDraft(line.id, { receivedQuantityBaseUnits: e.target.value })}
+                          className="w-24 text-right"
+                        />
+                      </Td>
+                      <Td>
+                        <Input type="text" value={draft.lotNumber} onChange={(e) => updateDraft(line.id, { lotNumber: e.target.value })} className="w-32" />
+                      </Td>
+                      <Td>
+                        <Input type="date" value={draft.expiryDate} onChange={(e) => updateDraft(line.id, { expiryDate: e.target.value })} className="w-36" />
+                      </Td>
+                      <Td>
+                        <Select
+                          value={draft.discrepancyCode}
+                          onChange={(e) => updateDraft(line.id, { discrepancyCode: e.target.value as LineDraft['discrepancyCode'] })}
+                          className="w-32"
+                        >
+                          <option value="">None</option>
+                          {DISCREPANCY_CODES.map((code) => (
+                            <option key={code} value={code}>
+                              {humanizeEnum(code)}
+                            </option>
+                          ))}
+                        </Select>
+                        {draft.discrepancyCode && (
+                          <Field label="Notes">
+                            <Input
+                              type="text"
+                              value={draft.discrepancyNotes}
+                              onChange={(e) => updateDraft(line.id, { discrepancyNotes: e.target.value })}
+                              placeholder="What happened?"
+                            />
+                          </Field>
+                        )}
+                      </Td>
+                    </Tr>
+                  );
+                })}
+              </tbody>
+            </Table>
+          </Card>
+
+          {/* Mobile/tablet-portrait: one card per line, no horizontal scroll, `size="lg"` controls. */}
+          <div className="space-y-3 sm:hidden">
+            {outstandingLines.map((line) => {
+              const draft = drafts[line.id];
+              if (!draft) return null;
+              return (
+                <ReceiveLineCard
+                  key={line.id}
+                  productName={productName(line.productId)}
+                  outstanding={remainingBaseUnits(line)}
+                  draft={draft}
+                  onChange={(patch) => updateDraft(line.id, patch)}
+                />
+              );
+            })}
+          </div>
+        </>
       )}
 
       <div className="mt-6 flex items-center gap-2">
@@ -328,6 +353,83 @@ export default function ReceivePurchaseOrderPage() {
     </>
   );
 }
+
+/**
+ * One outstanding PO line's mobile card — the same real fields as the desktop table's row
+ * (received qty, lot number, expiry, discrepancy + notes), stacked vertically with `size="lg"`
+ * controls so nothing needs horizontal scroll or a too-small tap target while physically checking
+ * off a delivery.
+ */
+const ReceiveLineCard = ({
+  productName,
+  outstanding,
+  draft,
+  onChange,
+}: {
+  productName: string;
+  outstanding: string;
+  draft: LineDraft;
+  onChange: (patch: Partial<LineDraft>) => void;
+}) => (
+  <Card className="p-4">
+    <div className="flex items-baseline justify-between gap-3">
+      <p className="font-medium text-content">{productName}</p>
+      <p className="shrink-0 text-xs text-content-subtle">
+        Outstanding: <span className="font-mono">{outstanding}</span>
+      </p>
+    </div>
+
+    <div className="mt-3">
+      <Field label="Received quantity">
+        <Input
+          type="text"
+          size="lg"
+          value={draft.receivedQuantityBaseUnits}
+          onChange={(e) => onChange({ receivedQuantityBaseUnits: e.target.value })}
+        />
+      </Field>
+    </div>
+
+    <div className="mt-3 grid grid-cols-2 gap-3">
+      <Field label="Lot number">
+        <Input type="text" size="lg" value={draft.lotNumber} onChange={(e) => onChange({ lotNumber: e.target.value })} />
+      </Field>
+      <Field label="Expiry">
+        <Input type="date" size="lg" value={draft.expiryDate} onChange={(e) => onChange({ expiryDate: e.target.value })} />
+      </Field>
+    </div>
+
+    <div className="mt-3">
+      <Field label="Discrepancy">
+        <Select
+          size="lg"
+          value={draft.discrepancyCode}
+          onChange={(e) => onChange({ discrepancyCode: e.target.value as LineDraft['discrepancyCode'] })}
+        >
+          <option value="">None</option>
+          {DISCREPANCY_CODES.map((code) => (
+            <option key={code} value={code}>
+              {humanizeEnum(code)}
+            </option>
+          ))}
+        </Select>
+      </Field>
+    </div>
+    {draft.discrepancyCode && (
+      <div className="mt-3">
+        <Field label="Notes">
+          <Input
+            type="text"
+            size="lg"
+            value={draft.discrepancyNotes}
+            onChange={(e) => onChange({ discrepancyNotes: e.target.value })}
+            placeholder="What happened?"
+          />
+        </Field>
+      </div>
+    )}
+  </Card>
+);
 
 /** `quantityBaseUnits` (ordered) minus `receivedQuantityBaseUnits` (received so far, null meaning zero — I7 at the schema layer, not this UI's own invention). A line already fully received returns `'0'`, filtered out of the outstanding list. */
 function remainingBaseUnits(line: PoLine): string {

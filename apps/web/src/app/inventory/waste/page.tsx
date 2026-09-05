@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
 import { useStores } from '@/lib/use-stores';
+import { humanizeEnum } from '@/lib/format';
 import {
   Button,
   Card,
@@ -125,6 +126,7 @@ export default function WastePage() {
 
             <Field label="Store">
               <Select
+                size="lg"
                 value={selectedStoreId}
                 onChange={(event) => setSelectedStoreId(event.target.value)}
               >
@@ -137,7 +139,11 @@ export default function WastePage() {
             </Field>
 
             <Field label="Product" hint="Only products with stock at this store can be wasted.">
-              <Select value={variantKey} onChange={(event) => setVariantKey(event.target.value)}>
+              <Select
+                size="lg"
+                value={variantKey}
+                onChange={(event) => setVariantKey(event.target.value)}
+              >
                 {levels.length === 0 && <option value="">No stock at this store</option>}
                 {levels.map((level) => (
                   <option
@@ -152,12 +158,13 @@ export default function WastePage() {
 
             <Field label="Reason">
               <Select
+                size="lg"
                 value={reasonCode}
                 onChange={(event) => setReasonCode(event.target.value as typeof reasonCode)}
               >
                 {WASTE_REASONS.map((reason) => (
                   <option key={reason} value={reason}>
-                    {reason.toLowerCase().replace(/_/g, ' ')}
+                    {humanizeEnum(reason)}
                   </option>
                 ))}
               </Select>
@@ -165,6 +172,7 @@ export default function WastePage() {
 
             <Field label="Quantity">
               <Input
+                size="lg"
                 type="text"
                 inputMode="decimal"
                 value={quantity}
@@ -176,6 +184,7 @@ export default function WastePage() {
             <Button
               type="submit"
               variant="primary"
+              size="lg"
               disabled={submitting || levels.length === 0}
               className="w-full"
             >

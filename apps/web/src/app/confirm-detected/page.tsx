@@ -26,9 +26,9 @@ type SupplierCandidate = Awaited<ReturnType<typeof trpc.productDetection.detectS
 const UNIT_OPTIONS = ['kg', 'g', 'l', 'ml', 'mg', 'each'] as const;
 
 /**
- * the bulk-confirm screen the plan calls "where onboarding is won or lost." Detection
- * (earlier work) only ever proposes — every field here is editable before confirming, and
- * confirming is the ONLY place this epic writes a real product/supplier (I9). Suppliers confirm
+ * The bulk-confirm screen — where onboarding is won or lost. Detection only ever proposes —
+ * every field here is editable before confirming, and confirming is the ONLY place this flow
+ * writes a real product/supplier (I9). Suppliers confirm
  * first, in one click each (no editable fields exist to confirm — see the honest scope-narrowing
  * note in supplier-detection.ts), since a product's evidence lines can only resolve to a real
  * supplier mapping once that supplier is a real row (confirmProduct reports an unconfirmed
@@ -141,8 +141,8 @@ export default function ConfirmDetectedPage() {
   };
 
   /**
-   * "Merge selected" — the plan named this in own bullet list and it was flagged as a real
-   * unbuilt gap at the time. The detectors deduplicate WITHIN their own clustering, but two
+   * "Merge selected" — a real gap in the original detection flow. The detectors deduplicate
+   * WITHIN their own clustering, but two
    * genuinely-separate clusters can still describe one real product ("Flour T55 25kg" and "T55
    * FLOUR 25KG SACK" from two suppliers with different SKUs), and nothing could combine them.
    *
@@ -416,7 +416,7 @@ export default function ConfirmDetectedPage() {
 
           {Object.keys(confirmResults).length > 0 && (
             <Card className="mt-6 p-5">
-              <h2 className="mb-2 text-sm font-semibold text-content">Confirmed this session</h2>
+              <h2 className="mb-2 text-sm font-semibold text-content">Confirmed just now</h2>
               <ul className="space-y-1 text-sm text-content-muted">
                 {Object.entries(confirmResults).map(([key, result]) => (
                   <li key={key}>

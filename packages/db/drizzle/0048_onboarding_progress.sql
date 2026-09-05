@@ -1,5 +1,5 @@
 -- onboarding_progress — one row per org, tracking the guided setup wizard's resumable/skippable
--- steps (spec 03 M9). Org creation + first store are already handled by auth.signup itself, so
+-- steps. Org creation + first store are already handled by auth.signup itself, so
 -- the wizard's own tracked steps start from "connect sales."
 CREATE TABLE IF NOT EXISTS "onboarding_progress" (
 	"id" uuid PRIMARY KEY NOT NULL,

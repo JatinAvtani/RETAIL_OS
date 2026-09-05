@@ -6,6 +6,7 @@ import {
   SearchRepository,
   ProductRepository,
   StoreRepository,
+  SupplierProductRepository,
 } from '@retailos/db';
 import { createGeminiChatProvider, modelForTask } from '@retailos/ai';
 import type { AuthContext, Permission } from '@retailos/authz';
@@ -22,6 +23,7 @@ import {
   type BriefingCandidate,
   type RefusalInfo,
   type GroundingBundle,
+  type ActionDraftResult,
 } from '@retailos/assistant';
 import { protectedProcedure, router } from '../trpc';
 
@@ -139,7 +141,12 @@ export const assistantRouter = router({
     // the planner is GIVEN the real list and never trusted with an id it did not copy from it.
     const accessibleProducts = await new ProductRepository(ctx.db, organizationId).findAllWithDefaultVariant();
 
-    const outcome = await runPipeline(input.question, provider, modelForTask('CLASSIFY'), modelForTask('PLAN'), auth, metricCtx, accessibleStores, accessibleProducts);
+    // Real, confirmed supplier-product mappings this org can order from — the same closed
+    // candidate list discipline as stores/products above, so an ACTION_DRAFT question can only ever
+    // reference a product this org has genuinely confirmed as orderable, never one the model invents.
+    const actionCandidates = await new SupplierProductRepository(ctx.db, organizationId).findAllConfirmedWithLabels();
+
+    const outcome = await runPipeline(input.question, provider, modelForTask('CLASSIFY'), modelForTask('PLAN'), auth, metricCtx, accessibleStores, accessibleProducts, actionCandidates);
 
     if (outcome.kind === 'error') {
       // `outcome.reason` is the RAW provider error (a Gemini 429/503 JSON body, etc.) — diagnostic,
@@ -160,6 +167,23 @@ export const assistantRouter = router({
     if (outcome.kind === 'unsupported') {
       await messageRepository.create({ conversationId, role: 'ASSISTANT', content: outcome.reason, validationResult: { grounded: false, unsupportedIntent: outcome.intent } });
       return { conversationId, kind: 'unsupported' as const, intent: outcome.intent, reason: outcome.reason };
+    }
+
+    if (outcome.kind === 'draft') {
+      // `content` is built entirely from the ALREADY-VALIDATED draft (packages/assistant's own
+      // `validateLines`, which rejects any candidateId the model did not copy verbatim from the
+      // real list above) — never the model's own free-form prose, matching every other message
+      // row's "content is a render path, must never carry raw model output" discipline. This is a
+      // DRAFT only: nothing here creates a PurchaseOrder or writes to any repository (I9) — a human
+      // reviewing this text still has to take a separate, real action elsewhere to place the order.
+      const content = buildDraftContent(outcome.draft);
+      await messageRepository.create({
+        conversationId,
+        role: 'ASSISTANT',
+        content,
+        validationResult: { grounded: false, actionDraft: true },
+      });
+      return { conversationId, kind: 'draft' as const, intent: outcome.intent, draft: outcome.draft };
     }
 
     const { bundle, denied, failed, rejected } = outcome;
@@ -420,4 +444,24 @@ const fallbackContentFromBundle = (
     parts.push(`${refusal.items.length} item(s) could not be fully answered — see details below.`);
   }
   return parts.join(' ');
+};
+
+/**
+ * Built entirely from `outcome.draft` — never a raw model string — matching `fallbackContentFromBundle`'s
+ * own "content is a render path" discipline. `draft.lines` is already the VALIDATED set
+ * (`planActionDraft`'s own `validateLines`), so every line named here genuinely matches a real,
+ * confirmed supplier-product candidate; `draft.rejected` surfaces anything the model proposed that
+ * didn't validate, honestly, rather than silently dropping it. Explicitly states this is a draft
+ * only — no PurchaseOrder has been created (I9) — so a reader never mistakes this message for
+ * confirmation that an order was placed.
+ */
+const buildDraftContent = (draft: ActionDraftResult): string => {
+  if (draft.lines.length === 0) {
+    return draft.rejected.length > 0
+      ? `No draft could be created — ${draft.rejected.map((r) => r.reason).join('; ')}.`
+      : 'No draft could be created from this request — try naming a specific, already-confirmed product.';
+  }
+  const lineText = draft.lines.map((line) => `${line.quantity.toString()} ${line.unitLabel} of ${line.label}`).join('; ');
+  const rejectedText = draft.rejected.length > 0 ? ` (${draft.rejected.length} item(s) could not be drafted: ${draft.rejected.map((r) => r.reason).join('; ')})` : '';
+  return `Draft purchase order line(s) — ${lineText}. This is a draft only: no order has been placed. Review and create the real purchase order from the Purchase Orders page.${rejectedText}`;
 };

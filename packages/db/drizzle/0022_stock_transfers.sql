@@ -1,7 +1,7 @@
 -- Hand-written, not `drizzle-kit generate` output — the snapshot chain has been stale since
 -- migration 0005 (see 0008_units_and_conversions.sql's header and project memory for why).
 --
--- earlier work: inter-store transfers with a
+-- Inter-store transfers with a
 -- real in-transit window. lot_status needs a new value: a destination lot exists but must be
 -- invisible to FEFO (findFefoCandidates/consumeFefo only ever query status = 'ACTIVE') until the
 -- transfer is actually received.

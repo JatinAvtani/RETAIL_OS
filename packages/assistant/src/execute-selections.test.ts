@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import type { AuthContext } from '@retailos/authz';
-import { createDb, organizations, stores } from '@retailos/db';
+import { createDb, notificationRules, notifications, organizations, stores } from '@retailos/db';
 import { executeSelections } from './execute-selections';
 import type { ValidatedSelection } from './planning';
 
@@ -99,6 +99,11 @@ describe('executeSelections', () => {
     let adminConn: ReturnType<typeof createDb>;
 
     afterAll(async () => {
+      // `notifications.store_id` references `stores`, so these must go first. Sweep processors
+      // can create them for any org in the database, so a fixture that never makes one itself can
+      // still be holding some at teardown.
+      await adminConn.db.delete(notifications).where(eq(notifications.organizationId, ORG_ID));
+      await adminConn.db.delete(notificationRules).where(eq(notificationRules.organizationId, ORG_ID));
       await adminConn.db.delete(stores).where(eq(stores.organizationId, ORG_ID));
       await adminConn.db.delete(organizations).where(eq(organizations.id, ORG_ID));
       await appConn.client.end();

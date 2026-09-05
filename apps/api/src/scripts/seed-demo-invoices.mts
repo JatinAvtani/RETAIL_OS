@@ -289,7 +289,18 @@ for (const invoice of INVOICES) {
       unitPrice: { value: l.unitPrice, confidence: 0.96 },
       lineTotal: { value: lineTotal(l), confidence: 0.96 },
     })),
-    validation: { issues: [], canAutoApprove: false },
+    // `canAutoApprove` is the VALIDATION half only — "did every arithmetic/consistency gate pass",
+    // which for these corpus invoices it genuinely does (they balance exactly, hence `issues: []`).
+    // It was previously hardcoded `false` alongside an empty issue list: a state the real pipeline
+    // can never produce, since `validateExtraction` derives the flag as `!issues.some(BLOCK)`. That
+    // contradiction surfaced on the Documents screen as "0% auto-approval rate" sitting directly
+    // beside "None. Every extraction went through cleanly."
+    //
+    // These still land in REVIEW_REQUIRED, and for the real reason: `decideDocumentRouting` ANDs
+    // this flag with the CONFIDENCE half, and `discount` carries a genuine `null` confidence
+    // (nothing to score — the invoices have no discount line), which correctly fails the threshold.
+    // Same destination, arrived at honestly.
+    validation: { issues: [], canAutoApprove: true },
     overallConfidence: '0.9500',
   });
   await db.update(documents).set({ status: 'REVIEW_REQUIRED', type: 'INVOICE' }).where(eq(documents.id, documentId));

@@ -232,13 +232,17 @@ const checkPriceAnomaly = (lines: RawLine[], trailingPricesByLineIndex: Map<numb
   const issues: ValidationIssue[] = [];
 
   // The supplier name never resolved to a real row at all (OCR variance, or a genuinely new
-  // supplier) — every line's price-anomaly check was skipped, not "passed." A WARN per line with a
-  // SKU makes that visible to a human reviewer instead of a silently-clean-looking result.
+  // supplier) — every line's price-anomaly check was skipped, not "passed." BLOCK, not WARN: an
+  // unresolved supplier identity is not merely "one gate didn't run," it means posting has no real
+  // supplier to attribute cost/quantity to at all — the exact silent-loss risk `canAutoApprove`
+  // exists to prevent. Previously WARN-only, which let a document with an unresolved supplier and
+  // otherwise-high confidence reach AUTO_APPROVED wearing the same reassuring badge a real approval
+  // gets, priming a reviewer to trust it right when they most need to check it (2026-09 fix).
   if (!supplierResolved) {
     lines.forEach((line, index) => {
       if (line.sku.value === null) return;
       issues.push({
-        severity: 'WARN',
+        severity: 'BLOCK',
         code: 'PRICE_CHECK_UNAVAILABLE',
         field: `lines[${index}].unitPrice`,
         message: `Line ${index + 1}: price-anomaly check did not run — the extracted supplier name did not resolve to exactly one known supplier.`,
@@ -288,7 +292,7 @@ const medianOf = (values: Decimal[]): Decimal => {
 
 /**
  * Runs every gate and combines their issues. `canAutoApprove` is false whenever any BLOCK-severity
- * issue exists — WARN issues alone don't block auto-approval (earlier work's routing gate also folds in
+ * issue exists — WARN issues alone don't block auto-approval (the routing gate also folds in
  * confidence, which this function knows nothing about; this is arithmetic/consistency only).
  */
 export const validateExtraction = (fields: RawFields, lines: RawLine[], context: ValidationContext): ValidationResult => {

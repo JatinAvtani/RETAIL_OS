@@ -1,9 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
+import { humanizeEnum } from '@/lib/format';
 import { Badge, Button, Card, ErrorNotice, LoadingState, PageHeader, Select, StepRail, Value, type BadgeTone } from '@/components/ui';
 
 type ProductOption = Awaited<ReturnType<typeof trpc.products.list.query>>[number];
@@ -228,6 +229,11 @@ export default function DocumentReviewPage() {
   const [selectedField, setSelectedField] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('');
   const [showRejectForm, setShowRejectForm] = useState(false);
+  const rejectReasonRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (showRejectForm) rejectReasonRef.current?.focus();
+  }, [showRejectForm]);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -301,8 +307,8 @@ export default function DocumentReviewPage() {
     <>
       <PageHeader
         title="Review document"
-        {...(document.type !== 'OTHER' ? { description: `Classified as ${document.type}` } : {})}
-        actions={<Badge tone={documentStatusTone(document.status)}>{document.status.replace('_', ' ')}</Badge>}
+        {...(document.type !== 'OTHER' ? { description: `Classified as ${humanizeEnum(document.type)}` } : {})}
+        actions={<Badge tone={documentStatusTone(document.status)}>{humanizeEnum(document.status)}</Badge>}
       />
 
       {/* A rejected document has left the sequence rather than advanced through it, so it gets no
@@ -422,6 +428,7 @@ export default function DocumentReviewPage() {
                     </label>
                     <textarea
                       id="reject-reason"
+                      ref={rejectReasonRef}
                       value={rejectReason}
                       onChange={(e) => setRejectReason(e.target.value)}
                       rows={2}

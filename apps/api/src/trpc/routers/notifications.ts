@@ -120,6 +120,35 @@ export const notificationsRouter = router({
   }),
 
   /**
+   * The notification centre's own "resolve" gap, closed: `NotificationRepository.markResolved`
+   * was real and already used internally by every sweep processor (a condition self-clearing —
+   * a depleted lot, a mapped POS item), but had no user-triggered path — a manager who fixed the
+   * real underlying problem out of band (e.g. resolved a variance over the phone with a supplier)
+   * had no way to close the alert themselves; it would only clear on the NEXT sweep tick that
+   * happened to re-evaluate the same condition, which for a one-shot rule type like
+   * `stocktake_variance` never re-evaluates at all.
+   *
+   * Refuses an already-resolved notification with a real, typed error rather than silently
+   * no-op'ing (`markResolved` itself has no such guard — it's an unconditional UPDATE, correct for
+   * its existing internal callers, each of which only reaches it via `resolveDedupAction`'s own
+   * "still open" check) — a second manual resolve attempt on the same id is far more likely to be
+   * a genuine double-click/race than the idempotent-retry case `markRead`'s own no-op guard exists
+   * for, so this surfaces it instead of hiding it.
+   */
+  resolve: protectedProcedure.input(z.object({ id: z.string().uuid() })).mutation(async ({ ctx, input }) => {
+    const notificationRepository = new NotificationRepository(ctx.db, ctx.session.organizationId);
+    const existing = await notificationRepository.findById(input.id);
+    if (!existing) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Notification not found.' });
+    }
+    if (existing.resolvedAt !== null) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'This notification has already been resolved.' });
+    }
+    await notificationRepository.markResolved(input.id);
+    return { id: input.id };
+  }),
+
+  /**
    * A user's own preferences — always the CALLER's own row (`ctx.session.userId`), never a
    * target user id, so this needs no cross-tenant registry entry: there is no *Id-shaped input a
    * different tenant's session could substitute to read/write someone else's preferences. Real
@@ -141,7 +170,7 @@ export const notificationsRouter = router({
    * The feedback-loop report — "action rate closes the loop." Org-wide,
    * no `*Id`-shaped input, so this is correctly exempt from the cross-tenant registry, matching
    * `documents.accuracyTelemetry`'s own precedent for this exact shape of report. Gated on
-   * `financial:read` (confirmed with the user) — the same permission that already gates the owner
+   * `financial:read` — the same permission that already gates the owner
    * dashboard's other operational-health figures, since tuning alert thresholds is an owner/manager
    * decision, not a per-user preference.
    */

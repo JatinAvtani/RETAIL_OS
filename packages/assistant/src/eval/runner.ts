@@ -28,10 +28,14 @@ const runCase = async (evalCase: EvalCase, provider: ChatProvider, deps: EvalRun
   const intentMatches = outcome.intent === evalCase.expectedIntent;
   checks.push(check('intent', intentMatches, intentMatches ? `correctly classified as ${outcome.intent}` : `expected ${evalCase.expectedIntent}, got ${outcome.intent}`));
 
-  if (outcome.kind === 'unsupported') {
-    // A genuinely UNSUPPORTED/RETRIEVAL/HYBRID/ACTION_DRAFT classification is only correct for a
-    // case that expected exactly that intent — nothing further to check structurally, since no
-    // bundle/narration exists for an unsupported outcome.
+  if (outcome.kind === 'unsupported' || outcome.kind === 'draft') {
+    // A genuinely UNSUPPORTED/RETRIEVAL/HYBRID classification is only correct for a case that
+    // expected exactly that intent — nothing further to check structurally, since no
+    // bundle/narration exists for an unsupported outcome. `draft` is included here rather than
+    // given its own real ACTION_DRAFT eval path: no golden-set case exercises action drafting yet
+    // (the eval's ctx never supplies actionCandidates), so `runPipeline` cannot actually return
+    // `draft` today — this arm exists purely so the exhaustive discriminated-union narrowing below
+    // stays sound once a real ACTION_DRAFT eval case is added.
     return { caseId: evalCase.id, question: evalCase.question, passed: intentMatches, checks, finalText: null };
   }
 

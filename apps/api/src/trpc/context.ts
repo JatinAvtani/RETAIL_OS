@@ -2,6 +2,7 @@ import { createDb } from '@retailos/db';
 import { createRedisClient, SessionStore } from '@retailos/session';
 import { createStorageClient } from '@retailos/storage';
 import { createExtractionQueue, createEmbeddingQueue, createSquareSyncQueue, createQueueRedisConnection } from '@retailos/queue';
+import { generateRequestId, withRequestId } from '@retailos/logger';
 import type { Queue } from 'bullmq';
 import type { ExtractionJobData, EmbeddingJobData, SquareSyncJobData } from '@retailos/queue';
 import type { S3Client } from '@aws-sdk/client-s3';
@@ -26,7 +27,7 @@ export const GOODS_RECEIPT_PHOTOS_BUCKET = 'retailos-goods-receipt-photos';
  * `retailos_app` role, never a superuser. In local dev/production `DATABASE_URL` naturally IS
  * that connection, so the fallback is transparent. In CI, `DATABASE_URL` is the migration/seed
  * admin connection (superuser, needed for DDL and cross-tenant test seeding) — a real,
- * previously-undetected gap found during earlier work: `ci.yml` set `DATABASE_URL` to the superuser for
+ * previously-undetected gap: `ci.yml` set `DATABASE_URL` to the superuser for
  * the whole job, which meant every `apps/api` test, including the entire cross-tenant suite, ran
  * against a connection that bypasses RLS (`BYPASSRLS`) — RLS was never actually exercised in CI
  * for this app, only application-layer checks were. `ci.yml`'s test step now sets
@@ -59,7 +60,7 @@ export const extractionQueue: Queue<ExtractionJobData> = createExtractionQueue(
   createQueueRedisConnection(process.env.REDIS_URL ?? 'redis://localhost:6379')
 );
 
-/** earlier work — a real, separate connection matching `extractionQueue`'s own reasoning above; the embedding job's failure/backoff profile is genuinely distinct from extraction's. */
+/** A real, separate connection matching `extractionQueue`'s own reasoning above; the embedding job's failure/backoff profile is genuinely distinct from extraction's. */
 export const embeddingQueue: Queue<EmbeddingJobData> = createEmbeddingQueue(
   createQueueRedisConnection(process.env.REDIS_URL ?? 'redis://localhost:6379')
 );
@@ -84,12 +85,24 @@ export const squareSyncQueue: Queue<SquareSyncJobData> = createSquareSyncQueue(
  * be wasted Redis round trips. A procedure that needs an authenticated caller reads the cookie
  * itself via `ctx.req`/`ctx.sessionStore`, not through an ambient pre-resolved field.
  */
-export const createContext = ({ req, res }: CreateFastifyContextOptions) => ({
-  db,
-  sessionStore,
-  authRateLimiters,
-  req,
-  res,
-});
+/**
+ * A fresh `requestId` per tRPC call, threaded into every log line the procedure (or the error
+ * formatter, below) produces for it — the actual mechanism that turns a page's worth of unrelated
+ * `console.error` lines into "every line for THIS ONE failed request." Not derived from an incoming
+ * header: browsers/tRPC's own batch link don't send one, and trusting a client-supplied id would
+ * let one caller's logs collide with or spoof another's.
+ */
+export const createContext = ({ req, res }: CreateFastifyContextOptions) => {
+  const requestId = generateRequestId();
+  return {
+    db,
+    sessionStore,
+    authRateLimiters,
+    req,
+    res,
+    requestId,
+    logger: withRequestId(requestId, { path: req.url }),
+  };
+};
 
 export type Context = Awaited<ReturnType<typeof createContext>>;

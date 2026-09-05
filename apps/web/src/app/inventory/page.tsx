@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
 import { useStores } from '@/lib/use-stores';
-import { formatMoney, formatQuantityDisplay } from '@/lib/format';
+import { addDecimal, formatMoney, formatQuantityDisplay, multiplyDecimal } from '@/lib/format';
 import { useOrgCurrency } from '@/lib/use-org-currency';
 import {
   cx,
@@ -15,6 +15,8 @@ import {
   PageHeader,
   SkeletonRows,
   Select,
+  StatTile,
+  StatTileGrid,
   Table,
   Td,
   Th,
@@ -88,6 +90,46 @@ export default function InventoryPage() {
       />
 
       {error && <ErrorNotice>{error}</ErrorNotice>}
+
+      {!loading && !error && levels.length > 0 && (
+        <StatTileGrid className="mb-6">
+          <StatTile
+            label="SKUs on hand"
+            value={String(levels.length)}
+            unknownReason="No stock recorded yet"
+          />
+          <StatTile
+            label="Stockouts / negative"
+            value={String(levels.filter((l) => Number(l.quantity) <= 0).length)}
+            hint="Zero or negative on-hand lines"
+            unknownReason="No stock recorded yet"
+          />
+          <StatTile
+            label="Missing unit cost"
+            value={String(levels.filter((l) => l.avgUnitCost === null).length)}
+            hint="These lines are excluded from the value total"
+            unknownReason="No stock recorded yet"
+          />
+          <StatTile
+            label="Known stock value"
+            value={(() => {
+              const known = levels.filter((l) => l.avgUnitCost !== null);
+              if (known.length === 0) return null;
+              const total = known.reduce<string>((sum, l) => {
+                const lineValue = multiplyDecimal(l.quantity, l.avgUnitCost!);
+                return lineValue !== null ? (addDecimal(sum, lineValue) ?? sum) : sum;
+              }, '0');
+              return formatMoney(total, orgCurrency, { precision: 'currency' });
+            })()}
+            hint={
+              levels.some((l) => l.avgUnitCost === null)
+                ? 'Excludes lines with an unknown unit cost'
+                : 'Sum of on-hand quantity × average unit cost'
+            }
+            unknownReason="No line here has a known unit cost yet"
+          />
+        </StatTileGrid>
+      )}
 
       <Card>
         {(loading || storesLoading) && <SkeletonRows columns={5} />}

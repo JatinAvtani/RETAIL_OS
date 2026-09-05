@@ -1,6 +1,6 @@
 # Razorpay AI Buildathon — submission brief
 
-**Track:** Open Track
+**Track:** AI Finance Controller
 
 **Product:** Vyapaar
 **One sentence:** An operations-intelligence system that shows a food-service owner where margin
@@ -27,17 +27,47 @@ includes an unpriced
 ingredient, supplier price creep, declining delivery reliability, waste and receipt discrepancies
 so the product must handle imperfect evidence rather than a cherry-picked clean case.
 
+## The finance-ops loop this closes
+
+The track asks for an agent that closes one finance-ops loop across a batch of records, reporting
+its match rate and the exceptions it could not resolve. That loop here is **invoice reconciliation**:
+
+- Every posted supplier invoice line is matched against its purchase order and the goods receipt
+  that recorded what physically arrived — the same three-way match the production posting path runs
+  at real posting time, not a demo-only re-implementation.
+- The **batch reconciliation report** aggregates that already-persisted output into a measured match
+  rate over a real batch — comfortably past the brief's 50-record floor, and growing as more invoices
+  post — plus every unresolved exception ranked by dollar impact, with the supplier, product and
+  variance type for each. The line count is deliberately not quoted as a fixed figure here: it is
+  whatever the seeded corpus has actually posted at the moment the report runs, and the screen states
+  it directly.
+- The rate is reported as whatever the data actually is. A low rate means the corpus genuinely
+  contains quantity discrepancies between what was invoiced and what was received — which is the
+  finding the tool exists to surface, not a number to be tuned upward.
+
+Around that loop sits a **bounded multi-hop investigation agent**. A finding — detected by a
+scheduled sweep, with no question asked first — opens an investigation that decides whether one
+metric answers it or whether it needs a follow-up hop, up to a fixed cap. Every hop's narration is
+independently grounding-validated before it is stored, and each hop's input is the *validated* prior
+narration, never raw model output, so a bad inference cannot compound across hops. An investigation
+that reaches a root cause can end in a **draft action** — a reorder purchase order or a supplier
+price-variance flag — whose quantities and prices come entirely from existing domain functions. The
+model drafts; a human approves; only that separate, explicit approval call writes anything. The
+model is given no write tool at any point.
+
 ## Why the AI is meaningful
 
 The model is used where probabilistic interpretation helps:
 
 - extracting inconsistent supplier invoices, with deterministic validation afterward;
 - classifying a natural-language question and selecting registered metrics;
+- deciding whether an investigation needs another hop, and framing the follow-up question;
 - retrieving relevant document passages;
 - narrating already-computed results.
 
 It is deliberately not used for money arithmetic, inventory allocation, reorder quantities,
-three-way matching or anomaly detection. Those operations are deterministic code. Before narration
+three-way matching, match-rate computation, dollar-impact ranking or anomaly detection. Those
+operations are deterministic code. Before narration
 reaches the user, every numeric token must match a computed metric or occur verbatim in retrieved
 source text. One stricter regeneration is allowed; a second violation discards the prose and returns
 the structured results. The assistant has no write tools.
@@ -67,7 +97,15 @@ then validates any prose against those already-computed facts.
   measured customer outcomes.
 - The repository has not been load-tested and should not be described as production-ready.
 - Outbound supplier and notification email is mocked; no claim depends on a real delivered email.
-- Razorpay payment processing is not part of this build. This is an Open Track submission.
+- Razorpay payment processing is not part of this build; the finance-ops loop closed here is
+  invoice-to-receipt reconciliation, not payments.
+- The reconciliation match rate over the demo corpus is low, and is reported unchanged. The
+  discrepancies are real ones seeded into the corpus; raising the number would mean fabricating
+  agreement between invoices and receipts, which is the exact failure this project is built to
+  prevent.
+- The proactive investigation sweep is rate-limited by the model provider's free tier, so it paces
+  itself to a small batch per tick. A large backlog therefore drains over several ticks rather than
+  all at once.
 - A hosted URL is optional only if the reviewer quickstart is freshly verified and the five-minute
   video shows the product working without edits or hidden setup.
 

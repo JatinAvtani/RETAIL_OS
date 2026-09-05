@@ -5,5 +5,5 @@ import { AuthGuard } from '@/lib/auth-guard';
 export const metadata: Metadata = { title: 'Invoice matches' };
 
 export default function InvoiceMatchesLayout({ children }: { children: ReactNode }) {
-  return <AuthGuard width="form">{children}</AuthGuard>;
+  return <AuthGuard width="table">{children}</AuthGuard>;
 }

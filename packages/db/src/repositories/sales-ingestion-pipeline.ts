@@ -16,17 +16,17 @@ export type SalesIngestionResult =
  * `sales.ingested → for each line: POSItem → MenuItem? NO → unmapped_sales quarantine... YES →
  * record consumption`.
  *
- * Sales-source-agnostic, same confirmed scope as earlier work: `pos_items`/`sales_transactions` don't
+ * Sales-source-agnostic, same scope as `SaleConsumptionService`: `pos_items`/`sales_transactions` don't
  * exist yet, so this function has no opinion on HOW a POS item gets
  * mapped to a menu item — it only encodes the branch. `menuItemId` is `null` when the caller
- * (eventually the later milestone's ingestion job, consulting its own `pos_items.mapping_status`) has no
+ * (eventually the ingestion job, consulting its own `pos_items.mapping_status`) has no
  * mapping; this function then quarantines rather than guessing or dropping the sale line (I7).
  * Revenue is recorded on the quarantine row directly, independent of whether consumption ever
- * resolves — "revenue counts, consumption doesn't, nothing is silently dropped" (the plan's exact
- * acceptance criterion), decoupling the two rather than blocking revenue recognition on a mapping.
+ * resolves — "revenue counts, consumption doesn't, nothing is silently dropped" is the
+ * acceptance criterion, decoupling the two rather than blocking revenue recognition on a mapping.
  *
  * When `menuItemId` IS present, this delegates straight to `SaleConsumptionService` — the mapped
- * path is unchanged from earlier work, this function adds nothing on top of it.
+ * path is unchanged, this function adds nothing on top of it.
  */
 export class SalesIngestionPipeline {
   private readonly db: Db;
@@ -54,6 +54,7 @@ export class SalesIngestionPipeline {
     sourceType: string;
     sourceId?: string;
     actorUserId?: string;
+    checkRetry?: boolean;
   }): Promise<SalesIngestionResult> {
     if (input.menuItemId === null) {
       const unmappedSaleRepository = new UnmappedSaleRepository(this.db, this.organizationId);
@@ -85,6 +86,7 @@ export class SalesIngestionPipeline {
       sourceType: input.sourceType,
       ...(input.sourceId !== undefined ? { sourceId: input.sourceId } : {}),
       ...(input.actorUserId !== undefined ? { actorUserId: input.actorUserId } : {}),
+      ...(input.checkRetry === true ? { checkRetry: true } : {}),
     });
   }
 }

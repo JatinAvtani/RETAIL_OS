@@ -104,12 +104,13 @@ jobs:
           done
 
       # ubuntu-latest ships postgresql-client preinstalled, so `psql` is available without an
-      # install step. Both scripts are idempotent (CREATE EXTENSION / CREATE ROLE ... IF NOT
+      # install step. All three scripts are idempotent (CREATE EXTENSION / CREATE ROLE ... IF NOT
       # EXISTS), so re-running them on a warm database is safe.
       - name: Enable required Postgres extensions
         run: |
           PGPASSWORD=postgres psql -h localhost -U postgres -d retailos -f docker/postgres/init/01-extensions.sql
           PGPASSWORD=postgres psql -h localhost -U postgres -d retailos -f docker/postgres/init/02-app-role.sql
+          PGPASSWORD=postgres psql -h localhost -U postgres -d retailos -f docker/postgres/init/03-sweeper-role.sql
 
       - name: Run migrations
         run: pnpm --filter @retailos/db db:migrate
@@ -133,7 +134,7 @@ jobs:
       # and for cross-tenant tests' own admin/seeding connection, which legitimately needs
       # superuser to write across two tenants). Without this override, the entire apps/api
       # cross-tenant suite runs against a connection that bypasses RLS via BYPASSRLS — a real,
-      # previously-undetected gap found during 004-15's development: RLS was never actually
+      # previously-undetected gap: RLS was never actually
       # exercised in CI for apps/api, only application-layer checks were.
       - name: Unit + integration tests
         env:

@@ -97,7 +97,7 @@ describe('withMetricCache', () => {
     expect(result.value).toBe('100.0000');
   });
 
-  it('a real cache hit returns the ORIGINAL computedAt/freshness, not the current time — confirmed with the user, staleness must stay honest', async () => {
+  it('a real cache hit returns the ORIGINAL computedAt/freshness, not the current time — staleness must stay honest', async () => {
     const params = uniqueParams();
     const key = buildMetricCacheKey('net_revenue', 'org-hit', 'ALL', params);
     usedKeys.push(key);

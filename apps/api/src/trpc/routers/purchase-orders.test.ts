@@ -424,7 +424,19 @@ describe('purchaseOrders — create/addLine/submit/approve/reject/send/cancel', 
   });
 
   describe('send — PDF generation + mocked email', () => {
-    it('sending a PO whose supplier has no contact email on file returns a real error, but the PO is still SENT — I7', async () => {
+    /**
+     * Previously this asserted a 412 thrown TRPCError. Fixed as part of this session's audit
+     * finding: a delivery failure after a genuine SEND must not throw, because throwing tells the
+     * caller the whole mutation failed when the part that actually matters for the optimistic-lock
+     * contract (the state transition) genuinely succeeded — and worse, the OLD code left no
+     * distinct, queryable database fact recording that delivery never happened at all (`status`
+     * alone read as a false "successfully sent"). `send` now always returns 200 for a successful
+     * state transition, with a `delivery.ok` field the caller uses to learn whether the PDF/email
+     * side effect itself also succeeded — and `deliveryStatus` (a real side-channel column,
+     * mirroring `sales_transactions.consumption_status`) is what makes that fact durable and
+     * retryable rather than only visible in this one response.
+     */
+    it('sending a PO whose supplier has no contact email on file leaves it SENT with delivery.ok false and a real, queryable deliveryStatus FAILED — I7', async () => {
       const { organizationId, storeId, supplierId, productId, supplierProductId } = await setUpOrgWithSupplierProduct();
       const { token } = await issueSessionWithMembership(organizationId, 'OWNER', ['purchasing:read', 'purchasing:write', 'purchasing:approve']);
 
@@ -435,12 +447,88 @@ describe('purchaseOrders — create/addLine/submit/approve/reject/send/cancel', 
       await call('purchaseOrders.approve', token, { purchaseOrderId, expectedVersion: 2 });
 
       const sendResponse = await call('purchaseOrders.send', token, { purchaseOrderId, expectedVersion: 3 });
-      expect(sendResponse.statusCode).toBe(412);
+      expect(sendResponse.statusCode).toBe(200);
+      const sendBody = JSON.parse(sendResponse.body).result.data;
+      expect(sendBody.newStatus).toBe('SENT');
+      expect(sendBody.delivery.ok).toBe(false);
+      expect(sendBody.delivery.error).toMatch(/no contact email/);
 
       // The transition itself already committed before the PDF/email step ran — the design
-      // ties immutability to the state change, not to whether the notification succeeded.
+      // ties immutability to the state change, not to whether the notification succeeded. But
+      // deliveryStatus must now honestly reflect that nothing actually reached the supplier —
+      // the real gap this session's fix closes.
       const getResponse = await query('purchaseOrders.get', token, { purchaseOrderId });
-      expect(JSON.parse(getResponse.body).result.data.purchaseOrder.status).toBe('SENT');
+      const po = JSON.parse(getResponse.body).result.data.purchaseOrder;
+      expect(po.status).toBe('SENT');
+      expect(po.deliveryStatus).toBe('FAILED');
+      expect(po.deliveryError).toMatch(/no contact email/);
+      expect(po.deliveryAttempts).toBe(1);
+    });
+
+    it('resend on a purchase order whose delivery previously failed succeeds once a contact email is added, reaching deliveryStatus DELIVERED', async () => {
+      const { organizationId, storeId, supplierId, productId, supplierProductId } = await setUpOrgWithSupplierProduct();
+      const { token } = await issueSessionWithMembership(organizationId, 'OWNER', ['purchasing:read', 'purchasing:write', 'purchasing:approve']);
+
+      const createResponse = await call('purchaseOrders.create', token, { storeId, supplierId, poNumber: 'PO-RESEND-1' });
+      const purchaseOrderId = JSON.parse(createResponse.body).result.data.id;
+      await call('purchaseOrders.addLine', token, { purchaseOrderId, supplierProductId, productId, quantityOrderUnits: '1', conversionToBase: '1', unitPrice: '10.00', lineNumber: 1 });
+      await call('purchaseOrders.submit', token, { purchaseOrderId, expectedVersion: 1 });
+      await call('purchaseOrders.approve', token, { purchaseOrderId, expectedVersion: 2 });
+
+      const sendResponse = await call('purchaseOrders.send', token, { purchaseOrderId, expectedVersion: 3 });
+      expect(JSON.parse(sendResponse.body).result.data.delivery.ok).toBe(false);
+
+      // A human fixes the root cause — adds a real contact email to the supplier — then retries.
+      await db.update(suppliers).set({ contacts: [{ name: 'Jane Doe', email: 'jane@example.test' }] }).where(eq(suppliers.id, supplierId));
+
+      const resendResponse = await call('purchaseOrders.resend', token, { purchaseOrderId });
+      expect(resendResponse.statusCode).toBe(200);
+      expect(JSON.parse(resendResponse.body).result.data.delivery.ok).toBe(true);
+
+      const getResponse = await query('purchaseOrders.get', token, { purchaseOrderId });
+      const po = JSON.parse(getResponse.body).result.data.purchaseOrder;
+      expect(po.status).toBe('SENT');
+      expect(po.deliveryStatus).toBe('DELIVERED');
+      expect(po.deliveryError).toBeNull();
+      expect(po.deliveryAttempts).toBe(2);
+      expect(po.emailSentTo).toBe('jane@example.test');
+    });
+
+    it('resend is rejected (400) once delivery already succeeded — resending a genuinely delivered PO is not this endpoint\'s job', async () => {
+      const { organizationId, storeId, productId } = await setUpOrgWithSupplierProduct();
+      const supplierId = generateId();
+      await db.insert(suppliers).values({ id: supplierId, organizationId, name: 'Resend Guard Supplier', contacts: [{ name: 'Jane Doe', email: 'jane@example.test' }] });
+      const supplierProductId = generateId();
+      await db.insert(supplierProducts).values({ id: supplierProductId, organizationId, supplierId, productId, supplierSku: 'RESEND-GUARD-SKU', isConfirmed: true });
+
+      const { token } = await issueSessionWithMembership(organizationId, 'OWNER', ['purchasing:read', 'purchasing:write', 'purchasing:approve']);
+      const createResponse = await call('purchaseOrders.create', token, { storeId, supplierId, poNumber: 'PO-RESEND-2' });
+      const purchaseOrderId = JSON.parse(createResponse.body).result.data.id;
+      await call('purchaseOrders.addLine', token, { purchaseOrderId, supplierProductId, productId, quantityOrderUnits: '1', conversionToBase: '1', unitPrice: '10.00', lineNumber: 1 });
+      await call('purchaseOrders.submit', token, { purchaseOrderId, expectedVersion: 1 });
+      await call('purchaseOrders.approve', token, { purchaseOrderId, expectedVersion: 2 });
+      const sendResponse = await call('purchaseOrders.send', token, { purchaseOrderId, expectedVersion: 3 });
+      expect(JSON.parse(sendResponse.body).result.data.delivery.ok).toBe(true);
+
+      const resendResponse = await call('purchaseOrders.resend', token, { purchaseOrderId });
+      expect(resendResponse.statusCode).toBe(400);
+
+      await db.delete(outboxEvents).where(eq(outboxEvents.aggregateId, purchaseOrderId));
+      await db.delete(auditLogs).where(eq(auditLogs.entityId, purchaseOrderId));
+      await db.delete(purchaseOrderLines).where(eq(purchaseOrderLines.purchaseOrderId, purchaseOrderId));
+      await db.delete(purchaseOrders).where(eq(purchaseOrders.id, purchaseOrderId));
+      await db.delete(supplierProducts).where(eq(supplierProducts.id, supplierProductId));
+      await db.delete(suppliers).where(eq(suppliers.id, supplierId));
+    });
+
+    it('resend is rejected (400) on a purchase order that was never sent (still DRAFT) — nothing to resend', async () => {
+      const { organizationId, storeId, supplierId } = await setUpOrgWithSupplierProduct();
+      const { token } = await issueSessionWithMembership(organizationId, 'OWNER', ['purchasing:read', 'purchasing:write', 'purchasing:approve']);
+      const createResponse = await call('purchaseOrders.create', token, { storeId, supplierId, poNumber: 'PO-RESEND-3' });
+      const purchaseOrderId = JSON.parse(createResponse.body).result.data.id;
+
+      const resendResponse = await call('purchaseOrders.resend', token, { purchaseOrderId });
+      expect(resendResponse.statusCode).toBe(400);
     });
 
     it('sending a PO whose supplier HAS a contact email genuinely generates a real, loadable PDF and records the mocked send', async () => {
@@ -464,7 +552,9 @@ describe('purchaseOrders — create/addLine/submit/approve/reject/send/cancel', 
 
       const sendResponse = await call('purchaseOrders.send', token, { purchaseOrderId, expectedVersion: 3 });
       expect(sendResponse.statusCode).toBe(200);
-      expect(JSON.parse(sendResponse.body).result.data.newStatus).toBe('SENT');
+      const sendBody = JSON.parse(sendResponse.body).result.data;
+      expect(sendBody.newStatus).toBe('SENT');
+      expect(sendBody.delivery.ok).toBe(true);
 
       const getResponse = await query('purchaseOrders.get', token, { purchaseOrderId });
       const po = JSON.parse(getResponse.body).result.data.purchaseOrder;
@@ -472,6 +562,8 @@ describe('purchaseOrders — create/addLine/submit/approve/reject/send/cancel', 
       expect(po.pdfObjectKey).toBe(`org/${organizationId}/purchase-orders/${purchaseOrderId}.pdf`);
       expect(po.emailSentTo).toBe('jane@example.test');
       expect(po.emailSentAt).not.toBeNull();
+      expect(po.deliveryStatus).toBe('DELIVERED');
+      expect(po.deliveryAttempts).toBe(1);
 
       const pdfUrlResponse = await query('purchaseOrders.getPdfUrl', token, { purchaseOrderId });
       expect(pdfUrlResponse.statusCode).toBe(200);

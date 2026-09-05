@@ -7,9 +7,13 @@ import { useStores } from '@/lib/use-stores';
 import { formatMoneyTotal } from '@/lib/format';
 import {
   Badge,
+  BarComparison,
   Button,
   Card,
   CardHeader,
+  cx,
+  DivergingBar,
+  MarginWaterfall,
   EmptyState,
   ErrorNotice,
   LoadingState,
@@ -68,11 +72,124 @@ const EXCEPTION_HREFS: Record<string, string> = {
 const trendProp = (points: (number | null)[]): { trendPoints: number[] } | Record<string, never> =>
   points.every((v) => v !== null) ? { trendPoints: points as number[] } : {};
 
+type Provenance = NonNullable<Summary['provenance']['netRevenue']>;
+
 /**
- * an inline expand/collapse drill-through, not a new modal component: clicking "Show
- * source rows" toggles a real row table fetched via `dashboard.drillThrough`, right under the
- * figure it belongs to. Deliberately lazy — the query only fires the first time a figure is
- * expanded, so figures nobody ever inspects cost nothing.
+ * One disclosure per tile, not two. Provenance ("why is this number true") and source rows
+ * ("what rows made it") used to be separate buttons, each with its own inline `disclosure-grid`
+ * — permanent footer space in every tile plus, once opened, a full-width table nested inside a
+ * quarter-width grid column, which is what caused the horizontal overflow. Folding both under one
+ * "Details" toggle on the tile itself keeps the closed state to a single line and gives the
+ * expanded content the tile's full stretched width to lay out in, instead of stacking two
+ * independently-animated panels.
+ */
+const TileDetailPanel = ({
+  open,
+  provenance,
+  storeId,
+  figure,
+  from,
+  to,
+  reasonCode,
+}: {
+  open: boolean;
+  provenance: Provenance | null;
+  storeId: string;
+  figure: DrillThroughFigure;
+  from: string;
+  to: string;
+  reasonCode?: string;
+}) => {
+  const [result, setResult] = useState<DrillThroughResult | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open || result || loading) return;
+    setLoading(true);
+    trpc.dashboard.drillThrough
+      .query({ storeId, figure, from, to, ...(reasonCode ? { reasonCode } : {}) })
+      .then(setResult)
+      .finally(() => setLoading(false));
+    // Deliberately lazy — the query only fires the first time the tile is opened, so figures
+    // nobody ever inspects cost nothing. `result` staying set after close is what lets a re-open
+    // skip the network round trip. Deps are `[open]` only, not the query params — those are fixed
+    // for a given panel instance (a new figure gets a new mounted `TileDetailPanel`, not a param
+    // change on an existing one).
+  }, [open]);
+
+  return (
+    <div className={cx('disclosure-grid', open && 'open')}>
+      <div className="mt-3 min-w-0 rounded-lg border border-border">
+        {provenance && (
+          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 border-b border-border px-4 py-3 text-xs">
+            {provenance.description && (
+              <>
+                <dt className="text-content-subtle">Definition</dt>
+                <dd className="text-content">{provenance.description}</dd>
+              </>
+            )}
+            <dt className="text-content-subtle">Period</dt>
+            <dd className="text-content">
+              {new Date(provenance.period.from).toLocaleDateString()} – {new Date(provenance.period.to).toLocaleDateString()}
+              {' '}({provenance.storeTimezone})
+            </dd>
+            <dt className="text-content-subtle">Freshness</dt>
+            <dd className="text-content">As of {new Date(provenance.freshness).toLocaleString()}</dd>
+            <dt className="text-content-subtle">Sources</dt>
+            <dd className="text-content">
+              {provenance.sources.length > 0
+                ? provenance.sources.map((s) => `${s.table} (${s.rowCount} row${s.rowCount === 1 ? '' : 's'})`).join(', ')
+                : 'No contributing rows in this period.'}
+            </dd>
+          </dl>
+        )}
+        {loading && <p className="px-4 py-3 text-xs text-content-subtle">Loading…</p>}
+        {!loading && result && result.rows.length === 0 && result.relatedFigures && (
+          <p className="px-4 py-3 text-xs text-content-subtle">
+            This figure combines {result.relatedFigures.join(' and ')} — expand those to see the
+            real rows.
+          </p>
+        )}
+        {!loading && result && result.rows.length === 0 && !result.relatedFigures && (
+          <p className="px-4 py-3 text-xs text-content-subtle">No source rows in this period.</p>
+        )}
+        {!loading && result && result.rows.length > 0 && (
+          <Table>
+            <thead>
+              <tr>
+                {'occurredAt' in result.rows[0]! && <Th>When</Th>}
+                <Th>Item</Th>
+                <Th align="right">Amount</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {result.rows.map((row) => (
+                <Tr key={row.id}>
+                  {'occurredAt' in row && (
+                    <Td className="text-xs text-content-subtle">
+                      {new Date((row as { occurredAt: string }).occurredAt).toLocaleDateString()}
+                    </Td>
+                  )}
+                  <Td>{row.label}</Td>
+                  <Td variant="numeric">
+                    <Value
+                      value={row.amount ? formatMoneyTotal(row.amount.amount, row.amount.currency) : null}
+                    />
+                  </Td>
+                </Tr>
+              ))}
+            </tbody>
+          </Table>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/**
+ * A standalone "Show source rows" trigger for figures that live in a full-width `Card`, not a
+ * narrow `StatTile` grid column (COGS variance, waste total) — those cards have room for a
+ * regular button + panel, so they don't need `StatTile`'s click-the-whole-tile treatment.
  */
 const DrillThroughPanel = ({
   storeId,
@@ -88,70 +205,12 @@ const DrillThroughPanel = ({
   reasonCode?: string;
 }) => {
   const [open, setOpen] = useState(false);
-  const [result, setResult] = useState<DrillThroughResult | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  const toggle = () => {
-    if (open) {
-      setOpen(false);
-      return;
-    }
-    setOpen(true);
-    if (result) return;
-    setLoading(true);
-    trpc.dashboard.drillThrough
-      .query({ storeId, figure, from, to, ...(reasonCode ? { reasonCode } : {}) })
-      .then(setResult)
-      .finally(() => setLoading(false));
-  };
-
   return (
     <div className="mt-2">
-      <Button variant="ghost" className="px-2! py-1! text-xs" onClick={toggle}>
+      <Button variant="ghost" className="px-2! py-1! text-xs" onClick={() => setOpen((o) => !o)}>
         {open ? 'Hide source rows' : 'Show source rows'}
       </Button>
-      {open && (
-        <div className="mt-2 rounded-lg border border-border">
-          {loading && <p className="px-4 py-3 text-xs text-content-subtle">Loading…</p>}
-          {!loading && result && result.rows.length === 0 && result.relatedFigures && (
-            <p className="px-4 py-3 text-xs text-content-subtle">
-              This figure combines {result.relatedFigures.join(' and ')} — expand those to see the
-              real rows.
-            </p>
-          )}
-          {!loading && result && result.rows.length === 0 && !result.relatedFigures && (
-            <p className="px-4 py-3 text-xs text-content-subtle">No source rows in this period.</p>
-          )}
-          {!loading && result && result.rows.length > 0 && (
-            <Table>
-              <thead>
-                <tr>
-                  {'occurredAt' in result.rows[0]! && <Th>When</Th>}
-                  <Th>Item</Th>
-                  <Th align="right">Amount</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {result.rows.map((row) => (
-                  <Tr key={row.id}>
-                    {'occurredAt' in row && (
-                      <Td className="text-xs text-content-subtle">
-                        {new Date((row as { occurredAt: string }).occurredAt).toLocaleDateString()}
-                      </Td>
-                    )}
-                    <Td>{row.label}</Td>
-                    <Td variant="numeric">
-                      <Value
-                        value={row.amount ? formatMoneyTotal(row.amount.amount, row.amount.currency) : null}
-                      />
-                    </Td>
-                  </Tr>
-                ))}
-              </tbody>
-            </Table>
-          )}
-        </div>
-      )}
+      <TileDetailPanel open={open} provenance={null} storeId={storeId} figure={figure} from={from} to={to} {...(reasonCode ? { reasonCode } : {})} />
     </div>
   );
 };
@@ -199,6 +258,7 @@ export default function DashboardPage() {
   const variance = summary?.costVariance;
   const varianceTone =
     variance?.direction === 'over' ? 'danger' : variance?.direction === 'under' ? 'warning' : 'neutral';
+
 
   return (
     <>
@@ -255,7 +315,11 @@ export default function DashboardPage() {
 
       {error && <ErrorNotice>{error}</ErrorNotice>}
 
-      {(loading || storesLoading) && <LoadingState />}
+      {/* First load has no prior summary to show, so it gets the real loading state. A REFETCH
+          (period selector changed, a summary already on screen) instead keeps the old figures
+          visible, dimmed, rather than blanking to a spinner — softens the transition between two
+          real states without ever fabricating a value in between. */}
+      {(loading || storesLoading) && !summary && <LoadingState />}
       {!storesLoading && stores.length === 0 && (
         <Card>
           <EmptyState
@@ -265,12 +329,14 @@ export default function DashboardPage() {
         </Card>
       )}
 
-      {!loading && !error && summary && (
-        <>
+      {!error && summary && (
+        <div className={cx('transition-opacity duration-150', loading ? 'opacity-50' : 'opacity-100')}>
           {/* The headline row: net revenue, contribution margin %, food cost %, stock value — each
               with delta + sparkline where a real trend exists. Edge-joined into one instrument panel
-              rather than four detached cards; the drill-through trigger rides in each tile's own
-              footer slot so the proof sits with the claim. */}
+              rather than four detached cards. Each tile links to its own full-page detail
+              (provenance + source rows) rather than expanding inline — a quarter-width grid column
+              has no room to lay out a definition list or a 3-column table cleanly, which is what
+              caused a real horizontal-overflow bug the first two times this was tried inline. */}
           <StatTileGrid className="mb-6">
             <StatTile
               label="Net revenue"
@@ -279,11 +345,9 @@ export default function DashboardPage() {
               unknownReason="No priced sales were recorded in this period"
               {...trendProp(summary.trends.netRevenue)}
               delta={{ direction: summary.deltas.netRevenue.direction, label: `vs prior ${summary.period.days} days`, higherIsBetter: true }}
-              footer={
-                summary.netRevenue !== null && selectedStoreId ? (
-                  <DrillThroughPanel storeId={selectedStoreId} figure="net_revenue" from={summary.period.from} to={summary.period.to} />
-                ) : null
-              }
+              {...(summary.netRevenue !== null && selectedStoreId
+                ? { href: `/dashboard/metric/net_revenue?storeId=${selectedStoreId}&days=${days}` }
+                : {})}
             />
             <StatTile
               label="Contribution margin"
@@ -298,11 +362,9 @@ export default function DashboardPage() {
                 label: `vs prior ${summary.period.days} days`,
                 higherIsBetter: true,
               }}
-              footer={
-                summary.contributionMarginPercentage !== null && selectedStoreId ? (
-                  <DrillThroughPanel storeId={selectedStoreId} figure="contribution_margin" from={summary.period.from} to={summary.period.to} />
-                ) : null
-              }
+              {...(summary.contributionMarginPercentage !== null && selectedStoreId
+                ? { href: `/dashboard/metric/contribution_margin?storeId=${selectedStoreId}&days=${days}` }
+                : {})}
             />
             <StatTile
               label="Food cost"
@@ -312,22 +374,18 @@ export default function DashboardPage() {
               unknownReason={summary.unknownReasons.foodCostPercentage ?? 'Needs both COGS and revenue'}
               {...trendProp(summary.trends.foodCostPercentage)}
               delta={{ direction: summary.deltas.foodCostPercentage.direction, label: `vs prior ${summary.period.days} days`, higherIsBetter: false }}
-              footer={
-                summary.foodCostPercentage !== null && selectedStoreId ? (
-                  <DrillThroughPanel storeId={selectedStoreId} figure="food_cost_percentage" from={summary.period.from} to={summary.period.to} />
-                ) : null
-              }
+              {...(summary.foodCostPercentage !== null && selectedStoreId
+                ? { href: `/dashboard/metric/food_cost_percentage?storeId=${selectedStoreId}&days=${days}` }
+                : {})}
             />
             <StatTile
               label="Stock value"
               value={fmt(summary.stockValue)}
               hint="Cash tied up in on-hand stock, right now"
               unknownReason="You need inventory:read to see this"
-              footer={
-                summary.stockValue !== null && selectedStoreId ? (
-                  <DrillThroughPanel storeId={selectedStoreId} figure="stock_value" from={summary.period.from} to={summary.period.to} />
-                ) : null
-              }
+              {...(summary.stockValue !== null && selectedStoreId
+                ? { href: `/dashboard/metric/stock_value?storeId=${selectedStoreId}&days=${days}` }
+                : {})}
             />
           </StatTileGrid>
 
@@ -368,50 +426,74 @@ export default function DashboardPage() {
             <div className="mb-6 grid gap-6 lg:grid-cols-2">
               <Card>
                 <CardHeader title="Top items by contribution" />
-                <Table>
-                  <thead>
-                    <tr>
-                      <Th>Item</Th>
-                      <Th align="right">Total contribution</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {summary.itemsByContribution.slice(0, 5).map((item) => (
-                      <Tr key={item.menuItemId}>
-                        <Td>{item.menuItemName}</Td>
-                        <Td variant="numeric">
-                          <Value value={fmt(item.totalContribution)} />
-                        </Td>
-                      </Tr>
-                    ))}
-                  </tbody>
-                </Table>
+                <BarComparison
+                  tone="positive"
+                  rows={summary.itemsByContribution
+                    .filter((item) => item.totalContribution !== null)
+                    .slice(0, 5)
+                    .map((item) => ({
+                      key: item.menuItemId,
+                      label: item.menuItemName,
+                      value: Number(item.totalContribution!.amount),
+                    }))}
+                  formatValue={(value) => formatMoneyTotal(String(value), summary.currency)}
+                />
               </Card>
               <Card>
                 <CardHeader title="Bottom items by contribution" />
-                <Table>
-                  <thead>
-                    <tr>
-                      <Th>Item</Th>
-                      <Th align="right">Total contribution</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[...summary.itemsByContribution]
-                      .reverse()
-                      .slice(0, 5)
-                      .map((item) => (
-                        <Tr key={item.menuItemId}>
-                          <Td>{item.menuItemName}</Td>
-                          <Td variant="numeric">
-                            <Value value={fmt(item.totalContribution)} />
-                          </Td>
-                        </Tr>
-                      ))}
-                  </tbody>
-                </Table>
+                <BarComparison
+                  tone="danger"
+                  rows={[...summary.itemsByContribution]
+                    .reverse()
+                    .filter((item) => item.totalContribution !== null)
+                    .slice(0, 5)
+                    .map((item) => ({
+                      key: item.menuItemId,
+                      label: item.menuItemName,
+                      value: Number(item.totalContribution!.amount),
+                    }))}
+                  formatValue={(value) => formatMoneyTotal(String(value), summary.currency)}
+                />
               </Card>
             </div>
+          )}
+
+          {/*
+            The margin waterfall — spec §12.3's "why margin changed" view (price/cost/mix/volume
+            effects, ADR-15's verified Q₁-weighted variant). `margin_attribution` was fully
+            implemented and tested in packages/metrics but never wired to any route or UI until
+            now — this panel and the router call above are that wiring, not a new formula.
+          */}
+          {summary.marginAttribution !== null && (
+            <Card className="mb-6">
+              <CardHeader title="Why margin changed" />
+              {summary.marginAttribution.baseContributionMargin !== null &&
+              summary.marginAttribution.priceEffect !== null &&
+              summary.marginAttribution.costEffect !== null &&
+              summary.marginAttribution.mixEffect !== null &&
+              summary.marginAttribution.volumeEffect !== null ? (
+                <MarginWaterfall
+                  base={{ label: `${summary.period.days}d ago`, value: Number(summary.marginAttribution.baseContributionMargin.amount) }}
+                  steps={[
+                    { key: 'price', label: 'Price', value: Number(summary.marginAttribution.priceEffect.amount) },
+                    { key: 'cost', label: 'Cost', value: Number(summary.marginAttribution.costEffect.amount) },
+                    { key: 'mix', label: 'Mix', value: Number(summary.marginAttribution.mixEffect.amount) },
+                    { key: 'volume', label: 'Volume', value: Number(summary.marginAttribution.volumeEffect.amount) },
+                  ]}
+                  formatValue={(value) => formatMoneyTotal(String(value), summary.currency)}
+                />
+              ) : (
+                // I7: a waterfall's own math (running totals across bars) has no way to represent a
+                // genuinely unknown component — substituting 0 for it would silently understate or
+                // overstate every bar after it, not just look empty. Showing nothing, with the reason,
+                // is the only honest option when any of the five figures is unknown.
+                <p className="px-5 py-4 text-sm text-content-subtle">
+                  Margin attribution is not fully known for this period — at least one price, cost,
+                  mix, or volume effect could not be computed from items with a real, priced recipe
+                  cost in both periods.
+                </p>
+              )}
+            </Card>
           )}
 
           {/* Cost variance gets its own panel — it's the number almost nobody else can compute. */}
@@ -443,6 +525,15 @@ export default function DashboardPage() {
                     )}
                   </div>
                 )}
+                {(variance?.direction === 'over' || variance?.direction === 'under' || variance?.direction === 'exact') &&
+                  summary.cogsActual &&
+                  summary.cogsTheoretical && (
+                    <DivergingBar
+                      value={Number(summary.cogsActual.amount) - Number(summary.cogsTheoretical.amount)}
+                      maxMagnitude={Math.max(Number(summary.cogsActual.amount), Number(summary.cogsTheoretical.amount))}
+                      direction={variance.direction}
+                    />
+                  )}
                 <div className="mt-3 flex flex-wrap items-baseline gap-2 text-sm">
                   <span className="text-content-muted">Actual</span>
                   <span className="font-medium text-content">
@@ -493,24 +584,15 @@ export default function DashboardPage() {
               {summary.waste.byReason.length === 0 ? (
                 <EmptyState title="No waste recorded" hint="Nothing was logged in this period." />
               ) : (
-                <Table>
-                  <thead>
-                    <tr>
-                      <Th>Reason</Th>
-                      <Th align="right">Value</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {summary.waste.byReason.map((entry) => (
-                      <Tr key={entry.reasonCode}>
-                        <Td className="capitalize">{humanize(entry.reasonCode)}</Td>
-                        <Td variant="numeric">
-                          {formatMoneyTotal(String(entry.value), summary.currency)}
-                        </Td>
-                      </Tr>
-                    ))}
-                  </tbody>
-                </Table>
+                <BarComparison
+                  tone="warning"
+                  rows={summary.waste.byReason.map((entry) => ({
+                    key: entry.reasonCode,
+                    label: humanize(entry.reasonCode),
+                    value: Number(entry.value),
+                  }))}
+                  formatValue={(value) => formatMoneyTotal(String(value), summary.currency)}
+                />
               )}
               {summary.waste.unknownCostEventCount > 0 && (
                 <p className="border-t border-border px-5 py-3 text-xs text-content-subtle">
@@ -575,7 +657,7 @@ export default function DashboardPage() {
               </p>
             </Card>
           </div>
-        </>
+        </div>
       )}
     </>
   );

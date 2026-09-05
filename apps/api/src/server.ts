@@ -2,6 +2,7 @@ import Fastify from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import fastifyCors from '@fastify/cors';
 import { fastifyTRPCPlugin } from '@trpc/server/adapters/fastify';
+import { baseLogger } from '@retailos/logger';
 import { appRouter } from './trpc/router';
 import { createContext } from './trpc/context';
 import { registerGoogleOAuthRoutes } from './oauth/routes';
@@ -32,6 +33,20 @@ export const buildServer = (options: { logger?: boolean } = {}) => {
     trpcOptions: {
       router: appRouter,
       createContext,
+      // The one place every procedure's real failure surfaces, regardless of which of the ~200
+      // procedures threw it — previously each router either logged nothing or reached for a raw
+      // `console.error` with no way to correlate it back to a specific request. `ctx` is absent for
+      // errors thrown before context creation succeeds (vanishingly rare — context building here
+      // does no I/O of its own that can fail), so this falls back to the base logger rather than
+      // crashing the error handler itself.
+      onError: ({ error, path, ctx }: { error: Error; path: string | undefined; ctx: unknown }) => {
+        const logger = (ctx as { logger?: import('@retailos/logger').Logger } | undefined)?.logger ?? baseLogger;
+        // `procedure` (this handler's own `path`, e.g. "auth.login") vs. the context logger's own
+        // bound `path` field (the raw request URL, e.g. "/trpc/auth.login,auth.me" for a batched
+        // call) — kept as two distinct keys rather than one, since a batched request's URL can
+        // legitimately name several procedures while only one of them is the one that threw.
+        logger.error({ procedure: path, err: error }, 'tRPC procedure failed');
+      },
     },
   });
 

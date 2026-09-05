@@ -16,6 +16,7 @@
     { "path": "../../packages/ai" },
     { "path": "../../packages/assistant" },
     { "path": "../../packages/email" },
-    { "path": "../../packages/queue" }
+    { "path": "../../packages/queue" },
+    { "path": "../../packages/logger" }
   ]
 }

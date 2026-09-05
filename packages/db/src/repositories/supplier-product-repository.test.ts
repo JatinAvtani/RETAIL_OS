@@ -140,4 +140,46 @@ describe('SupplierProductRepository', () => {
     const found = await repo.findBySupplierAndSku(supplierId, 'NEVER-CREATED');
     expect(found).toBeNull();
   });
+
+  it('findAllConfirmedWithLabels returns a real "Product (Supplier)" label, confirmed mappings only, org-wide', async () => {
+    const repo = new SupplierProductRepository(createScopedDb(client), organizationId);
+    const confirmedMapping = await repo.create({ id: generateId(), supplierId, productId, supplierSku: 'FLR-LABEL-CONFIRMED' });
+    await repo.confirm(confirmedMapping.id);
+    const unconfirmedMapping = await repo.create({ id: generateId(), supplierId, productId, supplierSku: 'FLR-LABEL-UNCONFIRMED' });
+
+    const candidates = await repo.findAllConfirmedWithLabels();
+
+    const confirmedCandidate = candidates.find((c) => c.candidateId === confirmedMapping.id);
+    expect(confirmedCandidate).toBeDefined();
+    expect(confirmedCandidate!.label).toBe('Flour (Test Supplier)');
+    expect(candidates.some((c) => c.candidateId === unconfirmedMapping.id)).toBe(false);
+  });
+
+  it('findAllConfirmedWithLabels excludes a mapping whose product has since been soft-deleted', async () => {
+    const db = createScopedDb(client);
+    const productRepo = new ProductRepository(db, organizationId);
+    const deletedProduct = await productRepo.create({ id: generateId(), sku: 'DELETED-SKU', name: 'Discontinued Item', baseUnitId: kgId, type: 'INGREDIENT' });
+
+    const repo = new SupplierProductRepository(db, organizationId);
+    const mapping = await repo.create({ id: generateId(), supplierId, productId: deletedProduct.id, supplierSku: 'FLR-DELETED-PRODUCT' });
+    await repo.confirm(mapping.id);
+
+    try {
+      // No repository method soft-deletes a product today — writing `deletedAt` directly via the
+      // admin connection is the same simulation technique this codebase's own tests already use
+      // wherever a real mutation path doesn't exist yet.
+      const adminDb = drizzle(adminClient, { schema });
+      await adminDb.update(products).set({ deletedAt: new Date() }).where(eq(products.id, deletedProduct.id));
+
+      const candidates = await repo.findAllConfirmedWithLabels();
+      expect(candidates.some((c) => c.candidateId === mapping.id)).toBe(false);
+    } finally {
+      // Child-before-parent: supplier_products references products, which the file-level
+      // `afterEach` above hasn't cleaned up yet at this point in the test.
+      const adminDb = drizzle(adminClient, { schema });
+      await adminDb.delete(supplierProducts).where(eq(supplierProducts.id, mapping.id));
+      await adminDb.delete(productVariants).where(eq(productVariants.productId, deletedProduct.id));
+      await adminDb.delete(products).where(eq(products.id, deletedProduct.id));
+    }
+  });
 });

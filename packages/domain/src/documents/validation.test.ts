@@ -238,7 +238,7 @@ describe('validateExtraction — price anomaly (PRICE_ANOMALY)', () => {
 });
 
 describe('validateExtraction — price check unavailable (PRICE_CHECK_UNAVAILABLE)', () => {
-  it('WARNs, per line with a SKU, when the supplier never resolved — the gate did not run, this is not a pass', () => {
+  it('BLOCKs, per line with a SKU, when the supplier never resolved — the gate did not run, this is not a pass', () => {
     const lineWithSku = { ...emptyLine(), sku: field('SKU-1'), unitPrice: field('45.00') };
     const lineWithoutSku = { ...emptyLine(), unitPrice: field('10.00') }; // no SKU — nothing to check either way, no issue expected for it
     const context = baseContext({ supplierResolved: false });
@@ -246,15 +246,23 @@ describe('validateExtraction — price check unavailable (PRICE_CHECK_UNAVAILABL
     const result = validateExtraction(emptyFields(), [lineWithSku, lineWithoutSku], context);
 
     expect(result.issues).toEqual([
-      expect.objectContaining({ severity: 'WARN', code: 'PRICE_CHECK_UNAVAILABLE', field: 'lines[0].unitPrice' }),
+      expect.objectContaining({ severity: 'BLOCK', code: 'PRICE_CHECK_UNAVAILABLE', field: 'lines[0].unitPrice' }),
     ]);
   });
 
-  it('an unresolved supplier does not block auto-approval on its own — WARN, not BLOCK', () => {
+  /**
+   * Regression test for a real gap (2026-09 fix): this used to assert the OPPOSITE — that an
+   * unresolved supplier was WARN-only and did NOT block auto-approval. That let a document with an
+   * unresolved supplier identity and otherwise-high-confidence fields reach AUTO_APPROVED, showing
+   * the same reassuring green badge a genuine human approval gets, right when a reviewer most needed
+   * to look closely. An unresolved supplier means posting has no real row to attribute cost/quantity
+   * to — exactly the silent-loss risk `canAutoApprove` exists to prevent.
+   */
+  it('an unresolved supplier BLOCKS auto-approval — a document with no known supplier must never reach AUTO_APPROVED', () => {
     const line = { ...emptyLine(), sku: field('SKU-1'), unitPrice: field('45.00') };
     const context = baseContext({ supplierResolved: false });
     const result = validateExtraction(emptyFields(), [line], context);
-    expect(result.canAutoApprove).toBe(true);
+    expect(result.canAutoApprove).toBe(false);
   });
 
   it('a resolved supplier with genuinely no trailing history produces no PRICE_CHECK_UNAVAILABLE issue — those are different unknowns', () => {

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, type InputHTMLAttributes } from 'react';
-import { Input } from './ui';
+import { Input, type ControlSize } from './ui';
 
 /**
  * A password field with a show/hide control.
@@ -19,7 +19,7 @@ import { Input } from './ui';
 export const PasswordInput = ({
   className,
   ...props
-}: Omit<InputHTMLAttributes<HTMLInputElement>, 'type'>) => {
+}: Omit<InputHTMLAttributes<HTMLInputElement>, 'type' | 'size'> & { size?: ControlSize }) => {
   const [visible, setVisible] = useState(false);
 
   return (

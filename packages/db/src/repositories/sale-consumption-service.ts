@@ -34,7 +34,8 @@ type Db = ReturnType<typeof drizzle<typeof schema>>;
  */
 export type IngredientConsumptionResult = {
   productId: string;
-  status: 'consumed' | 'unit_conversion_unavailable' | 'insufficient_stock';
+  /** `'already_consumed'` (2026-09 addition): a retry found this ingredient already had a real `SALE_CONSUMPTION` movement posted for this exact `sourceId` — the retry-safety mechanism `checkRetry: true` callers rely on, distinguishing "consumed just now" from "consumed on a prior attempt, correctly not re-consumed" without ever double-drawing stock. */
+  status: 'consumed' | 'already_consumed' | 'unit_conversion_unavailable' | 'insufficient_stock';
   actualCost: Money | 'unknown';
 };
 
@@ -50,13 +51,12 @@ export type SaleConsumptionResult =
     };
 
 /**
- * earlier work's actual scope: the CONSUMPTION side of "theoretical consumption from sales × recipe"
+ * The CONSUMPTION side of "theoretical consumption from sales × recipe" —
  * deliberately sales-source-agnostic. `sales_transactions`/`pos_items` don't
- * exist anywhere in this codebase yet — they belong entirely to a later milestone (Sales Ingestion), whose
- * own task list names `earlier work` "Trigger consumption on ingest (wires to a later milestone)" — meaning
- * a later milestone is the one expected to call INTO this function once it exists, not the reverse.
- * Confirmed with the user rather than assumed, since guessing at the later milestone's shape now would be
- * exactly the kind of speculative building CLAUDE.md warns against.
+ * exist anywhere in this codebase yet — they belong entirely to Sales Ingestion, which
+ * is expected to call INTO this function once it exists, not the reverse.
+ * This function is written to that boundary deliberately, rather than guessing at the
+ * ingestion pipeline's eventual shape ahead of time.
  *
  * Given an already-resolved `menuItemId` + `quantitySold` + `occurredAt` (whatever calls this
  * — eventually a POS sale line, but this function has no opinion on where they came from), does the
@@ -69,11 +69,11 @@ export type SaleConsumptionResult =
  *   -> record actual COGS from the REAL allocated lot costs (never the theoretical/planned recipe
  *      cost `recipes.cost`/`computeRecipeCost` compute — those are a different number entirely)
  *
- * Menu-item resolution failure (POSItem -> MenuItem missing) is explicitly earlier work's job (the
- * unmapped-sales quarantine queue) — this function starts one level in, already holding a real
+ * Menu-item resolution failure (POSItem -> MenuItem missing) is explicitly the
+ * unmapped-sales quarantine queue's job — this function starts one level in, already holding a real
  * `menuItemId`. A menu item that doesn't exist in THIS organization still returns a structured
  * `menu_item_not_found` result rather than throwing, so a caller processing many sale lines in a
- * batch can flag one bad line without the whole batch failing (the design: "flag it, don't
+ * batch can flag one bad line without the whole batch failing ("flag it, don't
  * silently drop it, and don't guess" — the same principle applies whether the flag is presented to
  * a human or returned to a batch-processing caller).
  *
@@ -127,6 +127,8 @@ export class SaleConsumptionService {
     sourceType: string;
     sourceId?: string;
     actorUserId?: string;
+    /** Retry-safety opt-in (2026-09 addition): when `true` (and `sourceId` is set), each ingredient's `consumeFefo` call checks for an already-posted movement before allocating, so a retried transaction never double-consumes stock it already consumed on a prior attempt. Off by default — the normal, never-retried sales-ingestion path has no reason to pay this extra read on every single sale. */
+    checkRetry?: boolean;
   }): Promise<SaleConsumptionResult> {
     const menuItemRepository = new MenuItemRepository(this.db, this.organizationId);
     const recipeRepository = new RecipeRepository(this.db, this.organizationId);
@@ -254,13 +256,15 @@ export class SaleConsumptionService {
           sourceType: input.sourceType,
           ...(input.sourceId !== undefined ? { sourceId: input.sourceId } : {}),
           ...(input.actorUserId !== undefined ? { actorUserId: input.actorUserId } : {}),
+          ...(input.checkRetry === true ? { checkIdempotent: true } : {}),
         });
 
+        const status = result.alreadyConsumed ? 'already_consumed' : 'consumed';
         if (result.totalCost === null) {
-          ingredients.push({ productId: ingredient.productId, status: 'consumed', actualCost: 'unknown' });
+          ingredients.push({ productId: ingredient.productId, status, actualCost: 'unknown' });
           anyUnknown = true;
         } else {
-          ingredients.push({ productId: ingredient.productId, status: 'consumed', actualCost: result.totalCost });
+          ingredients.push({ productId: ingredient.productId, status, actualCost: result.totalCost });
           if (!anyUnknown) {
             cogs = addMoney(cogs, result.totalCost);
           }

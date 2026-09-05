@@ -19,6 +19,7 @@ import {
   Td,
   Th,
   Tr,
+  Value,
 } from '@/components/ui';
 import { statusLabel, statusTone, type PurchaseOrderStatus } from './status-tone';
 
@@ -227,7 +228,9 @@ export default function PurchaseOrdersPage() {
                         {order.poNumber}
                       </Link>
                     </Td>
-                    <Td>{order.supplierName ?? <span className="text-content-subtle">—</span>}</Td>
+                    <Td>
+                      <Value value={order.supplierName} />
+                    </Td>
                     <Td>
                       <Badge tone={statusTone(order.status)}>{statusLabel(order.status)}</Badge>
                     </Td>

@@ -358,6 +358,48 @@
       "when": 1790100000000,
       "tag": "0051_catalog_csv_import_recipe_type",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1790200000000,
+      "tag": "0052_sales_transaction_consumption_status",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1790300000000,
+      "tag": "0053_purchase_order_delivery_status",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1790400000000,
+      "tag": "0054_compound_tenant_fks",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1790500000000,
+      "tag": "0055_compound_tenant_fks_batch_2",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1790600000000,
+      "tag": "0056_investigations",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1790700000000,
+      "tag": "0057_investigation_rejected_status",
+      "breakpoints": true
     }
   ]
 }

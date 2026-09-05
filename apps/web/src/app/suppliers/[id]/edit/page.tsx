@@ -208,7 +208,11 @@ export default function EditSupplierPage() {
               />
             </Field>
             <Field label="Lead time — measured (days)" hint="Derived from real receipts, not editable here.">
-              <Input type="text" value={leadTimeDaysMeasured !== null ? `${leadTimeDaysMeasured}d` : '—'} disabled />
+              <Input
+                type="text"
+                value={leadTimeDaysMeasured !== null ? `${leadTimeDaysMeasured}d` : 'Not known'}
+                disabled
+              />
             </Field>
             <Field label="Order cut-off time" hint="24-hour, e.g. 14:00">
               <Input

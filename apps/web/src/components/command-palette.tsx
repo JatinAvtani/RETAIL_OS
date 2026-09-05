@@ -131,13 +131,14 @@ export const CommandPalette = () => {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 px-4 pt-[12vh] backdrop-blur-[2px]"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 px-4 pt-[12vh] backdrop-blur-[2px] animate-overlay-in"
       onClick={close}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Search"
+        style={{ animation: 'retailos-palette-in 160ms ease-out' }}
         onKeyDown={(e) => {
           // The footer promises "↑↓ to navigate · Enter to select" — this handler is that promise.
           // Focus STAYS on the input the whole time (the roving highlight is aria-activedescendant,

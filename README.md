@@ -19,8 +19,8 @@ is why almost no small business knows the number.
 
 ## Buildathon reviewer path
 
-This is an **Open Track** submission. The shortest reproducible path is a bounded version of the
-same corpus and the same production write paths used by the full demo:
+This is an **AI Finance Controller** track submission. The shortest reproducible path is a bounded
+version of the same corpus and the same production write paths used by the full demo:
 
 ```bash
 cp .env.local.example .env.local
@@ -43,15 +43,23 @@ figures would be false for the bounded dataset; live answers still use the real 
 Budget roughly ten minutes on a typical development laptop; deleting a previously seeded full
 corpus can account for several of those minutes.
 
-The four highest-signal things to inspect are:
+The highest-signal things to inspect are:
 
-1. **Dashboard → an unknown cost:** one deliberately unpriced ingredient prevents a partial total
+1. **Finance Controller → Batch reconciliation report:** the track brief answered literally — every
+   invoice line matched against its purchase order and goods receipt, a real measured match rate,
+   and the exceptions it could not resolve ranked by dollar impact. The rate is whatever the data
+   actually is; a low one means the corpus genuinely contains discrepancies, which is the finding,
+   not a defect.
+2. **Finance Controller → a finding:** anomalies detected by scheduled sweeps open an investigation
+   on their own, with no question asked first. Each expands into an ordered multi-hop trace where
+   every hop's narration was independently grounding-validated before it was stored.
+3. **Dashboard → an unknown cost:** one deliberately unpriced ingredient prevents a partial total
    from masquerading as complete.
-2. **Documents → an invoice:** extraction evidence, deterministic validation and posting are
+4. **Documents → an invoice:** extraction evidence, deterministic validation and posting are
    connected in one drillable chain.
-3. **Purchase orders → variance queue:** ordered, received and invoiced quantities reconcile, with
+5. **Purchase orders → variance queue:** ordered, received and invoiced quantities reconcile, with
    unresolved exceptions kept visible.
-4. **Assistant → ask about sales or suppliers:** the model selects registered metrics and narrates;
+6. **Assistant → ask about sales or suppliers:** the model selects registered metrics and narrates;
    code computes every number and rejects unsupported numeric claims.
 
 The submission narrative, evidence inventory, five-minute script and final manual checklist live in
@@ -175,6 +183,20 @@ source-level (which tables, how many rows, as of when), not per-line-item. When 
 answered — a missing permission, an unknowable metric — the answer says which part and why,
 rather than narrating around the gap.
 
+**AI Finance Controller** — the assistant's single-shot pipeline extended into a bounded, multi-hop
+**investigation**: the agent decides whether one metric answers the question or whether it needs to
+chase a follow-up, up to a fixed hop cap, with every hop's narration independently grounding-
+validated before it is stored. Two entry points, one engine — a person can ask a question directly,
+and a scheduled sweep opens an investigation on its own the moment a real anomaly is detected, so a
+finding is already traced by the time anyone opens it. An investigation that reaches a root cause
+can end in a **draft action** — a reorder purchase order or a supplier price-variance flag — whose
+quantities and prices come entirely from the existing domain math (`suggestReorder`,
+`detectPriceChange`), never from the model. The model drafts; a human approves; only that separate,
+explicit approval writes anything. Alongside it, a **batch reconciliation report** aggregates every
+already-posted invoice line against its purchase order and goods receipt into a real match rate and
+a ranked exception list — reading the reconciliation output the production posting path already
+wrote, never re-running matching for the demo.
+
 **Notifications, computed not polled** — alerts come from a rule engine evaluating real state
 (stock against par levels, lots against expiry dates), so a rule that does not fire produces no
 alert rather than a reassuring empty list. Each alert carries a deduplication key, so a persistent
@@ -210,11 +232,13 @@ packages/metrics The metric catalog — the only place a business number is comp
 packages/ai      All model calls — extraction, classification, embeddings, prompt safety
 packages/assistant The grounded answering pipeline — classify, plan, retrieve, narrate, validate
 packages/pos     POS vendor adapters and the canonical sales model
+packages/integrations  Vendor sync jobs kept off the request path
 packages/authz   Permission model
 packages/session Redis-backed sessions
 packages/storage S3-compatible object storage
 packages/email   Outbound mail (mocked transport) and inbound invoice intake
 packages/queue   Background job queue (BullMQ)
+packages/logger  Structured logging
 ```
 
 Module boundaries are enforced in CI by dependency-cruiser, so the layering can't quietly erode.
@@ -247,6 +271,13 @@ document extraction and fuzzy match *suggestions*, which a human confirms.
 
 **Times are stored UTC, resolved in store-local time.** A restaurant's "yesterday" is a local-time
 concept; a sale at 23:45 on the 31st lands in the wrong month otherwise.
+
+**A provider failure is treated by kind, not uniformly.** A `503` is Google-side capacity — the same
+call usually succeeds moments later, so it is retried a bounded number of times; without that, one
+transient spike failed an entire multi-hop investigation. A `429` is deliberately *not* retried:
+the quota is genuinely spent, retrying cannot succeed, and it would deepen the exhaustion. The
+proactive sweep instead paces itself — a capped batch per tick, spaced — because the real fix for a
+per-minute rate limit is pacing, not retrying.
 
 **Accessibility is fixed at the design token, never the call site.** Every colour pairing in both
 themes is contrast-measured against WCAG AA, and the passing values live in the tokens themselves —

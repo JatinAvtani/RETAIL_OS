@@ -55,7 +55,7 @@ describe('aggregateNotificationContent', () => {
     const items: AggregationItem[] = [{ label: 'lone item', dollarImpact: new Decimal('50'), severity: 'HIGH' }];
     const result = aggregateNotificationContent(items, formatLotExpiringTitle, formatLotExpiringBody);
     expect(result.itemCount).toBe(1);
-    expect(result.title).toBe('$50.00 at risk');
+    expect(result.title).toBe('50.00 at risk');
   });
 });
 
@@ -70,14 +70,21 @@ describe('compareSeverity', () => {
 
 describe('formatLotExpiringTitle / formatLotExpiringBody', () => {
   it('a single item reads as one alert, not "1 lots"', () => {
-    expect(formatLotExpiringTitle(1, new Decimal('340'))).toBe('$340.00 at risk');
+    expect(formatLotExpiringTitle(1, new Decimal('340'))).toBe('340.00 at risk');
     expect(formatLotExpiringBody([{ label: '12kg cream', dollarImpact: new Decimal('340'), severity: 'HIGH' }])).toBe(
       '12kg cream is expiring soon.'
     );
   });
 
+  it('groups a large amount by the Indian convention and carries no currency symbol', () => {
+    // A hardcoded "$" was a real bug on this project's INR org — the title states the amount
+    // without claiming a currency the domain layer cannot know.
+    expect(formatLotExpiringTitle(1, new Decimal('3877226.5'))).toBe('38,77,226.50 at risk');
+    expect(formatLotExpiringTitle(1, new Decimal('340'))).not.toContain('$');
+  });
+
   it('multiple items name the count and join every label', () => {
-    expect(formatLotExpiringTitle(2, new Decimal('340'))).toBe('$340.00 at risk — 2 lots expiring');
+    expect(formatLotExpiringTitle(2, new Decimal('340'))).toBe('340.00 at risk — 2 lots expiring');
     const body = formatLotExpiringBody([
       { label: '12kg cream', dollarImpact: new Decimal('220'), severity: 'HIGH' },
       { label: '8kg berries', dollarImpact: new Decimal('120'), severity: 'HIGH' },

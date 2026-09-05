@@ -61,7 +61,20 @@ search() {
     [[ ${#existing[@]} -eq 0 ]] && return 0
     out=$(grep -nEH "$pattern" "${existing[@]}" 2>/dev/null || true)
   else
-    out=$(grep -rnEH "$pattern" . "${EXCLUDES[@]}" "${inc_args[@]}" 2>/dev/null || true)
+    # -I skips BINARY files. Without it, grep -r reads a PDF/image/font byte stream as text and
+    # its compressed garbage matches almost any regex — a real, blocking I4 "vector query without a
+    # tenant filter" was reported against a line of a PDF's embedded font stream. Excluding the one
+    # offending directory would have left every other binary able to do the same thing; skipping
+    # binaries as a CLASS is the actual rule, and no invariant is ever violated inside one.
+    out=$(grep -rnEHI "$pattern" . "${EXCLUDES[@]}" "${inc_args[@]}" 2>/dev/null || true)
+    # Belt-and-braces on the include filter. GNU grep's `--include` does not reliably win when
+    # combined with this script's `--exclude` set (the same interaction already documented in
+    # KNOWN_ISSUES for the test-file excludes), so a caller asking for '*.ts' could still receive a
+    # PDF's byte stream — which is exactly how a binary was reported as a blocking I4 violation.
+    # Re-applying the caller's extension to the OUTPUT makes the filter hold regardless.
+    if [[ -n "$include" ]]; then
+      out=$(printf '%s' "$out" | grep -E "${include//\*/.*}:[0-9]+:" || true)
+    fi
   fi
 
   out=$(echo "$out" | grep -Ev '\.(test|spec|type-test)\.ts:' || true)
@@ -137,7 +150,14 @@ done < <(search '(cacheKey|redis\.(get|set|setex)|cache\.(get|set))' 'packages/s
 report BLOCKING I4 "Cache key may lack a tenant component" \
   "A cache hit bypasses RLS entirely — a leak with a different mechanism." "$r"
 
-r=$(search "SET +(SESSION +)?app\.current_org_id" '' '' | grep -Ev 'SET +LOCAL' || true)
+# Include filter is deliberate: tenant context is only ever SET from .ts or .sql, and an unscoped
+# search here reads EVERY file in the repo — including binaries, whose compressed byte streams
+# match almost any regex. A real PDF in `output/` was reported as a blocking I4 violation on a line
+# of its embedded font stream. `grep -I` alone does not save this: a PDF with enough ASCII in it is
+# not detected as binary at all.
+r=$(search "SET +(SESSION +)?app\.current_org_id" '' '*.ts' | grep -Ev 'SET +LOCAL' || true)
+r="$r"$'\n'$(search "SET +(SESSION +)?app\.current_org_id" '' '*.sql' | grep -Ev 'SET +LOCAL' || true)
+r=$(printf '%s' "$r" | grep -v '^$' || true)
 report BLOCKING I4 "Tenant context set session-scoped (must be SET LOCAL)" \
   "On a pooled connection a session variable leaks to the next request — possibly another tenant." "$r"
 
@@ -240,7 +260,23 @@ report HIGH I3 "Mutation of an append-only table" \
 # money field in those same interfaces is already correctly a decimal STRING (unitPrice, lineTotal,
 # subtotal, cgst, sgst, total), which is the thing this check exists to protect. The generator does
 # all money arithmetic in scaled BigInt (mock-data/generate/money.mts), never in float.
-r=$(search '[A-Za-z_]*([Pp]rice|[Cc]ost|[Aa]mount|[Tt]otal|[Rr]evenue|[Mm]argin|[Qq]uantity|[Qq]ty)[A-Za-z_]*[[:space:]]*:[[:space:]]*number\b' 'apps/api/src/integrations/csv-import\.ts|packages/db/src/repositories/csv-import-repository\.ts|apps/api/src/integrations/catalog-csv-import\.ts|packages/db/src/repositories/catalog-csv-import-repository\.ts|packages/metrics/src/margin/margin\.ts|packages/metrics/src/inventory/inventory\.ts|packages/metrics/src/purchasing/purchasing\.ts|packages/assistant/src/action-draft\.ts|packages/assistant/src/eval/types\.ts|packages/assistant/src/citations\.ts|apps/worker/src/relay-poll-processor\.ts|apps/worker/src/start\.ts|apps/worker/src/briefing-schedule-poll-processor\.ts|seed-demo\.mts|mock-data/generate/' '*.ts')
+# negative-stock-sweep-processor.ts excluded for the identical reason as relay-poll-processor.ts
+# above: `{ notified, total }` is a plain COUNT of negative-stock rows processed in one sweep tick
+# (how many produced a real notification vs. how many were found), never a monetary value - the
+# regex matches "total" as a substring regardless of what is being counted. No arithmetic on money
+# or quantity flows through this return type; it's a log/telemetry summary only.
+# A bare `total: number`, or `total<CountableNoun>: number`, is a CARDINALITY, not money — a count
+# of rows, lines, events, cases or stores. That is a SHAPE, so it is excluded here as a shape rather
+# than by listing one more file path each time a new sweep processor returns `{ notified, total }`.
+#
+# Narrowing the pattern instead of growing the path allowlist is deliberate (and is why the allowlist
+# below is now much shorter): an excluded PATH stops scrutinising a whole file forever, so a genuine
+# `totalCost: number` added to it later goes unseen. An excluded SHAPE keeps every file under
+# scrutiny and only forgives the specific construction that is provably safe. `totalCost`/
+# `totalAmount`/`totalPrice`/`totalRevenue`/`totalMargin` are NOT matched by the exclusion below and
+# are still caught anywhere, including in these same files.
+count_shape='([Tt]otal|[Rr]egistered|[Nn]otified|[Rr]elayed|[Ss]kipped|[Pp]assed|[Ii]mported|[Qq]uarantined)([Ll]ines?|[Rr]ows?|[Rr]owCount|[Cc]ount|[Ee]vents?|[Cc]ases?|[Ss]tores?)?[[:space:]]*:[[:space:]]*number'
+r=$(search '[A-Za-z_]*([Pp]rice|[Cc]ost|[Aa]mount|[Tt]otal|[Rr]evenue|[Mm]argin|[Qq]uantity|[Qq]ty)[A-Za-z_]*[[:space:]]*:[[:space:]]*number\b' 'apps/api/src/integrations/csv-import\.ts|packages/db/src/repositories/csv-import-repository\.ts|apps/api/src/integrations/catalog-csv-import\.ts|packages/db/src/repositories/catalog-csv-import-repository\.ts|packages/metrics/src/margin/margin\.ts|packages/metrics/src/inventory/inventory\.ts|packages/metrics/src/purchasing/purchasing\.ts|packages/assistant/src/action-draft\.ts|packages/assistant/src/citations\.ts|seed-demo\.mts|mock-data/generate/' '*.ts' | grep -vE "$count_shape")
 report HIGH I5 "Money or quantity typed as \`number\`" \
   "Float arithmetic on money loses precision silently. Use Money / Quantity<Unit>." "$r"
 
@@ -316,7 +352,13 @@ report HIGH I5 "Float column in a monetary/quantity path" \
 # mock-data/generate/findings.mts excluded: its `?? 0` is inside a MARKDOWN TEMPLATE STRING that
 # prints the planted creep target for documentation. A supplier with no planted creep has a target
 # of genuinely zero, and the sentence is prose in a generated file — no cost is computed from it.
-r=$(search '(\?\?|\|\|)[[:space:]]*0\b|COALESCE\([^,]+,[[:space:]]*0\)' 'format|display|/ui/|reconciliation\.ts|expiry-queue\.ts|reorder-suggestions\.ts|goods-receipt-repository\.ts|stock-level-repository\.ts|seed-demo\.mts|seed-demo-operations\.mts|mock-data/generate/findings\.mts' '' \
+# sales-transaction-repository.ts excluded: `(row?.consumptionAttempts ?? 0) + 1` increments a
+# RETRY-ATTEMPT COUNTER on sales_transactions (how many times consumption has been tried for this
+# transaction), matched only because the surrounding grep -i also flags "consumption" as a
+# substring - it is not a cost, quantity, or COGS value. A transaction with no prior recorded
+# attempts genuinely has zero so far; nothing downstream of this counter feeds a costing
+# calculation - it only decides retry bookkeeping (markConsumptionFailed).
+r=$(search '(\?\?|\|\|)[[:space:]]*0\b|COALESCE\([^,]+,[[:space:]]*0\)' 'format|display|/ui/|reconciliation\.ts|expiry-queue\.ts|reorder-suggestions\.ts|goods-receipt-repository\.ts|stock-level-repository\.ts|seed-demo\.mts|seed-demo-operations\.mts|mock-data/generate/findings\.mts|sales-transaction-repository\.ts' '' \
    | grep -Ei 'cost|price|margin|revenue|cogs|consumption|qty|quantity|yield' || true)
 report HIGH I7 "Null-to-zero coercion in a costing path" \
   "\`?? 0\` looks defensive; in costing it silently inflates margin to 100%. Degrade to unknown." "$r"

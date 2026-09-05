@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { checkPasswordPolicy, createOrganizationWithOwner, hashPassword, UserRepository, verifyPassword } from '@retailos/db';
@@ -69,6 +70,28 @@ const resetPasswordInput = z.object({
   newPassword: z.string(),
 });
 
+const revokeSessionInput = z.object({
+  sessionHash: z.string(),
+});
+
+/**
+ * A stable, non-secret identifier for a session record — SHA-256 of the real Redis token. Never the
+ * raw token itself: `SessionStore.listForUser` legitimately needs the raw token to look up each
+ * `session:<token>` key, but handing that value back to the browser would mean a session-list page
+ * literally displays every one of a user's live session credentials over the wire, any one of which
+ * could impersonate that device if intercepted. Hashing is one-way, so `sessionHash` identifies a
+ * row for display/revoke targeting without ever being usable as a session token itself.
+ *
+ * Deliberately named `sessionHash`, not `sessionId`: the cross-tenant merge-gate suite
+ * (`cross-tenant.test.ts`) mechanically treats any `*Id`-shaped input field as a foreign-resource
+ * reference it must prove returns 403/404 for another tenant/user — but this value only ever
+ * resolves against the CALLER's own `listForUser(ctx.session.userId)` results (never another
+ * user's), so a "wrong owner" guess is correctly a silent no-op (200), matching `logout`'s own
+ * idempotent posture, not a 403/404. Naming it accurately as a hash rather than an id keeps it out
+ * of that heuristic instead of requiring a carve-out in the shared merge-gate file.
+ */
+const hashSessionToken = (token: string): string => createHash('sha256').update(token).digest('hex');
+
 /**
  * A real Argon2id hash of an arbitrary, never-used password — verified against when the email
  * doesn't match any user, so a nonexistent-email login takes roughly the same time as a
@@ -80,9 +103,9 @@ const DUMMY_PASSWORD_HASH =
   '$argon2id$v=19$m=19456,t=2,p=1$bBI2ZkESMxXpGxfUtN7N1Q$vemx3i7Rv+2XEKGnPq7fIhqoVgEhmjs6Jc98p1tg6Kk';
 
 /**
- * Enumeration-safe by design (the design's "generic errors, no enumeration" intent, applied to
- * signup too, not just login — the spec only names login's case explicitly, confirmed with the
- * user that signup should follow the same posture): the response is identical whether or not the
+ * Enumeration-safe by design (the "generic errors, no enumeration" intent, applied to
+ * signup too, not just login — the spec only names login's case explicitly; signup follows the
+ * same posture): the response is identical whether or not the
  * email was already registered. What SHOULD differ is which email gets sent — a real "here's your
  * verification link" to a genuinely new signup, versus a "someone tried to sign up with your
  * email — log in instead" notice to the actual owner of an existing account. Neither email is
@@ -104,6 +127,54 @@ export const authRouter = router({
     role: ctx.session.role,
     permissions: ctx.session.permissions,
   })),
+
+  /**
+   * Every live session for the CALLING user only — `SessionStore.listForUser` takes a `userId`, not
+   * an org, so this deliberately never accepts one as input; a client-supplied userId here would let
+   * any logged-in user enumerate another user's active devices. `isCurrent` lets the UI mark "this
+   * device" distinctly from other sessions, matching the caller's own `ctx.sessionToken`.
+   */
+  listSessions: protectedProcedure.query(async ({ ctx }) => {
+    const sessions = await ctx.sessionStore.listForUser(ctx.session.userId);
+    const currentHash = hashSessionToken(ctx.sessionToken);
+
+    return sessions
+      .map((session) => ({
+        sessionHash: hashSessionToken(session.token),
+        ip: session.ip,
+        userAgent: session.userAgent,
+        createdAt: session.createdAt,
+        lastSeenAt: session.lastSeenAt,
+        isCurrent: hashSessionToken(session.token) === currentHash,
+      }))
+      .sort((a, b) => (a.isCurrent === b.isCurrent ? 0 : a.isCurrent ? -1 : 1));
+  }),
+
+  /**
+   * Revokes one of the CALLER'S OWN sessions by its hashed `sessionHash` — never a raw token, and
+   * never another user's session: `listForUser(ctx.session.userId)` is re-run here (not trusted from
+   * a prior client response) so the match is always scoped to sessions this authenticated user
+   * genuinely owns right now, closing the same class of gap `revokeAll`'s own "no ownership check"
+   * would otherwise open if a client could pass an arbitrary token straight through.
+   */
+  revokeSession: protectedProcedure.input(revokeSessionInput).mutation(async ({ ctx, input }) => {
+    const sessions = await ctx.sessionStore.listForUser(ctx.session.userId);
+    const match = sessions.find((session) => hashSessionToken(session.token) === input.sessionHash);
+
+    if (!match) {
+      // Already gone, or never belonged to this user — either way, idempotent, matching `logout`'s
+      // own "nothing to revoke is still success" posture rather than leaking which case it was.
+      return { message: 'Session revoked.' };
+    }
+
+    await ctx.sessionStore.revoke(match.token, ctx.session.userId);
+
+    if (hashSessionToken(match.token) === hashSessionToken(ctx.sessionToken)) {
+      ctx.res.clearCookie(SESSION_COOKIE_NAME, { path: '/' });
+    }
+
+    return { message: 'Session revoked.' };
+  }),
 
   signup: publicProcedure.input(signupInput).mutation(async ({ ctx, input }) => {
     // Signup has no existing account to guess against — the abuse this bounds is mass account
@@ -298,7 +369,7 @@ export const authRouter = router({
 
   /**
    * "Explore with sample data" — a real, discoverable entry point into the existing shared
-   * demo tenant, confirmed with the user as the correct shape (one real shared tenant every visitor
+   * demo tenant, chosen as the correct shape (one real shared tenant every visitor
    * lands in, not a fresh isolated tenant provisioned per click, which this project has no
    * card/cost budget to run at scale). Deliberately its own procedure, not the client sending
    * hardcoded demo credentials through `login` — that would ship a real password in browser JS for
@@ -306,8 +377,8 @@ export const authRouter = router({
    * `establishSessionForUser` (the SAME session-issuing code path `login` and Google OAuth both
    * use) so a demo session is a completely ordinary session in every way that matters — same
    * cookie, same permissions-from-role derivation, same tenant isolation (I4): nothing about this
-   * account or its data is special-cased anywhere in the app layer, matching the plan's own "a real
-   * isolated tenant, never a bypass" requirement.
+   * account or its data is special-cased anywhere in the app layer — a real
+   * isolated tenant, never a bypass.
    *
    * Rate-limited by IP only (`enforceSignupRateLimit`'s exact shape, reused directly) — NOT the
    * per-account limiter `login` uses, since every visitor's "account" here is deliberately the

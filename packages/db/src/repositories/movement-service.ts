@@ -4,14 +4,14 @@ import { Decimal } from 'decimal.js';
 import * as schema from '../schema/index';
 import { auditLogs, lots, outboxEvents, stockLevels, stockMovements, wasteReasonCodeEnum } from '../schema/index';
 import { withTenantContext, type Tx } from '../tenant-context';
-import { generateId, allocateFefo, quantity, money, type CurrencyCode, type Lot, type Unit } from '@retailos/domain';
+import { generateId, allocateFefo, quantity, money, addMoney, type CurrencyCode, type Lot, type LotAllocation, type Money, type Unit } from '@retailos/domain';
 import type { MovementType } from './stock-movement-repository';
 
 type Db = ReturnType<typeof drizzle<typeof schema>>;
 
 /**
- * earlier work: a fixed, groupable set — free text here would make waste analytics
- * worthless, per the spec's own words. Enforced at the database layer too, not just this type
+ * A fixed, groupable set — free text here would make waste analytics
+ * worthless. Enforced at the database layer too, not just this type
  * (`stock_movements_waste_reason_code`, migration 0020, scoped to WASTE rows only via a CHECK
  * constraint) — proven directly via raw psql before any of this code existed: an invalid or NULL
  * reason code on a WASTE row is genuinely rejected by Postgres, and a non-WASTE row's free-text
@@ -45,8 +45,8 @@ export class InsufficientStockError extends Error {
 
 /**
  * `lots.unit_cost` is NOT NULL at the database layer, but a stocktake surplus line's `t0UnitCost`
- * can genuinely be null (I7 — a product `stock_levels` has never priced). Confirmed with the user
- * rather than guessed: a surplus with no known cost basis blocks approval entirely — never a
+ * can genuinely be null (I7 — a product `stock_levels` has never priced). By design,
+ * a surplus with no known cost basis blocks approval entirely — never a
  * silent `$0.00` invented cost, which would misreport the surplus as genuinely free stock.
  */
 export class UnknownCostSurplusError extends Error {
@@ -57,18 +57,43 @@ export class UnknownCostSurplusError extends Error {
 }
 
 /**
+ * Reconstructs a real total cost from already-posted `SALE_CONSUMPTION` rows — used only by
+ * `consumeFefo`'s idempotent-replay short-circuit, where the caller needs the SAME `totalCost`
+ * shape a fresh allocation would have returned, without re-deriving it from the recipe (I2: the
+ * ledger rows already ARE the true consumed cost). `null` if any row's `unitCost` is null OR the
+ * list is empty — matches `AllocationResult.totalCost`'s own "any unknown line makes the whole
+ * total unknown" rule (I7), never a silent partial sum.
+ */
+const sumMovementCost = (rows: (typeof stockMovements.$inferSelect)[]): Money | null => {
+  if (rows.length === 0) return null;
+  let total: Money | null = null;
+  for (const row of rows) {
+    if (row.unitCost === null) return null;
+    // Movement quantity is signed (negative for a consumption draw) — cost is always a positive
+    // magnitude, so this takes the absolute value of quantity × unitCost, not the signed product.
+    const lineCost = money(new Decimal(row.quantity).abs().times(row.unitCost).toFixed(4), row.currency as CurrencyCode);
+    total = total === null ? lineCost : addMoney(total, lineCost);
+  }
+  return total;
+};
+
+export type FefoAllocationOutcome =
+  | { alreadyConsumed: true; movements: (typeof stockMovements.$inferSelect)[]; totalCost: Money | null }
+  | { alreadyConsumed: false; movements: (typeof stockMovements.$inferSelect)[]; allocations: LotAllocation[]; totalCost: Money | null };
+
+/**
  * The movement service: the ONE place a stock movement is actually posted end to end,
- * combining what the earlier ledger, lot, and projection work each built in isolation — `stock_movements` (the ledger),
+ * combining `stock_movements` (the ledger),
  * `stock_levels` (the projection), `lots` (FEFO draw), `allocateFefo` (the pure allocation
- * algorithm) — plus the two pieces the plan's Phase 3 snippet always showed alongside them but no
- * prior task built: the transactional outbox (I8) and the audit log.
+ * algorithm) — plus the two pieces that belong alongside them: the transactional outbox (I8)
+ * and the audit log.
  *
  * Deliberately NOT built by composing `StockLevelRepository`/`LotRepository` instances: each of
  * those opens its OWN `db.transaction` internally (via `runScoped`), so calling one after another
  * from an outer function would run as two separate transactions, not one atomic unit — exactly the
  * failure mode I8 exists to prevent. Every method here opens exactly one transaction and performs
- * every write (ledger, projection, lot, outbox, audit) inside it directly, mirroring the plan's own
- * snippet, which is one flat `BEGIN... COMMIT` block, not a composition of smaller transactions.
+ * every write (ledger, projection, lot, outbox, audit) inside it directly — one flat
+ * `BEGIN... COMMIT` block, not a composition of smaller transactions.
  */
 export class MovementService {
   private readonly db: Db;
@@ -254,8 +279,21 @@ export class MovementService {
    * `SALE_CONSUMPTION` movement at THAT lot's own cost, all inside one transaction. A `shortfall`
    * (the allocation couldn't fully cover the request) throws `InsufficientStockError` rather than
    * silently posting a partial consumption — the caller decides how to handle it (e.g. negative
-   * stock is a signal per the plan, but that decision belongs to earlier work's sales-ingestion flow, not
+   * stock is a signal, but that decision belongs to the sales-ingestion flow, not
    * silently absorbed here).
+   *
+   * `checkIdempotent: { sourceType, sourceId }` (2026-09 addition): when set, this checks for an
+   * EXISTING `SALE_CONSUMPTION` movement matching `(organizationId, sourceType, sourceId,
+   * productId)` before allocating anything, and short-circuits to `{ alreadyConsumed: true,
+   * movements: [...] }` (the real, previously-posted rows) instead of allocating again. This is
+   * whole-ingredient granularity, not per-lot: a retry that would draw from a DIFFERENT lot than
+   * the original attempt (e.g. the first-choice lot has since been depleted by something else)
+   * never needs handling, because a retry never re-allocates at all once ANY movement for this
+   * exact (source, product) pair exists — the ingredient was already fully consumed once,
+   * correctly, and re-running FEFO for it would double-consume real stock. This is opt-in (not
+   * always checked) because most callers — waste logging, a fresh never-retried sale — have no
+   * reason to pay this extra read on every call, and `logWaste`'s own sourceId isn't guaranteed
+   * unique per ingredient the way a sales-ingestion retry's `transactionId` is.
    */
   async consumeFefo(input: {
     storeId: string;
@@ -267,11 +305,35 @@ export class MovementService {
     sourceType: string;
     sourceId?: string;
     actorUserId?: string;
-  }) {
+    checkIdempotent?: boolean;
+  }): Promise<FefoAllocationOutcome> {
     return this.db.transaction((tx) =>
-      withTenantContext(tx, this.organizationId, () =>
-        this.allocateAndPostInTx(tx, { ...input, movementType: 'SALE_CONSUMPTION' })
-      )
+      withTenantContext(tx, this.organizationId, async () => {
+        if (input.checkIdempotent && input.sourceId !== undefined) {
+          const existing = await tx
+            .select()
+            .from(stockMovements)
+            .where(
+              and(
+                eq(stockMovements.organizationId, this.organizationId),
+                eq(stockMovements.movementType, 'SALE_CONSUMPTION'),
+                eq(stockMovements.sourceType, input.sourceType),
+                eq(stockMovements.sourceId, input.sourceId),
+                eq(stockMovements.productId, input.productId)
+              )
+            );
+          if (existing.length > 0) {
+            return {
+              alreadyConsumed: true,
+              movements: existing,
+              totalCost: sumMovementCost(existing),
+            };
+          }
+        }
+
+        const result = await this.allocateAndPostInTx(tx, { ...input, movementType: 'SALE_CONSUMPTION' });
+        return { alreadyConsumed: false, ...result };
+      })
     );
   }
 
@@ -521,8 +583,8 @@ export class MovementService {
    * goes back above zero, never creating a new lot (unlike a stocktake surplus, this stock has a
    * real, known origin lot to return to).
    *
-   * `fraction` is `refundedAmount / originalTotal` (1 for a full refund, the plan's own "partial
-   * refunds reverse proportionally" acceptance criterion) — the caller
+   * `fraction` is `refundedAmount / originalTotal` (1 for a full refund; partial
+   * refunds reverse proportionally) — the caller
    * computes it from the two `sales_transactions` totals; this method only applies it.
    *
    * Posted as `SALE_REVERSAL`, a positive quantity, NOT `RETURN_TO_SUPPLIER` (a different real-world
@@ -599,7 +661,7 @@ export class MovementService {
   }
 
   /**
-   * earlier work's stocktake-approval lot reconciliation, called from `StockCountService.approveCount`
+   * The stocktake-approval lot reconciliation, called from `StockCountService.approveCount`
    * with an EXTERNAL transaction (its own, already holding the count/line status writes) — unlike
    * every other public method on this class, which each open their own transaction. This is the
    * one deliberate exception: a stocktake approval needs the count status transition AND the
@@ -656,7 +718,7 @@ export class MovementService {
 
     // Surplus: no existing lot to draw from — create one new adjustment lot at the frozen
     // t0UnitCost. lots.unit_cost is NOT NULL at the database layer, and a guessed cost would
-    // misreport a surplus as genuinely free stock (I7) — confirmed with the user: an unknown cost
+    // misreport a surplus as genuinely free stock (I7) — an unknown cost
     // blocks approval entirely rather than defaulting to $0.00.
     if (input.unitCost === null) {
       throw new UnknownCostSurplusError(input.productId);

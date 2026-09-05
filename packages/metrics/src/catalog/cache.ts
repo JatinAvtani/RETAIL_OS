@@ -2,20 +2,20 @@ import type { Redis } from 'ioredis';
 import type { MetricResult } from './types.js';
 
 /**
- * Metric result caching. Spec's own design assumes fact tables (earlier work,
- * not built) and a real outbox relay (no such process exists anywhere in this codebase — see
+ * Metric result caching. The spec assumes fact tables (not built)
+ * and a real outbox relay (no such process exists anywhere in this codebase — see
  * `packages/db/src/schema/outbox-events.ts`'s own doc comment) driving event-based invalidation
- * (`cost.updated` → drop margin keys). Confirmed with the user: build TTL-only caching now, defer
+ * (`cost.updated` → drop margin keys). This builds TTL-only caching now and defers
  * event-driven invalidation until a real outbox relay exists for some other reason — recorded as
  * ADR-17 (`docs/spec/18-engineering-decisions.md`), not a silent shortcut.
  *
- * One flat default TTL for every metric (confirmed with the user over per-domain tiers) — 60
- * registered metrics span very different real volatility, but nothing has been cached before this
- * task, so there is no observed evidence yet for which specific metrics need a shorter/longer
+ * One flat default TTL for every metric (rather than per-domain tiers) — 60
+ * registered metrics span very different real volatility, but nothing has been cached before
+ * this, so there is no observed evidence yet for which specific metrics need a shorter/longer
  * window. Tune later if a real staleness complaint surfaces, not speculatively now.
  */
 
-export const DEFAULT_METRIC_CACHE_TTL_SECONDS = 600; // 10 minutes — spec's own 5–60 min range
+export const DEFAULT_METRIC_CACHE_TTL_SECONDS = 600; // 10 minutes — within the spec's 5–60 min range
 
 /**
  * Deterministic JSON serialization: keys sorted at EVERY nesting level, recursively — unlike

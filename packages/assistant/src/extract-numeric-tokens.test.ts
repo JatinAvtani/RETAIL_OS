@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { extractNumericTokens } from './extract-numeric-tokens';
 
 /**
- * covers the plan's own exact test list verbatim — "currency symbols · thousands
- * separators · percentages · ranges · dates excluded · ordinals excluded · abbreviated forms ·
- * numbers inside quoted source text · numbers the model derived by arithmetic (must be caught)."
+ * Covers the full test matrix: currency symbols, thousands separators, percentages,
+ * ranges, dates excluded, ordinals excluded, abbreviated forms, numbers inside quoted
+ * source text, and numbers the model derived by arithmetic (must be caught).
  *
  * A deliberate bias choice: ambiguous cases are biased toward FLAGGING, not excluding — a
  * bare number that merely resembles a year/date with no real surrounding date context is NOT

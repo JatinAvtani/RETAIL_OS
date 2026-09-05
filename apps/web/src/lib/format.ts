@@ -226,3 +226,31 @@ export const formatMoney = (
 /** A currency amount someone reads as money — always exactly 2dp. */
 export const formatMoneyTotal = (amount: string | number, currency?: string | null): string =>
   formatMoney(amount, currency, { precision: 'currency' });
+
+/**
+ * A raw enum value (`'REVIEW_REQUIRED'`, `'PRICE_CHANGE'`) into the lowercase, space-separated form
+ * every list/table in this app uses for status, reason and type columns — `'review required'`.
+ * Previously reimplemented inline with `.toLowerCase().replace(/_/g, ' ')` in at least six files,
+ * with two of them dropping `.toLowerCase()` and one using a single-instance `.replace('_', ' ')`
+ * that silently left every underscore past the first ("REVIEW_REQUIRED" → "REVIEW required"). One
+ * shared implementation so every enum reads the same way everywhere it appears.
+ */
+export const humanizeEnum = (value: string): string => value.toLowerCase().replace(/_/g, ' ');
+
+/**
+ * "How long has this been sitting here" for a queue/review-item timestamp — days-and-hours
+ * granularity, not minutes: unlike a session's "last seen" (where "Active now" vs "3m ago" is the
+ * meaningful distinction), a pending review item's own useful signal is whether it's been sitting
+ * for hours vs. days vs. weeks. `0d` for anything under a day, never "0h" or "just now" — a review
+ * item created 10 minutes ago is genuinely "0 days old," not a special freshness state worth its
+ * own label.
+ */
+export const formatAge = (since: string | Date): string => {
+  const ms = Date.now() - new Date(since).getTime();
+  const days = Math.floor(ms / (24 * 60 * 60 * 1000));
+  if (days < 1) {
+    const hours = Math.floor(ms / (60 * 60 * 1000));
+    return `${hours}h`;
+  }
+  return `${days}d`;
+};

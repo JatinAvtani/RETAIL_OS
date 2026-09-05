@@ -1,9 +1,9 @@
 -- Hand-written, not `drizzle-kit generate` output — the snapshot chain has been stale since
 -- migration 0005 (see 0008_units_and_conversions.sql's header and project memory for why).
 --
--- The transactional outbox (I8, the design): a state change and its event commit together or
--- not at all. NOT partitioned (unlike stock_movements/audit_logs) - the design's partitioning
--- table doesn't list it, and unpublished/published rows are short-lived operational data, not a
+-- The transactional outbox (I8): a state change and its event commit together or
+-- not at all. NOT partitioned (unlike stock_movements/audit_logs) - it isn't part of the
+-- partitioning plan, since unpublished/published rows are short-lived operational data, not a
 -- permanent append-only ledger.
 CREATE TABLE IF NOT EXISTS "outbox_events" (
 	"id" uuid PRIMARY KEY NOT NULL,

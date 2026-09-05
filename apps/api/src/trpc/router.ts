@@ -28,6 +28,8 @@ import { onboardingRouter } from './routers/onboarding';
 import { parLevelsRouter } from './routers/par-levels';
 import { productDetectionRouter } from './routers/product-detection';
 import { firstFindingReportRouter } from './routers/first-finding-report';
+import { financeControllerRouter } from './routers/finance-controller';
+import { reconciliationRouter } from './routers/reconciliation';
 
 export const appRouter = router({
   auth: authRouter,
@@ -59,6 +61,8 @@ export const appRouter = router({
   parLevels: parLevelsRouter,
   productDetection: productDetectionRouter,
   firstFindingReport: firstFindingReportRouter,
+  financeController: financeControllerRouter,
+  reconciliation: reconciliationRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -34,6 +34,8 @@ import {
   InvoiceMatchRepository,
   PurchaseOrderRepository,
   SupplierPriceRepository,
+  notifications,
+  notificationRules,
 } from '@retailos/db';
 import { executeMetric } from '../catalog/index.js';
 import './supplier-catalog-entries.js';
@@ -46,7 +48,7 @@ const ADMIN_CONNECTION_STRING =
 /**
  * Real-database proof that all 7 registered supplier metrics compute correctly
  * through `executeMetric`, reusing the same real PO -> receive -> invoice-match fixture pipeline
- * earlier work's own wiring test established, extended with a real `expectedDeliveryDate` so
+ * the purchasing wiring test established, extended with a real `expectedDeliveryDate` so
  * `confirmReceipt`'s own real DELIVERY_ON_TIME/LATE emission fires.
  */
 describe('registered supplier metrics', () => {
@@ -85,6 +87,11 @@ describe('registered supplier metrics', () => {
       }
       await adminDb.delete(products).where(eq(products.organizationId, orgId));
       await adminDb.delete(suppliers).where(eq(suppliers.organizationId, orgId));
+      // `notifications.store_id` references `stores`, so these must go BEFORE the store rows.
+      // This org grew notifications only once the investigation trigger began sweeping more rule
+      // types; the fixture itself never creates one, which is why the FK held until then.
+      await adminDb.delete(notifications).where(eq(notifications.organizationId, orgId));
+      await adminDb.delete(notificationRules).where(eq(notificationRules.organizationId, orgId));
       await adminDb.delete(stores).where(eq(stores.organizationId, orgId));
       await adminDb.delete(organizations).where(eq(organizations.id, orgId));
     }

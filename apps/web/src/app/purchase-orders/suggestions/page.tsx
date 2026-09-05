@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
 import { useStores } from '@/lib/use-stores';
-import { Badge, Button, Card, EmptyState, ErrorNotice, PageHeader, SkeletonRows, Select, Table, Td, Th, Tr } from '@/components/ui';
+import { humanizeEnum } from '@/lib/format';
+import { Badge, Button, Card, EmptyState, ErrorNotice, PageHeader, SkeletonRows, Select, Table, Td, Th, Tr, Value } from '@/components/ui';
 
 type SupplierGroup = Awaited<ReturnType<typeof trpc.purchaseOrders.reorderSuggestions.query>>[number];
 
@@ -115,10 +116,12 @@ export default function ReorderSuggestionsPage() {
                     <Tr key={row.supplierProductId}>
                       <Td className="font-medium">{row.productName}</Td>
                       <Td variant="numeric">
-                        {row.suggestion.quantity.amount} {row.unit ?? ''}
+                        <Value value={row.suggestion.quantity.amount} {...(row.unit ? { unit: row.unit } : {})} />
                       </Td>
                       <Td>
-                        <Badge tone={confidenceTone(row.suggestion.confidence)}>{row.suggestion.confidence}</Badge>
+                        <Badge tone={confidenceTone(row.suggestion.confidence)}>
+                          {humanizeEnum(row.suggestion.confidence)}
+                        </Badge>
                       </Td>
                       <Td className="text-sm text-content-muted">{row.explanationText}</Td>
                     </Tr>

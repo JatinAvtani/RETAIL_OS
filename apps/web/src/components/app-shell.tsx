@@ -35,6 +35,7 @@ const ICONS: Record<string, string> = {
   manager: 'M3 20h18M6 20V10M12 20V4M18 20v7',
   variance: 'M12 3v18M5 8l7-5 7 5M5 16l7 5 7-5',
   assistant: 'M4 5h16v11H9l-5 4V5z',
+  financeController: 'M12 2v20M8 6h5.5a2.5 2.5 0 0 1 0 5H9a2.5 2.5 0 0 0 0 5h6.5',
   notifications: 'M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6M10 21h4',
   products: 'M3 8l9-5 9 5-9 5-9-5zM3 8v8l9 5 9-5V8',
   categories: 'M4 5h6v6H4zM14 5h6v6h-6zM4 15h6v6H4zM14 15h6v6h-6z',
@@ -81,6 +82,7 @@ const NAV_GROUPS: { label: string; items: { href: string; label: string; icon: s
       { href: '/dashboard/manager', label: 'Manager view', icon: 'manager' },
       { href: '/purchase-orders/variance-queue', label: 'Variance queue', icon: 'variance' },
       { href: '/assistant', label: 'Assistant', icon: 'assistant' },
+      { href: '/finance-controller', label: 'Finance Controller', icon: 'financeController' },
       { href: '/notifications', label: 'Notifications', icon: 'notifications' },
     ],
   },
@@ -168,7 +170,14 @@ const CONTENT_WIDTH: Record<ContentWidth, string> = {
 const SEGMENT_LABELS: Record<string, string> = {
   dashboard: 'Overview',
   manager: 'Manager view',
+  metric: 'Figure',
+  net_revenue: 'Net revenue',
+  contribution_margin: 'Contribution margin',
+  food_cost_percentage: 'Food cost %',
+  stock_value: 'Stock value',
   assistant: 'Assistant',
+  'finance-controller': 'Finance Controller',
+  reconciliation: 'Batch reconciliation',
   products: 'Products',
   categories: 'Categories',
   recipes: 'Recipes',
@@ -224,6 +233,27 @@ const NO_BREADCRUMBS = new Set(['/dashboard/manager']);
  * the final crumb is the current page — plain text, since the entity's real name is in the
  * PageHeader immediately below. Top-level pages get no breadcrumb; they ARE the top.
  */
+/** A uuid (v4/v7) or any other long hex/digit run — the shape of a real entity id in a route. */
+const ID_SHAPED = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * A segment with no entry in `SEGMENT_LABELS` is one of two genuinely different things, and
+ * collapsing both to "Detail" is what produced the "Overview / Detail / Detail" breadcrumbs seen
+ * live on several routes:
+ *
+ * - an ENTITY ID (`/purchase-orders/01a0562d-…`) — "Detail" is the right word; the entity's real
+ *   name is in the PageHeader directly below, so repeating it here would be noise.
+ * - an unmapped WORD segment (`/dashboard/metric/net_revenue`) — "Detail" is simply a missing
+ *   label. Humanising the slug is always better than discarding it, and it degrades gracefully as
+ *   new routes are added without anyone having to remember to update the map.
+ */
+const labelForUnmappedSegment = (segment: string): string => {
+  if (ID_SHAPED.test(segment)) return 'Detail';
+  const humanised = segment.replace(/[-_]+/g, ' ').trim();
+  if (humanised === '') return 'Detail';
+  return humanised.charAt(0).toUpperCase() + humanised.slice(1);
+};
+
 const Breadcrumbs = ({ pathname }: { pathname: string }) => {
   const segments = pathname.split('/').filter(Boolean);
   if (segments.length < 2 || NO_BREADCRUMBS.has(pathname)) return null;
@@ -231,7 +261,7 @@ const Breadcrumbs = ({ pathname }: { pathname: string }) => {
     const href = '/' + segments.slice(0, index + 1).join('/');
     return {
       href,
-      label: SEGMENT_LABELS[segment] ?? 'Detail',
+      label: SEGMENT_LABELS[segment] ?? labelForUnmappedSegment(segment),
       isCurrent: index === segments.length - 1,
       isLinkable: LINKABLE_CRUMBS.has(href),
     };
@@ -426,7 +456,7 @@ export const AppShell = ({
         id="app-sidebar"
         aria-label="Primary navigation"
         className={cx(
-          'flex flex-col border-r border-border bg-surface-raised transition-[width]',
+          'flex flex-col border-r border-border bg-surface-raised transition-[width] duration-150 ease-out',
           'fixed inset-y-0 left-0 z-40 w-58 lg:sticky lg:top-0 lg:z-auto lg:h-screen',
           drawerOpen ? 'flex' : 'hidden lg:flex',
           collapsed ? 'lg:w-13' : 'lg:w-58'

@@ -6,7 +6,7 @@
 --
 -- lots: a received batch with expiry and actual cost — the
 -- workhorse for FEFO allocation, expiry tracking, and true cost-of-consumption. NOT partitioned
--- (unlike stock_movements) — the design's partitioning table only lists stock_movements,
+-- (unlike stock_movements) — partitioning is reserved for stock_movements,
 -- sales_transactions/_lines, audit_logs, notifications, and fact tables; lots is a much smaller,
 -- actively-queried-by-status table, not an append-only high-volume ledger.
 CREATE TYPE "public"."lot_status" AS ENUM('ACTIVE', 'DEPLETED', 'EXPIRED');

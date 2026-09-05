@@ -1,14 +1,14 @@
--- the design / the design Semantic search over documents — the vector half of
+-- Semantic search over documents — the vector half of
 -- search. One row per document, embedding a synthetic
 -- descriptive text assembled from the document's ALREADY-APPROVED extracted fields (supplier,
--- document number, date, line-item descriptions, total) — confirmed with the user: no raw OCR text
+-- document number, date, line-item descriptions, total) — no raw OCR text
 -- is persisted anywhere in this schema today (Gemini's extraction path never produces one; Tesseract's
--- is computed then discarded), so this is the real, honest corpus available, matching the design's own
--- "entity descriptions" corpus type, not literal OCR full-text (which would need a real, separate
+-- is computed then discarded), so this is the real, honest corpus available: an "entity descriptions"
+-- corpus, not literal OCR full-text (which would need a real, separate
 -- schema change this task doesn't make).
 --
 -- gemini-embedding-001 (Google's free-tier embedding model, same GEMINI_API_KEY already used for
--- extraction/classification; text-embedding-004 was tried first but confirmed unavailable for this
+-- extraction/classification; text-embedding-004 was tried first but turned out unavailable for this
 -- key via a real live call) defaults to 3072 dimensions; outputDimensionality truncates it to 768
 -- at call time (packages/ai/src/embedding-provider.ts), matching this column.
 CREATE TABLE IF NOT EXISTS "document_embeddings" (
@@ -45,5 +45,5 @@ CREATE POLICY "tenant_isolation" ON "document_embeddings"
   USING ("organization_id" = current_setting('app.current_org_id')::uuid);
 --> statement-breakpoint
 -- HNSW over cosine distance (Google's own embedding docs recommend cosine similarity for
--- text-embedding-004) — the design names HNSW explicitly as the vector-index method.
+-- text-embedding-004) — chosen explicitly as the vector-index method.
 CREATE INDEX IF NOT EXISTS "document_embeddings_hnsw_idx" ON "document_embeddings" USING hnsw ("embedding" vector_cosine_ops);

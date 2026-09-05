@@ -51,7 +51,7 @@ export const protectedProcedure = t.procedure.use(async ({ ctx, next }) => {
     });
   }
 
-  return next({ ctx: { ...ctx, session } });
+  return next({ ctx: { ...ctx, session, sessionToken: token as string } });
 });
 
 /**

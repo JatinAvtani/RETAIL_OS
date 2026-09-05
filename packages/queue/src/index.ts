@@ -6,3 +6,5 @@ export * from './relay-queue';
 export * from './notification-delivery-queue';
 export * from './briefing-queue';
 export * from './square-sync-queue';
+export * from './alert-sweep-queue';
+export * from './stock-movements-partition-queue';

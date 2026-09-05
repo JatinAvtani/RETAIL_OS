@@ -1,4 +1,5 @@
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react';
+import Link from 'next/link';
 
 /** Joins class names, dropping falsy values — avoids pulling in a dependency for one 3-line helper. */
 export const cx = (...parts: Array<string | false | null | undefined>): string =>
@@ -296,6 +297,7 @@ export const StatTile = ({
   trendPoints,
   delta,
   footer,
+  href,
 }: {
   label: string;
   value: string | null;
@@ -307,43 +309,76 @@ export const StatTile = ({
   trendPoints?: number[];
   /** Optional signed period-over-period delta, rendered beneath the figure via `TrendBadge`. */
   delta?: { direction: 'up' | 'down' | 'flat' | null; label: string; higherIsBetter?: boolean };
-  /** Optional slot beneath the figure — used for drill-through triggers. */
+  /** Optional always-visible slot beneath the figure — a status badge, not a disclosure. */
   footer?: ReactNode;
-}) => (
-  // `transition-colors` + a sunken hover: the tiles are the densest, most-read part of the app, and
-  // a tile that responds to the cursor makes an otherwise-static grid feel like an instrument panel
-  // rather than a printed table. Colour only — no lift or scale, which would fight the flat register.
-  <div className="bg-surface-raised px-4 py-4 transition-colors hover:bg-surface">
-    <p className="text-xs font-semibold uppercase tracking-wide text-content-subtle">{label}</p>
-    {value === null ? (
-      <>
-        <p className="mt-3 text-xl italic leading-none text-unknown">Not known</p>
-        <p className="mt-2 text-xs leading-snug text-content-subtle">{unknownReason}</p>
-      </>
-    ) : (
-      <>
-        <p className="mt-3 font-mono text-2xl font-semibold leading-none tracking-[-0.02em] tabular-nums text-content">
-          {value}
-          {unit && <span className="ml-0.5 text-sm font-normal text-content-muted">{unit}</span>}
-        </p>
-        {(hint || delta) && (
-          <div className="mt-2.5 flex flex-col gap-0.5">
-            {delta && (
-              <TrendBadge
-                direction={delta.direction}
-                label={delta.label}
-                higherIsBetter={delta.higherIsBetter ?? true}
-              />
-            )}
-            {hint && <p className="text-xs text-content-subtle">{hint}</p>}
-          </div>
-        )}
-        {trendPoints && trendPoints.length >= 2 && <Sparkline points={trendPoints} />}
-      </>
-    )}
-    {footer && <div className="mt-3">{footer}</div>}
-  </div>
-);
+  /**
+   * Optional destination for "why is this number true" — provenance + source rows. A real page
+   * (`/dashboard/metric/[figure]`), not an inline expansion: a `StatTile` is a quarter-width grid
+   * column, and neither a provenance list nor a 3-column source-rows table has room to lay out
+   * cleanly at that width, which is what caused a real horizontal-overflow bug the first two times
+   * this was tried inline. `href` makes the whole tile a link — plain `next/link`, not a
+   * `useState`-driven expand/collapse, since this file has no `'use client'` boundary and is
+   * imported by both server and client components (see the shared-tooltip note above for why that
+   * matters).
+   */
+  href?: string;
+}) => {
+  // `transition-colors` + a sunken hover: the tiles are the densest, most-read part of the app,
+  // and a tile that responds to the cursor makes an otherwise-static grid feel like an instrument
+  // panel rather than a printed table. Colour only — no lift or scale, which would fight the flat
+  // register.
+  // `flex flex-col h-full`: StatTileGrid stretches every tile to the row's tallest sibling
+  // (grid's default `align-items: stretch`), so a short tile (no sparkline) ends up taller than its
+  // own content — `mt-auto` on `footer` is what puts that slack in one place instead of leaving it
+  // as dead space between the value and the bottom of the tile.
+  const body = (
+    <>
+      <p className="text-xs font-semibold uppercase tracking-wide text-content-subtle">{label}</p>
+      {value === null ? (
+        <>
+          <p className="mt-3 text-xl italic leading-none text-unknown">Not known</p>
+          <p className="mt-2 text-xs leading-snug text-content-subtle">{unknownReason}</p>
+        </>
+      ) : (
+        <>
+          <p className="mt-3 font-mono text-2xl font-semibold leading-none tracking-[-0.02em] tabular-nums text-content">
+            {value}
+            {unit && <span className="ml-0.5 text-sm font-normal text-content-muted">{unit}</span>}
+          </p>
+          {(hint || delta) && (
+            <div className="mt-2.5 flex flex-col gap-0.5">
+              {delta && (
+                <TrendBadge
+                  direction={delta.direction}
+                  label={delta.label}
+                  higherIsBetter={delta.higherIsBetter ?? true}
+                />
+              )}
+              {hint && <p className="text-xs text-content-subtle">{hint}</p>}
+            </div>
+          )}
+          {trendPoints && trendPoints.length >= 2 && <Sparkline points={trendPoints} />}
+        </>
+      )}
+      {(footer || href) && (
+        <div className="mt-auto flex items-center justify-between gap-2 pt-3">
+          {footer}
+          {href && <span className="text-xs font-medium text-accent">View details →</span>}
+        </div>
+      )}
+    </>
+  );
+
+  const className = 'flex h-full min-w-0 flex-col bg-surface-raised px-4 py-4 text-left transition-colors hover:bg-surface';
+
+  return href ? (
+    <Link href={href} className={className}>
+      {body}
+    </Link>
+  ) : (
+    <div className={className}>{body}</div>
+  );
+};
 
 /**
  * The 1px-gap grid that joins stat tiles into one instrument panel rather than leaving them as four
@@ -464,6 +499,197 @@ export const Sparkline = ({ points, width = 140, height = 30 }: { points: number
   );
 };
 
+/**
+ * A ranked horizontal-bar list — top/bottom items by contribution, waste by reason, anything that
+ * was previously just a `Table` of label+value with no sense of relative scale. Bars are drawn
+ * against the row's OWN maximum (not a shared axis with other charts on the page), so "which of
+ * these five rows is biggest" reads instantly without needing a printed axis.
+ *
+ * Every bar is a real `<button>` when `onSelect` is given (keyboard-reachable, not a mouse-only
+ * hover target) rather than a decorative rectangle — the same "never a dead end" discipline the
+ * dashboard's drill-through panels already apply to figures. `tone` lets a caller flag a row as
+ * bad news (e.g. the bottom-contribution list) without inventing a second colour language — it
+ * reuses the same status tokens `Badge`/`TrendBadge` already carry.
+ *
+ * Renders nothing for an empty list — an empty bar chart with a "0" axis is exactly the kind of
+ * fabricated-looking-real emptiness I7 exists to avoid; the caller's own `EmptyState` covers this.
+ */
+export const BarComparison = ({
+  rows,
+  formatValue,
+  tone = 'accent',
+}: {
+  rows: { key: string; label: string; value: number; onSelect?: () => void }[];
+  /** How the raw number renders beside the bar — the caller already has the real currency/unit formatter. */
+  formatValue: (value: number) => string;
+  tone?: 'accent' | 'danger' | 'warning' | 'positive';
+}) => {
+  if (rows.length === 0) return null;
+  const max = Math.max(...rows.map((r) => Math.abs(r.value)), 0);
+  const barToneClass: Record<typeof tone, string> = {
+    accent: 'bg-accent',
+    danger: 'bg-danger',
+    warning: 'bg-warning',
+    positive: 'bg-positive',
+  };
+
+  return (
+    <ul className="space-y-2.5 px-5 py-4">
+      {rows.map((row) => {
+        const pct = max > 0 ? (Math.abs(row.value) / max) * 100 : 0;
+        const content = (
+          <>
+            <span className="flex items-baseline justify-between gap-3 text-sm">
+              <span className="min-w-0 truncate text-content">{row.label}</span>
+              <span className="shrink-0 font-mono tabular-nums text-content-muted">{formatValue(row.value)}</span>
+            </span>
+            <span className="mt-1.5 block h-1.5 overflow-hidden rounded-full bg-surface-sunken">
+              <span
+                className={cx('block h-full rounded-full transition-[width]', barToneClass[tone])}
+                style={{ width: `${pct}%` }}
+              />
+            </span>
+          </>
+        );
+        return (
+          <li key={row.key}>
+            {row.onSelect ? (
+              <button
+                type="button"
+                onClick={row.onSelect}
+                className="block w-full rounded-control text-left transition-opacity hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              >
+                {content}
+              </button>
+            ) : (
+              <div>{content}</div>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+};
+
+/**
+ * A single diverging bar for a value measured against zero — cost variance (over/under recipe),
+ * a supplier's price drift, anything where the SIGN carries the meaning and not just the
+ * magnitude. Deliberately one bar, not a chart: this exists for the one or two headline variance
+ * figures on a page, where the shape ("how far, which direction") is the whole point and a real
+ * axis with gridlines would be over-built for a single measurement.
+ *
+ * `direction` decides colour, not the raw sign of `value` — the same reason `TrendBadge` takes
+ * `higherIsBetter` instead of inferring good/bad from up/down: "over recipe" is bad regardless of
+ * whether the stored number is positive or negative, and the caller (which knows the business
+ * meaning) is the only one who can say so honestly.
+ */
+export const DivergingBar = ({
+  value,
+  maxMagnitude,
+  direction,
+}: {
+  value: number;
+  /** The scale the bar is drawn against — typically the larger of the two sides being compared (e.g. actual vs theoretical). */
+  maxMagnitude: number;
+  direction: 'over' | 'under' | 'exact' | 'unknown';
+}) => {
+  if (direction === 'unknown' || maxMagnitude === 0) return null;
+  const toneClass = direction === 'over' ? 'bg-danger' : direction === 'under' ? 'bg-warning' : 'bg-content-subtle';
+  const pct = Math.min(100, (Math.abs(value) / maxMagnitude) * 100);
+
+  return (
+    <div className="mt-3 flex h-2 w-full overflow-hidden rounded-full bg-surface-sunken" role="img" aria-label={`Variance bar, ${direction === 'over' ? 'over' : direction === 'under' ? 'under' : 'at'} recipe`}>
+      <div className="flex w-1/2 justify-end">
+        {direction === 'under' && <div className={cx('h-full rounded-l-full', toneClass)} style={{ width: `${pct}%` }} />}
+      </div>
+      <div className="w-px shrink-0 bg-border-strong" />
+      <div className="flex w-1/2 justify-start">
+        {(direction === 'over' || direction === 'exact') && (
+          <div className={cx('h-full rounded-r-full', toneClass)} style={{ width: direction === 'exact' ? '2px' : `${pct}%` }} />
+        )}
+      </div>
+    </div>
+  );
+};
+
+/**
+ * The margin waterfall: base contribution margin -> price/cost/mix/volume effects, each stepping
+ * from the running total -> the new contribution margin. A real waterfall (each bar starts where
+ * the previous one ended), not a bar-comparison chart — the running-total connector between steps
+ * is what makes "how did we get from X to Y" legible at a glance, which four independent bars
+ * side by side cannot show.
+ *
+ * `higherIsBetter` per step is a fixed design decision (an effect is bad when it REDUCES margin,
+ * regardless of the raw sign a caller's data happens to produce) — this component does not accept
+ * it as a prop, unlike `TrendBadge`, because there is only one honest reading of "cost went up
+ * and ate into margin" for this specific chart.
+ */
+export const MarginWaterfall = ({
+  base,
+  steps,
+  formatValue,
+}: {
+  /** The starting bar — the base period's own real contribution margin. */
+  base: { label: string; value: number };
+  /** Each effect, in the fixed price/cost/mix/volume order the spec's own decomposition defines. */
+  steps: { key: string; label: string; value: number }[];
+  formatValue: (value: number) => string;
+}) => {
+  const total = base.value + steps.reduce((sum, s) => sum + s.value, 0);
+  const bars = [
+    { key: 'base', label: base.label, value: base.value, kind: 'anchor' as const },
+    ...steps.map((s) => ({ ...s, kind: 'step' as const })),
+    { key: 'total', label: 'New margin', value: total, kind: 'anchor' as const },
+  ];
+
+  // The scale every bar is drawn against — the largest cumulative magnitude reached at any point
+  // in the walk, so a big early swing doesn't clip a smaller later one off the top.
+  let running = base.value;
+  const cumulativeMagnitudes = [Math.abs(base.value)];
+  for (const s of steps) {
+    running += s.value;
+    cumulativeMagnitudes.push(Math.abs(running));
+  }
+  const maxMagnitude = Math.max(...cumulativeMagnitudes, 1);
+
+  running = base.value;
+  return (
+    <div role="img" aria-label={`Margin waterfall from ${formatValue(base.value)} to ${formatValue(total)}`} className="px-5 py-4">
+      <ul className="space-y-3">
+        {bars.map((bar) => {
+          const isAnchor = bar.kind === 'anchor';
+          const barStart = isAnchor ? 0 : running;
+          if (!isAnchor) running += bar.value;
+          const barEnd = isAnchor ? bar.value : running;
+
+          const left = (Math.min(barStart, barEnd) / maxMagnitude) * 50 + 50;
+          const width = (Math.abs(barEnd - barStart) / maxMagnitude) * 50;
+          const tone = isAnchor ? 'bg-accent' : bar.value >= 0 ? 'bg-positive' : 'bg-danger';
+
+          return (
+            <li key={bar.key}>
+              <div className="flex items-baseline justify-between gap-3 text-sm">
+                <span className="min-w-0 truncate text-content">{bar.label}</span>
+                <span className={cx('shrink-0 font-mono tabular-nums', isAnchor ? 'text-content font-semibold' : bar.value >= 0 ? 'text-positive' : 'text-danger')}>
+                  {isAnchor ? formatValue(bar.value) : `${bar.value >= 0 ? '+' : ''}${formatValue(bar.value)}`}
+                </span>
+              </div>
+              <div className="relative mt-1.5 h-2.5 w-full overflow-hidden rounded-full bg-surface-sunken">
+                <div
+                  className={cx('absolute h-full rounded-full', tone)}
+                  style={{ left: `${left}%`, width: `${Math.max(width, 0.5)}%` }}
+                />
+                {/* The zero line — the fixed reference every bar's position is read against. */}
+                <div className="absolute inset-y-0 left-1/2 w-px bg-border-strong" />
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+};
+
 /* ---------------------------------------------------------------- tables */
 
 /**
@@ -481,7 +707,7 @@ export const Table = ({
   /** Names the table for assistive tech — a screen-reader user landing in a grid of numbers needs to know WHICH numbers before reading any of them. */
   'aria-label'?: string;
 }) => (
-  <div className={cx('relative max-h-[70vh] overflow-auto', className)}>
+  <div className={cx('relative max-h-[70vh] min-w-0 overflow-auto', className)}>
     <table className="w-full border-collapse text-sm" {...(ariaLabel !== undefined ? { 'aria-label': ariaLabel } : {})}>
       {children}
     </table>
@@ -605,16 +831,35 @@ const buttonVariants: Record<ButtonVariant, string> = {
   danger: 'bg-transparent text-danger hover:bg-danger-soft border-danger/40',
 };
 
+/**
+ * `size="lg"` exists for exactly one real reason: the standard 44x44px touch-target minimum
+ * (WCAG 2.5.5 / iOS HIG) — the default `py-1.5` control computes to ~32px tall, fine for a mouse
+ * pointer but a genuine mis-tap risk on a phone/tablet screen. Deliberately opt-in, not a size
+ * change to the default: every desktop screen in this app was designed and screenshotted against
+ * the current density, and inflating every button/input app-wide would be a much bigger, uninvited
+ * visual change for a problem that's real only on the handful of screens someone actually operates
+ * one-handed on a device (receiving, stocktake) — see those pages' own card-per-row mobile layout,
+ * the first real callers of `size="lg"`.
+ */
+export type ControlSize = 'default' | 'lg';
+
+const buttonSizes: Record<ControlSize, string> = {
+  default: 'px-4 py-1.5 text-sm',
+  lg: 'px-5 py-3 text-base min-h-11',
+};
+
 export const Button = ({
   variant = 'secondary',
+  size = 'default',
   className,
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant }) => (
+}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant; size?: ControlSize }) => (
   <button
     className={cx(
-      'inline-flex items-center justify-center gap-1.5 rounded-control border px-4 py-1.5 text-sm font-semibold',
+      'inline-flex items-center justify-center gap-1.5 rounded-control border font-semibold',
       'transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent',
       'disabled:cursor-not-allowed disabled:opacity-45',
+      buttonSizes[size],
       buttonVariants[variant],
       className
     )}
@@ -622,17 +867,30 @@ export const Button = ({
   />
 );
 
+const fieldSizes: Record<ControlSize, string> = {
+  default: 'px-3 py-1.5 text-sm',
+  lg: 'px-4 py-3 text-base min-h-11',
+};
+
 const fieldStyles =
-  'w-full rounded-control border border-border-strong bg-surface-raised px-3 py-1.5 text-sm text-content ' +
+  'w-full rounded-control border border-border-strong bg-surface-raised text-content ' +
   'placeholder:text-content-subtle focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 ' +
   'disabled:cursor-not-allowed disabled:opacity-45';
 
-export const Input = ({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) => (
-  <input className={cx(fieldStyles, className)} {...props} />
+export const Input = ({
+  className,
+  size = 'default',
+  ...props
+}: Omit<InputHTMLAttributes<HTMLInputElement>, 'size'> & { size?: ControlSize }) => (
+  <input className={cx(fieldStyles, fieldSizes[size], className)} {...props} />
 );
 
-export const Select = ({ className, ...props }: SelectHTMLAttributes<HTMLSelectElement>) => (
-  <select className={cx(fieldStyles, 'pr-8', className)} {...props} />
+export const Select = ({
+  className,
+  size = 'default',
+  ...props
+}: Omit<SelectHTMLAttributes<HTMLSelectElement>, 'size'> & { size?: ControlSize }) => (
+  <select className={cx(fieldStyles, fieldSizes[size], 'pr-8', className)} {...props} />
 );
 
 export const Field = ({

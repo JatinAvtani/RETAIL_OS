@@ -198,6 +198,100 @@ body {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
+   Motion layer.
+
+   State-change animation only — a drill-through expanding, a modal opening, the sidebar's width
+   changing. Never decoration: no staggered entrances, no page-transition flourish, no bounce.
+   Budget is 120–180ms for anything small (hover/focus/expand) and caps at 250ms for the largest
+   element on screen (a modal). Every curve here is ease-out (appearing/expanding) or ease-in
+   (leaving/collapsing) — never a spring, which would fight the flat "ruled and printed" register
+   the rest of this file already commits to.
+
+   The blanket `prefers-reduced-motion` rule above already forces every animation's duration to
+   0.01ms, so these keyframes need no reduced-motion variant of their own — state still changes,
+   it simply arrives instantly instead of travelling. */
+@keyframes retailos-overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-overlay-in {
+  animation: retailos-overlay-in 140ms ease-out;
+}
+
+@keyframes retailos-palette-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* An anchored dropdown (notification bell, and any future one like it) — same fade+settle
+   feeling as the command palette, but scaling from its own top-right corner rather than the
+   viewport centre, since it hangs off a trigger button rather than floating mid-screen. */
+@keyframes retailos-dropdown-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-dropdown-in {
+  transform-origin: top right;
+  animation: retailos-dropdown-in 140ms ease-out;
+}
+
+/* A collapsible region (the dashboard's "Show source rows" panel, and any future disclosure that
+   follows the same pattern): grid-template-rows 0fr→1fr rather than height:auto, since height
+   cannot be animated and max-height requires guessing a ceiling taller than the real content. */
+@keyframes retailos-disclosure-in {
+  from {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+  to {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+}
+
+.disclosure-grid {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition:
+    grid-template-rows 180ms ease-out,
+    opacity 140ms ease-out;
+  opacity: 0;
+}
+
+.disclosure-grid.open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.disclosure-grid {
+  min-width: 0;
+}
+
+.disclosure-grid > div {
+  overflow: hidden;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
    The signed-out brand panel.
 
    ONE brass ground, identical in both themes — deliberately. Earlier versions inverted it per theme

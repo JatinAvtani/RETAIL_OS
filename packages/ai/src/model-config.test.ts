@@ -10,23 +10,26 @@ describe('modelForTask', () => {
   });
 
   it('CLASSIFY uses the cheapest/fastest lite variant', () => {
-    expect(modelForTask('CLASSIFY')).toBe('gemini-flash-lite-latest');
+    expect(modelForTask('CLASSIFY')).toBe('gemini-3.1-flash-lite');
   });
 
   /**
-   * Every task is on the lite variant as of 2026-08-24, and that is a deliberate availability
-   * decision rather than a preference: `gemini-flash-latest` returned a persistent
-   * `503 UNAVAILABLE — "experiencing high demand"` on this key, taking 45-67 SECONDS to do so,
-   * which is far past the chat provider's 15s request timeout — so an overloaded model surfaced as
-   * an opaque hang instead of the "model unavailable" error the app already handles. Narration
-   * quality on the replacement was verified against a real grounding bundle before switching.
+   * Every task is on the lite variant as of 2026-08-24 (a deliberate availability decision:
+   * `gemini-flash-latest` returned a persistent `503 UNAVAILABLE` on this key, taking 45-67 SECONDS
+   * to do so — far past the chat provider's 15s request timeout). As of 2026-09-04, all three tasks
+   * moved from the `-latest` ALIAS to the real, versioned `gemini-3.1-flash-lite` tag — a floating
+   * alias lets Google silently swap the underlying model with no warning; a versioned tag cannot
+   * move underneath the app the same way, even though it will eventually be retired outright (as
+   * already happened to `gemini-2.5-flash-lite`). Narration/classification/vision-extraction
+   * quality on the replacement was verified live before switching (see model-config.ts's own doc
+   * comment for the measurements).
    *
-   * This asserts the CURRENT deliberate configuration. If `-latest` recovers and PLAN/NARRATE move
-   * back, update this test with a fresh live measurement — do not relax it into a loose pattern,
-   * because the point is that a silent model change gets noticed.
+   * This asserts the CURRENT deliberate configuration. If this tag is ever retired and a
+   * replacement is chosen, update this test with a fresh live measurement — do not relax it into a
+   * loose pattern, because the point is that a silent model change gets noticed.
    */
   it('PLAN and NARRATE use the lite flash variant — the non-lite variant is 503-unavailable on this key', () => {
-    expect(modelForTask('PLAN')).toBe('gemini-flash-lite-latest');
-    expect(modelForTask('NARRATE')).toBe('gemini-flash-lite-latest');
+    expect(modelForTask('PLAN')).toBe('gemini-3.1-flash-lite');
+    expect(modelForTask('NARRATE')).toBe('gemini-3.1-flash-lite');
   });
 });

@@ -271,6 +271,105 @@ describe('PurchaseOrderRepository', () => {
     });
   });
 
+  /**
+   * The real fix for the audit finding this session addresses: a PDF-generation/email-send
+   * failure after a genuine SEND previously left `status` at `SENT` with no distinct fact anywhere
+   * recording that delivery never actually happened. `deliveryStatus` (a side-channel column,
+   * mirroring `sales_transactions.consumption_status`'s established pattern) makes that a real,
+   * queryable, retryable fact — `status`/`version` are never touched by either `recordSent` or
+   * `recordDeliveryFailure`, matching the design precedent that "the state transition itself...
+   * happens first and is authoritative regardless of what follows."
+   */
+  describe('deliveryStatus — the SEND-transition side effect is a distinct, queryable fact from status', () => {
+    /** Drives a PO all the way to a real SENT status via the same transitions the happy-path test above uses. */
+    const createSentPurchaseOrder = async (repo: PurchaseOrderRepository, poNumber: string) => {
+      const created = await repo.create({ storeId, supplierId, poNumber, currency: 'USD' });
+      await repo.applyTransition(created.id, 'SUBMIT', 1, actorUserId);
+      await repo.applyTransition(created.id, 'APPROVE', 2, actorUserId);
+      const sendResult = await repo.applyTransition(created.id, 'SEND', 3, actorUserId);
+      expect(sendResult).toEqual({ ok: true, newStatus: 'SENT' });
+      return created.id;
+    };
+
+    it('a newly SENT purchase order defaults to deliveryStatus PENDING with zero attempts — the real transition/delivery gap window', async () => {
+      const repo = new PurchaseOrderRepository(createScopedDb(client), organizationId);
+      const id = await createSentPurchaseOrder(repo, 'PO-DELIVERY-1');
+
+      const row = await repo.findById(id);
+      expect(row?.status).toBe('SENT');
+      expect(row?.deliveryStatus).toBe('PENDING');
+      expect(row?.deliveryError).toBeNull();
+      expect(row?.deliveryAttempts).toBe(0);
+    });
+
+    it('a successful send reaches the real DELIVERED state via recordSent, with a real attempt recorded', async () => {
+      const repo = new PurchaseOrderRepository(createScopedDb(client), organizationId);
+      const id = await createSentPurchaseOrder(repo, 'PO-DELIVERY-2');
+
+      await repo.recordSent(id, `org/${organizationId}/purchase-orders/${id}.pdf`, 'jane@example.test');
+
+      const row = await repo.findById(id);
+      expect(row?.status).toBe('SENT');
+      expect(row?.deliveryStatus).toBe('DELIVERED');
+      expect(row?.deliveryError).toBeNull();
+      expect(row?.deliveryAttempts).toBe(1);
+      expect(row?.pdfObjectKey).not.toBeNull();
+      expect(row?.emailSentAt).not.toBeNull();
+    });
+
+    it('a simulated PDF/email failure leaves the PO at real status SENT but a distinct, queryable deliveryStatus FAILED — never a false SENT-looking success', async () => {
+      const repo = new PurchaseOrderRepository(createScopedDb(client), organizationId);
+      const id = await createSentPurchaseOrder(repo, 'PO-DELIVERY-3');
+      const versionBeforeFailure = (await repo.findById(id))?.version;
+
+      await repo.recordDeliveryFailure(id, 'PDF generation failed: simulated failure for test');
+
+      const row = await repo.findById(id);
+      // The state transition stays authoritative — CANNOT distinguish this row from a "genuinely
+      // delivered" one by status alone, which is exactly the gap deliveryStatus closes.
+      expect(row?.status).toBe('SENT');
+      expect(row?.version).toBe(versionBeforeFailure);
+      expect(row?.deliveryStatus).toBe('FAILED');
+      expect(row?.deliveryError).toBe('PDF generation failed: simulated failure for test');
+      expect(row?.deliveryAttempts).toBe(1);
+      expect(row?.pdfObjectKey).toBeNull();
+      expect(row?.emailSentAt).toBeNull();
+    });
+
+    it('a retry (recordSent called again after a recorded failure) recovers to DELIVERED, preserves the failure count in deliveryAttempts, and clears deliveryError', async () => {
+      const repo = new PurchaseOrderRepository(createScopedDb(client), organizationId);
+      const id = await createSentPurchaseOrder(repo, 'PO-DELIVERY-4');
+
+      await repo.recordDeliveryFailure(id, 'Email failed: simulated transient failure');
+      const afterFailure = await repo.findById(id);
+      expect(afterFailure?.deliveryStatus).toBe('FAILED');
+      expect(afterFailure?.deliveryAttempts).toBe(1);
+
+      // The real retry: a second attempt succeeds.
+      await repo.recordSent(id, `org/${organizationId}/purchase-orders/${id}.pdf`, 'jane@example.test');
+
+      const afterRetry = await repo.findById(id);
+      expect(afterRetry?.status).toBe('SENT');
+      expect(afterRetry?.deliveryStatus).toBe('DELIVERED');
+      expect(afterRetry?.deliveryError).toBeNull();
+      // 2 real attempts total — the first (failed) one is not erased by the successful retry.
+      expect(afterRetry?.deliveryAttempts).toBe(2);
+    });
+
+    it('repeated failures accumulate deliveryAttempts and keep only the most recent error message', async () => {
+      const repo = new PurchaseOrderRepository(createScopedDb(client), organizationId);
+      const id = await createSentPurchaseOrder(repo, 'PO-DELIVERY-5');
+
+      await repo.recordDeliveryFailure(id, 'first failure: PDF generation error');
+      await repo.recordDeliveryFailure(id, 'second failure: email send error');
+
+      const row = await repo.findById(id);
+      expect(row?.deliveryStatus).toBe('FAILED');
+      expect(row?.deliveryAttempts).toBe(2);
+      expect(row?.deliveryError).toBe('second failure: email send error');
+    });
+  });
+
   it('addLine refuses to add a line to a non-DRAFT purchase order', async () => {
     const repo = new PurchaseOrderRepository(createScopedDb(client), organizationId);
     const created = await repo.create({ storeId, supplierId, poNumber: 'PO-1003', currency: 'USD' });

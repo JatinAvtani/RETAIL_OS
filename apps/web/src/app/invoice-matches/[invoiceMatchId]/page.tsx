@@ -6,9 +6,18 @@ import { TRPCClientError } from '@trpc/client';
 import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
 import { Badge, Button, Card, ErrorNotice, Field, Input, LoadingState, PageHeader, Table, Td, Th, Tr, Value, type BadgeTone } from '@/components/ui';
+import { formatQuantity, formatMoneyTotal } from '@/lib/format';
 
 type GetResult = Awaited<ReturnType<typeof trpc.invoiceMatches.get.query>>;
 type Line = GetResult['lines'][number];
+
+/** A raw storage-precision quantity string (e.g. `'10.000000'`) rendered without trailing noise — `Value`'s own bare `{value}` interpolation was showing the full six-decimal column width, unitless per the earlier decision (invoice_match_lines has no captured invoice unit to label it with honestly). */
+const Qty = ({ value }: { value: string | null }) =>
+  value === null ? <span className="italic text-unknown">Not known</span> : <span className="font-mono tabular-nums">{formatQuantity(value)}</span>;
+
+/** A raw storage-precision price string rendered at real currency precision (2dp) — same "no currency code stored on this table" constraint as the variance queue's own dollar-impact column. */
+const Price = ({ value }: { value: string | null }) =>
+  value === null ? <span className="italic text-unknown">Not known</span> : <span className="font-mono tabular-nums">{formatMoneyTotal(value)}</span>;
 
 const severityTone = (severity: string): BadgeTone => {
   if (severity === 'HIGH') return 'danger';
@@ -104,7 +113,7 @@ export default function InvoiceMatchDetailPage() {
 
   if (!data) return null;
 
-  const { invoiceMatch, lines } = data;
+  const { invoiceMatch, lines, totalDollarImpact } = data;
   const varianceLines = lines.filter((line: Line) => line.varianceType !== 'CLEAN');
 
   return (
@@ -193,11 +202,13 @@ export default function InvoiceMatchDetailPage() {
             <thead>
               <tr>
                 <Th>Line</Th>
+                <Th>Product</Th>
                 <Th>SKU</Th>
                 <Th align="right">Invoiced qty</Th>
                 <Th align="right">Received qty</Th>
                 <Th align="right">Invoiced price</Th>
                 <Th align="right">PO price</Th>
+                <Th align="right">Impact</Th>
                 <Th>Variance</Th>
               </tr>
             </thead>
@@ -206,19 +217,25 @@ export default function InvoiceMatchDetailPage() {
                 <Tr key={line.id}>
                   <Td>{Number(line.invoiceLineIndex) + 1}</Td>
                   <Td>
+                    <Value value={line.productName} />
+                  </Td>
+                  <Td>
                     <Value value={line.invoiceSku} />
                   </Td>
                   <Td variant="numeric">
-                    <Value value={line.invoiceQuantity} />
+                    <Qty value={line.invoiceQuantity} />
                   </Td>
                   <Td variant="numeric">
-                    <Value value={line.receivedQuantity} />
+                    <Qty value={line.receivedQuantity} />
                   </Td>
                   <Td variant="numeric">
-                    <Value value={line.invoiceUnitPrice} />
+                    <Price value={line.invoiceUnitPrice} />
                   </Td>
                   <Td variant="numeric">
-                    <Value value={line.poUnitPrice} />
+                    <Price value={line.poUnitPrice} />
+                  </Td>
+                  <Td variant="numeric">
+                    <Price value={line.dollarImpact} />
                   </Td>
                   <Td>
                     <div className="flex flex-col gap-1">
@@ -230,6 +247,12 @@ export default function InvoiceMatchDetailPage() {
               ))}
             </tbody>
           </Table>
+        )}
+        {lines.length > 0 && (
+          <div className="flex items-center justify-between border-t border-border-strong px-4 py-2.5 text-sm font-semibold">
+            <span>Total impact</span>
+            <Price value={totalDollarImpact} />
+          </div>
         )}
       </Card>
     </>

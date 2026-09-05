@@ -15,3 +15,4 @@ export * from './briefing';
 export * from './action-draft';
 export * from './eval/index';
 export * from './retrieval';
+export * from './investigate';
