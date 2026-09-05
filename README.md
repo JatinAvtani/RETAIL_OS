@@ -15,199 +15,448 @@ consumed and what your stock ledger says you actually consumed. That gap is wast
 and shrinkage combined. It is invisible without *both* a recipe model and a movement ledger, which
 is why almost no small business knows the number.
 
+![Owner dashboard](docs/images/dashboard.png)
+
 ---
 
-## Buildathon reviewer path
+## What it found in the demo corpus
 
-This is an **AI Finance Controller** track submission. The shortest reproducible path is a bounded
-version of the same corpus and the same production write paths used by the full demo:
+Running against the seeded three-outlet dataset, Vyapaar surfaced **₹6,50,694 of goods that were
+invoiced but never delivered** — across 75 supplier invoices, in a business whose books balanced and
+whose payments all cleared.
+
+One supplier accounted for ₹2,51,760 of it, short-delivering on 37 of 40 invoice lines.
+
+![Batch reconciliation report](docs/images/reconciliation.png)
+
+Nothing about this was visible in the accounting. Every invoice was internally consistent. The
+discrepancy only exists between three documents that no small business systematically compares: the
+purchase order, the goods receipt, and the invoice.
+
+---
+
+## Table of contents
+
+- [Quick start](#quick-start) — get it running in ~10 minutes
+- [Guided tour](#guided-tour) — what to look at, with screenshots
+- [How it works](#how-it-works) — 10 architecture diagrams
+- [The design principle](#the-design-principle-everything-follows)
+- [Troubleshooting](#troubleshooting)
+- [Testing](#testing) · [Demo data](#demo-data) · [Scope boundaries](#scope-boundaries)
+
+---
+
+## Quick start
+
+### Prerequisites
+
+| Requirement | Version | Check with |
+|---|---|---|
+| **Node.js** | **22 or later** (enforced by `engines`) | `node --version` |
+| **pnpm** | 10.34.5 — installed automatically by `corepack enable` | `pnpm --version` |
+| **Docker Desktop** | any current, running | `docker ps` |
+| Disk space | ~3 GB | — |
+| RAM | 8 GB minimum, 16 GB comfortable | — |
+
+> **Getting pnpm.** `corepack enable` reads the `packageManager` field in `package.json` and
+> provisions the exact pinned version. On **Windows it can fail with `EPERM`** unless the terminal
+> is elevated — if that happens, either run the terminal as Administrator, or just install pnpm
+> directly, which works fine:
+>
+> ```bash
+> npm install -g pnpm@10.34.5
+> ```
+
+A Gemini API key is **optional**. Without one the seeded demo is fully explorable; live model calls
+degrade to an explicit "unavailable" instead of fabricating an answer.
+
+### Five commands
 
 ```bash
-cp .env.local.example .env.local
-docker compose up -d
-corepack enable
-pnpm install --frozen-lockfile
-pnpm demo:quick
-pnpm dev
+git clone https://github.com/JatinAvtani/RETAIL_OS.git
+cd RETAIL_OS
+
+cp .env.local.example .env.local   # works as-is; add GEMINI_API_KEY only for live AI
+docker compose up -d               # Postgres, Redis, MinIO  (~30s to healthy)
+corepack enable                    # see the note above if this errors on Windows
+pnpm install --frozen-lockfile     # ~2 min
+pnpm demo:quick                    # migrations + deterministic seed  (~10 min)
+pnpm dev                           # web :3000 · api :3001 · worker
 ```
 
-Open [http://localhost:3000](http://localhost:3000) and choose **Explore with sample data**, or sign
-in as `demo@vyapaar.test` / `Vyapaar-Demo-Cafe-2026!`.
+`.env.local.example` needs **no editing** — the database URLs, the Redis port and the MinIO
+credentials in it already match `docker-compose.yml`.
 
-`demo:quick` creates the demo identity through the real verification/password-hashing paths, runs
-both migrations, regenerates the deterministic Indian corpus, and seeds the complete catalog,
-invoice, purchasing, inventory and notification workflows. It bounds sales to 14 days and at most
-10 receipts per store-day (at most 420 receipts across three stores) so evaluation does not require the
-multi-hour full replay. It deliberately omits pre-written assistant answers whose full-corpus
-figures would be false for the bounded dataset; live answers still use the real grounded pipeline.
-Budget roughly ten minutes on a typical development laptop; deleting a previously seeded full
-corpus can account for several of those minutes.
+Timings above were measured on a cold clone on a typical Windows laptop. Before `demo:quick`,
+confirm the containers are actually up:
 
-The highest-signal things to inspect are:
+```bash
+docker ps      # expect postgres, redis, minio — all healthy
+```
 
-1. **Finance Controller → Batch reconciliation report:** the track brief answered literally — every
-   invoice line matched against its purchase order and goods receipt, a real measured match rate,
-   and the exceptions it could not resolve ranked by dollar impact. The rate is whatever the data
-   actually is; a low one means the corpus genuinely contains discrepancies, which is the finding,
-   not a defect.
-2. **Finance Controller → a finding:** anomalies detected by scheduled sweeps open an investigation
-   on their own, with no question asked first. Each expands into an ordered multi-hop trace where
-   every hop's narration was independently grounding-validated before it was stored.
-3. **Dashboard → an unknown cost:** one deliberately unpriced ingredient prevents a partial total
-   from masquerading as complete.
-4. **Documents → an invoice:** extraction evidence, deterministic validation and posting are
-   connected in one drillable chain.
-5. **Purchase orders → variance queue:** ordered, received and invoiced quantities reconcile, with
-   unresolved exceptions kept visible.
-6. **Assistant → ask about sales or suppliers:** the model selects registered metrics and narrates;
-   code computes every number and rejects unsupported numeric claims.
+Then open **<http://localhost:3000>** and either click **Explore with sample data**, or sign in:
 
-The submission narrative, evidence inventory, five-minute script and final manual checklist live in
-[`docs/BUILDATHON_SUBMISSION.md`](docs/BUILDATHON_SUBMISSION.md).
+```
+demo@vyapaar.test
+Vyapaar-Demo-Cafe-2026!
+```
+
+> **Set the store filter to Indiranagar** for the richest dataset. The figures quoted in this
+> README come from that outlet.
+
+### What `demo:quick` actually does
+
+```mermaid
+flowchart LR
+  A["db:migrate"] --> B["db:migrate:concurrent"]
+  B --> C["seed-demo-account<br/><small>real password hashing</small>"]
+  C --> D["generate.mts<br/><small>deterministic corpus</small>"]
+  D --> E["seed-demo<br/><small>catalog + sales</small>"]
+  E --> F["seed-demo-operations<br/><small>POs, receipts, waste</small>"]
+  F --> G["seed-demo-invoices<br/><small>75 GST invoices</small>"]
+  G --> H["seed-demo-engagement<br/><small>alerts, history</small>"]
+```
+
+Every step writes through the **same repositories and services the application uses** — sales run
+recipe explosion → FEFO draw → movement posting; invoices go through the real upload → confirm →
+approve pipeline. Nothing is inserted directly into a results table.
+
+`pnpm demo:quick` bounds sales to 14 days and ≤10 receipts per store-day (≤420 receipts) so review
+doesn't need the multi-hour replay. `pnpm demo` runs the canonical 180-day, 42,875-transaction
+corpus.
+
+---
+
+## Guided tour
+
+Six screens, in the order that tells the story.
+
+### 1 · The dashboard refuses to guess
+
+![Cost variance shown as unknown](docs/images/dashboard-unknown.png)
+
+Cost variance reads **"Not known"** — and says exactly what's missing. One ingredient in the corpus
+is deliberately left unpriced, so a real menu item cannot be fully costed.
+
+Almost every tool in this category would print `0` here. A zero means *your costs match theory
+perfectly* — it looks like good news, and it's a lie. Beside it, the **Data completeness** panel
+reports how much of the input is actually present, so you know how far to trust the numbers above.
+
+### 2 · Batch reconciliation — the finance-ops loop
+
+![Reconciliation report](docs/images/reconciliation.png)
+
+Every invoice line matched against its purchase order and goods receipt. A measured match rate, and
+every unresolved exception ranked by rupee impact.
+
+The match rate is **whatever the data actually is**. A low rate means the corpus genuinely contains
+discrepancies — that's the finding, not a defect. Raising it would mean inventing agreement between
+invoices and deliveries, which is the exact failure this system exists to catch.
+
+### 3 · Three-way match — the evidence
+
+![Three-way match detail](docs/images/three-way-match.png)
+
+Invoiced 9, received 4, impact ₹1,900 — with a plain-English explanation per line. Closing a
+variance **requires** a resolution note, so the outcome stays auditable months later.
+
+### 4 · The Finance Controller investigates on its own
+
+![Investigation trace](docs/images/investigation-trace.png)
+
+No question was typed. A scheduled sweep detected the finding, composed the question, and ran a
+bounded multi-hop investigation. Each step shows its own verdict — `NEEDS FOLLOWUP`, `SUFFICIENT`,
+or `HOP LIMIT REACHED` — and it never claims a conclusion it didn't reach.
+
+### 5 · Ask in plain English, get cited numbers
+
+![Assistant answer with citations](docs/images/assistant-answer.png)
+
+Every figure is a card with **"How this was calculated"**. The model chose *which* metric answers
+the question; deterministic code computed it. If a narration contains a number that isn't backed by
+a computed metric or quoted verbatim from a source document, it is regenerated once and then
+discarded.
+
+### 6 · Documents in, evidence preserved
+
+![Documents](docs/images/documents.png)
+
+Drag in a PDF or a photo of a supplier invoice. Extraction, deterministic validation, and posting
+stay connected in one drillable chain.
+
+<details>
+<summary><b>More screens</b> — variance queue, inventory, suppliers, assistant home</summary>
+
+**Variance review queue** — mismatches worth checking, worst first
+![Variance queue](docs/images/variance-queue.png)
+
+**Finance Controller** — findings feed and investigation panel
+![Finance controller](docs/images/finance-controller.png)
+
+**Inventory** — stock as a projection of the ledger, never a stored counter
+![Inventory](docs/images/inventory.png)
+
+**Suppliers**
+![Suppliers](docs/images/suppliers.png)
+
+**Assistant** — daily briefing plus free-form questions
+![Assistant](docs/images/assistant.png)
+
+</details>
+
+---
+
+## How it works
+
+### 1 · The chain every number travels
+
+Break any link and the product cannot answer its headline question.
+
+```mermaid
+flowchart LR
+  INV["Supplier<br/>invoice"] --> SP["Supplier<br/>price"]
+  SP --> PC["Product<br/>cost"]
+  PC --> R["Recipe"]
+  R --> MI["Menu<br/>item"]
+  POS["POS<br/>sales"] --> CONS["Consumption"]
+  MI --> CONS
+  CONS --> COGS["COGS"]
+  COGS --> CM["Contribution<br/>margin"]
+  CM --> M["Metric"]
+  M --> ANS["Answer<br/><small>with citations</small>"]
+```
+
+### 2 · Three processes, split by resource profile
+
+```mermaid
+flowchart TB
+  B["Browser"] --> W["apps/web<br/>Next.js 15"]
+  W --> A["apps/api<br/>Fastify + tRPC"]
+  A --> PG[("Postgres 16")]
+  A --> RD[("Redis")]
+  A -.enqueue.-> Q{{"BullMQ<br/>19 queues"}}
+  Q --> WK["apps/worker<br/>consumers"]
+  WK --> PG
+  WK --> S3[("S3 / MinIO")]
+  WK -.->|"model calls"| G["Gemini"]
+```
+
+Not microservices: receiving goods atomically touches lots, movements, the stock projection and the
+event outbox. As separate services that becomes a distributed saga with compensating actions, for a
+workload with no independent scaling need. The split is by **resource profile** — OCR is bursty and
+external-bound, so it lives in the worker.
+
+### 3 · Package layering
+
+```mermaid
+flowchart TB
+  WEB["apps/web"] --> API["apps/api"]
+  API --> ASST["assistant<br/><small>classify → plan → narrate → validate</small>"]
+  WKR["apps/worker"] --> ASST
+  ASST --> MET["metrics<br/><small>the only place a number is computed</small>"]
+  ASST --> AI["ai<br/><small>all model calls</small>"]
+  MET --> DB["db<br/><small>schema, repositories, tenant guards</small>"]
+  DB --> DOM["domain<br/><small>pure functions, no I/O</small>"]
+  MET --> DOM
+```
+
+Supporting packages — `authz`, `session`, `queue`, `storage`, `email`, `pos`, `integrations`,
+`config`, `logger`, `ui` — sit beside these and are omitted here for legibility.
+
+Boundaries are enforced in CI by **dependency-cruiser**, so the layering cannot quietly erode.
+`packages/domain` has no I/O at all — which is what makes property-based testing viable.
+
+### 4 · Where AI is allowed, and where it is not
+
+```mermaid
+flowchart LR
+  subgraph P["Probabilistic — model"]
+    P1["Read messy invoices"]
+    P2["Route question → metric"]
+    P3["Decide: dig deeper?"]
+    P4["Write the sentence"]
+  end
+  subgraph D["Deterministic — tested code"]
+    D1["All money arithmetic"]
+    D2["FEFO allocation"]
+    D3["Three-way matching"]
+    D4["Reorder quantities"]
+    D5["Anomaly detection"]
+  end
+  P2 --> D1
+  D1 --> P4
+```
+
+**The rule:** if a wrong answer costs money or corrupts data, it is deterministic. The model reads,
+routes, and explains. It never calculates, and it has no write tools.
+
+### 5 · How a question becomes a grounded answer
+
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant A as Assistant
+  participant M as Metric catalog
+  participant L as Model
+  U->>A: "What was my net revenue last month?"
+  A->>L: classify intent
+  A->>L: plan — which metrics?
+  A->>M: execute selected metrics
+  M-->>A: computed values + provenance
+  A->>L: narrate these values
+  A->>A: validate every numeric token
+  alt ungrounded number found
+    A->>L: regenerate, stricter
+    A->>A: still ungrounded → discard prose
+  end
+  A-->>U: answer + citation cards
+```
+
+### 6 · The bounded investigation loop (EPIC-015)
+
+```mermaid
+flowchart TB
+  F["Finding detected<br/>by scheduled sweep"] --> Q["Compose question<br/><small>fixed template</small>"]
+  Q --> H["Run one hop<br/><small>classify → plan → compute → narrate → validate</small>"]
+  H --> S{"Model:<br/>sufficient?"}
+  S -->|SUFFICIENT| DONE["Store trace"]
+  S -->|"NEEDS_FOLLOWUP"| C{"hop &lt; 3?"}
+  C -->|yes| FQ["Model writes<br/>follow-up question"]
+  FQ --> H
+  C -->|no| HL["HOP_LIMIT_REACHED"]
+  HL --> DONE
+```
+
+Only the previous hops' **validated narration** is fed forward — never raw numbers. A bad inference
+cannot compound. `MAX_HOPS = 3` is a hard cap, not a suggestion.
+
+### 7 · AI drafts, humans approve
+
+```mermaid
+flowchart LR
+  I["Investigation<br/>reaches root cause"] --> DR["Model drafts<br/>a purchase order"]
+  DR --> DB[("Stored as DRAFT")]
+  DB --> HU{"Human<br/>reviews"}
+  HU -->|approve| PO["Purchase order created"]
+  HU -->|reject| X["Discarded"]
+```
+
+Quantities and prices come from existing domain functions, never from the model. The approval is a
+separate, explicit call — the assistant has no tool that can write business state.
+
+### 8 · Tenant isolation at four layers
+
+```mermaid
+flowchart TB
+  R["Request"] --> S["Session → organizationId"]
+  S --> L1["1 · Query<br/><small>every query org-scoped</small>"]
+  L1 --> L2["2 · Postgres RLS<br/><small>transaction-local tenant context</small>"]
+  L2 --> L3["3 · Cache keys<br/><small>org-prefixed</small>"]
+  L3 --> L4["4 · Vector + job payloads<br/><small>org-filtered</small>"]
+  L4 --> D[("Data")]
+```
+
+A real cross-tenant endpoint attack suite runs in CI. Row-level security means a missing `WHERE`
+clause fails closed at the database, not silently at the application.
+
+### 9 · Invoice to inventory
+
+```mermaid
+flowchart LR
+  U["Upload PDF/photo"] --> EX["Extract<br/><small>model</small>"]
+  EX --> V["Validate<br/><small>deterministic</small>"]
+  V --> C["Human confirms"]
+  C --> AP["Approve"]
+  AP --> POST["Post"]
+  POST --> LOT["Lots"]
+  POST --> MOV["Stock movements<br/><small>append-only</small>"]
+  POST --> PRICE["Supplier price history"]
+  POST --> M3["Three-way match"]
+```
+
+### 10 · The append-only ledger
+
+```mermaid
+flowchart LR
+  A["Receipt +10"] --> L["stock_movements<br/><small>UPDATE/DELETE revoked<br/>at the DB role</small>"]
+  B["Sale −3"] --> L
+  C["Correction −2<br/><small>new compensating row</small>"] --> L
+  L --> P["Stock level<br/><small>= SUM(movements)</small>"]
+```
+
+Stock is never a stored counter that can drift. It is a projection of the ledger, so any historical
+figure is reproducible. Corrections are new rows, never edits — which is what makes an audit
+possible.
 
 ---
 
 ## The design principle everything follows
 
-A wrong business number is worse than a missing one.
+> **Missing data degrades to "unknown" — never to zero, never to a guess.**
 
-A dashboard showing `$0.00` for a cost nobody ever recorded looks like excellent cost control. It
-reads as a fact, invites decisions, and gives no signal that anything is missing. So the system is
-built so that **an unknown value stays unknown, all the way to the screen** — never defaulted,
-never partially summed, never estimated.
+A missing ingredient price becoming `0` doesn't look like a bug. It looks like excellent margin. The
+report is confident, precise, and wrong — and nothing appears broken, so nobody investigates.
 
-That single rule shapes the schema, the type system, the metric layer, and the UI:
+This single rule shapes the schema, the metric catalog, the API contract, and the UI. Nine
+invariants enforce it mechanically in CI (`pnpm invariants`), because these violations look like
+completely reasonable code in review:
 
-| Situation | What most systems do | What Vyapaar does |
-|---|---|---|
-| Ingredient has no confirmed price | Treat as `0` | Recipe cost reports **unknown** |
-| One lot's cost is unrecorded | Sum the rest | Period COGS reports **unknown** |
-| Zero revenue in a period | Food cost = `0%` | Reports **unknown** (0% would read as flawless) |
-| Sale references an unmapped POS item | Silently skip it | Quarantine it, count the revenue, **show the gap** |
+| # | Invariant |
+|---|---|
+| I1 | LLMs never compute a business number |
+| I2 | Every business number comes from a registered metric function |
+| I3 | `stock_movements` is append-only |
+| I4 | Every tenant-scoped query is org-scoped at four layers |
+| I5 | Money and quantity are decimal branded types, never `number` |
+| I6 | Unit conversion is explicit, applied once, at a boundary |
+| I7 | Missing data degrades to unknown |
+| I8 | State change and event emission share one transaction |
+| I9 | AI drafts; humans approve. AI has no write tools |
 
-The dashboard also reports its own **data completeness** — how many sale lines came from unmapped
-items, how many consumption events had no known cost. Showing what's missing is a trust feature,
-not an admission of weakness: a number computed over partial data is only usable if you know how
-partial it is.
+Full reasoning: **[ARCHITECTURE.md](ARCHITECTURE.md)**.
 
 ---
 
-## What's built
+## Troubleshooting
 
-**Identity & multi-tenancy** — signup creates a real organization, store, and owner account in one
-transaction (email verification, password + Google OAuth login, invitations, password reset,
-role-based permissions, Redis-backed sessions with revocation), plus a team-management screen to
-invite, change roles, remove members, and revoke pending invitations.
+<details open>
+<summary><b>Common issues</b></summary>
 
-**Tenant isolation, enforced at four layers** — Postgres row-level security, `SET LOCAL` tenant
-context per transaction, an application-layer repository guard that refuses to build an unscoped
-query, and an automated cross-tenant attack suite that walks the *real* router and proves every
-id-shaped endpoint rejects a foreign tenant. Adding an endpoint without registering it fails the
-build.
+**`pnpm demo:quick` fails with a connection error**
+Docker isn't up yet. Run `docker ps` — you should see `postgres`, `redis` and `minio` healthy. Give
+Postgres ~10 seconds after `docker compose up -d`.
 
-**Catalog & costing** — products, variants, categories, units with an explicit conversion graph,
-suppliers, and effective-dated supplier prices where overlapping validity periods are rejected by
-a database exclusion constraint rather than application code.
+**Redis connection refused**
+This project maps Redis to host port **16379**, not 6379 (Windows dynamic-port-range collision).
+Check `REDIS_URL` in `.env.local` matches `docker-compose.yml`.
 
-**Recipes** — recursive explosion with waste factors, effective-dated versions, and cycle detection
-performed at save time via depth-first search.
+**Port 3000 or 3001 already in use**
+Another dev server is running. Stop it — a stray worker will also steal background jobs.
 
-**Inventory ledger** — an append-only, range-partitioned `stock_movements` table where `UPDATE` and
-`DELETE` are revoked at the database role level; corrections are compensating rows. Plus lot
-tracking with FEFO allocation, a stock-level projection reconciled against the ledger, stocktakes
-with a frozen point-in-time snapshot, inter-store transfers with an in-transit state, waste logging
-with enforced reason codes, and expiry ranking by value at risk.
+**Screens load but every number is empty**
+The seed didn't complete. Re-run `pnpm demo:quick` and watch for the final engagement step.
 
-**Sales ingestion** — Square OAuth with encrypted credentials, catalog and order sync, signature-
-verified webhooks, refund and void reversal (including staged partial refunds), a nightly
-reconciliation sweep that catches missed webhooks without disturbing the incremental sync cursor,
-CSV import with per-row content-hash idempotency, and a POS-item-to-menu-item mapping surface with
-fuzzy suggestions that a human always confirms.
+**Assistant answers "unavailable"**
+No `GEMINI_API_KEY` in `.env.local`. Expected — the app degrades explicitly rather than inventing
+figures. Everything else stays fully usable.
 
-**Metrics & dashboards** — a registered catalog of 67 business-number functions (sales, cost,
-margin and attribution, inventory, waste/shrinkage, purchasing, supplier performance, document
-health, anomaly detection) — every dashboard figure and every future AI answer reads through the
-same single code path, `executeMetric`, never a second ad-hoc query. Owner and manager dashboards
-show period-over-period deltas, 12-point sparklines, a deterministic exception feed, and top/bottom
-menu items by contribution, plus a real drill-through from any headline number back to the rows it
-was computed from. Hybrid lexical + vector search over supplier documents. Each org chooses its
-currency once at signup (no conversion logic exists anywhere — the choice is permanent by design)
-and every number for that org is computed and labelled in it, correctly, from day one.
+**`Cost variance: Not known`**
+Working as designed. One ingredient is deliberately unpriced. See
+[the design principle](#the-design-principle-everything-follows).
 
-**Supplier invoice pipeline** — upload or email in an invoice; dual-provider extraction (a vision
-model primary, OCR fallback behind a circuit breaker) reads it; deterministic validation gates check
-line arithmetic, document totals, duplicates, and price anomalies before any human sees it;
-confidence-based routing auto-approves the clean ones and queues the rest for review. A human
-approves, rejects, or corrects a supplier-SKU mapping — corrections become permanent mappings, never
-one-off guesses. Approval posts a real price history entry and a real stock receipt in a single
-transaction, and every posted number links back to the source document and forward from it, so any
-figure on the dashboard traces to the invoice it came from.
+**Investigations show "No Gemini API key configured on this worker"**
+The worker started without the key loaded. Stop `pnpm dev`, confirm the key is in `.env.local`, and
+restart — scripts load it via `packages/config`.
 
-**Purchasing** — reorder suggestions computed from trimmed-mean daily consumption, safety stock, and
-supplier lead time, each carrying a plain-language explanation and rounded to a real pack size and
-minimum order value. A filterable order list (keyset-paginated — a page can never skip or double-show
-an order) fronts a state machine (draft → submitted → approved →
-sent → received), immutable once sent, with approval thresholds enforced per manager. Sending
-generates a real PDF and a mocked supplier email. Receiving supports partial deliveries, discrepancy
-codes, damage photos, and walk-in purchases with no PO at all — all of it posting real lots and stock
-movements through the same ledger the invoice pipeline uses.
+</details>
 
-**Three-way match** — every posted invoice is automatically reconciled against its purchase order and
-what was actually received. Price and quantity variances outside a configurable tolerance land in a
-review queue, worst severity first; an item invoiced but never received is flagged high priority as a
-possible billing error. A manager resolves a variance with a required note, which is the whole audit
-trail.
+### Verify your install
 
-**Supplier performance** — delivery timing, fill rate, price variance, and invoice accuracy are
-recorded as events off the receiving and matching flows that already exist, then read back as
-components on a scorecard with drill-through to the source event and a real period-over-period trend
-for each one. A real, threshold-crossing price change is flagged with its annualised dollar impact —
-translating a percentage into a number an owner will actually act on. There is deliberately no single
-composite score: an invented weighted average would be exactly the fabricated-scoring problem this
-project exists to avoid.
+```bash
+pnpm typecheck && pnpm lint && pnpm boundaries && pnpm test
+```
 
-**AI assistant, grounded** — a chat surface where a question is classified, planned against the
-registered metric catalog, and answered only from values the catalog actually computed; the model
-routes and narrates, it never does arithmetic. Every narrated answer then passes a deterministic
-validator: each numeric token in the response must match a computed value (within formatting
-tolerance) or appear verbatim in a retrieved document excerpt, one stricter regeneration is
-allowed on a violation, and a second violation discards the prose entirely in favour of the
-structured results — a figure from nowhere cannot reach the screen through the narration path.
-Document questions run hybrid retrieval (lexical + vector, fused by reciprocal rank) over
-structure-aware invoice chunks; every excerpt enters the prompt wrapped in an untrusted-data
-delimiter, so a document that says "ignore your rules" is read as data, not obeyed. A daily
-briefing narrates the dashboard's exception feed through the same validator gate. Each cited
-figure carries its own provenance panel: the period, the data-freshness timestamp, and the source
-tables with row counts. Citations are
-source-level (which tables, how many rows, as of when), not per-line-item. When something can't be
-answered — a missing permission, an unknowable metric — the answer says which part and why,
-rather than narrating around the gap.
-
-**AI Finance Controller** — the assistant's single-shot pipeline extended into a bounded, multi-hop
-**investigation**: the agent decides whether one metric answers the question or whether it needs to
-chase a follow-up, up to a fixed hop cap, with every hop's narration independently grounding-
-validated before it is stored. Two entry points, one engine — a person can ask a question directly,
-and a scheduled sweep opens an investigation on its own the moment a real anomaly is detected, so a
-finding is already traced by the time anyone opens it. An investigation that reaches a root cause
-can end in a **draft action** — a reorder purchase order or a supplier price-variance flag — whose
-quantities and prices come entirely from the existing domain math (`suggestReorder`,
-`detectPriceChange`), never from the model. The model drafts; a human approves; only that separate,
-explicit approval writes anything. Alongside it, a **batch reconciliation report** aggregates every
-already-posted invoice line against its purchase order and goods receipt into a real match rate and
-a ranked exception list — reading the reconciliation output the production posting path already
-wrote, never re-running matching for the demo.
-
-**Notifications, computed not polled** — alerts come from a rule engine evaluating real state
-(stock against par levels, lots against expiry dates), so a rule that does not fire produces no
-alert rather than a reassuring empty list. Each alert carries a deduplication key, so a persistent
-problem updates in place instead of arriving daily, and resolves itself when the condition clears.
-Severity, recipients, and channels are per-rule configuration; delivery is tracked per recipient
-per channel.
-
-**Guided onboarding** — a setup flow that tracks real recorded progress rather than inferring
-"looks empty": connect sales, upload invoices, confirm detected products and suppliers, set par
-levels. Each step is independently skippable, and a skipped step is a decision the system
-remembers rather than a gap it keeps prompting about.
+All four must pass. `pnpm invariants` additionally machine-checks I1–I9 across the repo.
 
 ---
 
@@ -216,15 +465,10 @@ remembers rather than a gap it keeps prompting about.
 Full walkthrough: **[ARCHITECTURE.md](ARCHITECTURE.md)** — the invariants, the tenancy model, the
 deterministic/probabilistic boundary, and how the assistant is kept from inventing numbers.
 
-A modular monolith across three processes, chosen over microservices because receiving goods
-atomically touches lots, movements, the stock projection, and the event outbox — as separate
-services that becomes a distributed saga with compensating actions, for a workload with no
-independent scaling need. The split is by **resource profile**, not by domain noun.
-
 ```
 apps/web         Next.js 15 App Router
 apps/api         Fastify — tRPC
-apps/worker      Background consumers
+apps/worker      Background consumers — 19 queues
 
 packages/domain  Pure business logic, no I/O — costing, FEFO, recipe explosion
 packages/db      Schema, migrations, repositories, tenant guards
@@ -239,9 +483,9 @@ packages/storage S3-compatible object storage
 packages/email   Outbound mail (mocked transport) and inbound invoice intake
 packages/queue   Background job queue (BullMQ)
 packages/logger  Structured logging
+packages/config  Environment loading
+packages/ui      Shared components
 ```
-
-Module boundaries are enforced in CI by dependency-cruiser, so the layering can't quietly erode.
 
 **Postgres 16** (pgvector, pg_trgm, btree_gist) · **Redis** · **S3/MinIO** · TypeScript strict
 throughout.
@@ -258,31 +502,13 @@ a unit mismatch a compile error rather than a value that's wrong by a factor of 
 application role has `UPDATE` and `DELETE` revoked on the movements table. A correction is a new
 row. This is what makes historical numbers reproducible.
 
-**Stocktakes freeze a snapshot when the count starts.** Comparing a 9am physical count against an
-11am theoretical balance manufactures variance out of sales that happened during the count.
+**Times are `TIMESTAMPTZ`, stored UTC, presented in store timezone.** A restaurant's "yesterday" is
+a local-time concept; dayparts computed in UTC are simply wrong. Movements are bi-temporal —
+`occurred_at` (business time) versus `recorded_at` (system time) — so a Monday delivery entered on
+Wednesday belongs in Monday's history.
 
-**Business numbers come from one registered function each.** If the dashboard and an API computed
-"food cost %" through different code paths, they would eventually disagree — and the moment a user
-sees two different values for the same thing, every number loses credibility.
-
-**Deterministic where wrong answers cost money.** All arithmetic, reorder quantities, margin
-attribution, and FEFO allocation are ordinary tested code. Probabilistic techniques are confined to
-document extraction and fuzzy match *suggestions*, which a human confirms.
-
-**Times are stored UTC, resolved in store-local time.** A restaurant's "yesterday" is a local-time
-concept; a sale at 23:45 on the 31st lands in the wrong month otherwise.
-
-**A provider failure is treated by kind, not uniformly.** A `503` is Google-side capacity — the same
-call usually succeeds moments later, so it is retried a bounded number of times; without that, one
-transient spike failed an entire multi-hop investigation. A `429` is deliberately *not* retried:
-the quota is genuinely spent, retrying cannot succeed, and it would deepen the exhaustion. The
-proactive sweep instead paces itself — a capped batch per tick, spaced — because the real fix for a
-per-minute rate limit is pacing, not retrying.
-
-**Accessibility is fixed at the design token, never the call site.** Every colour pairing in both
-themes is contrast-measured against WCAG AA, and the passing values live in the tokens themselves —
-so a new screen inherits compliant contrast, a keyboard focus ring, semantic table headers, and
-reduced-motion behaviour by using the shared primitives, rather than remembering thirty rules.
+**Contribution margin, never "profit".** Rent, labour and tax are outside the data boundary, so the
+number is labelled for what it actually is.
 
 ---
 
@@ -311,24 +537,7 @@ logic failure is the remaining work before any number here means something.
 
 ---
 
-## Running it
-
-```bash
-cp .env.local.example .env.local   # add GEMINI_API_KEY only for live AI/extraction calls
-docker compose up -d               # Postgres, Redis, MinIO
-corepack enable
-pnpm install --frozen-lockfile
-
-pnpm demo:quick                    # bounded reviewer dataset
-# pnpm demo                        # canonical 180-day corpus
-```
-
-Both commands create or repair the local demo identity, run both migrations, regenerate the
-deterministic corpus, and seed catalog, sales, invoices, purchasing and engagement data.
-`pnpm demo:quick` caps sales at 420 receipts while retaining every store-day in its 14-day window.
-`pnpm demo` replays 42,875 transactions through the real repositories and is the canonical evidence
-dataset, but it takes several hours. Everything after `seed-demo.mts` can be run separately if you
-only need part of it.
+## Running it in detail
 
 Start all three processes together:
 
@@ -344,22 +553,17 @@ pnpm --filter @retailos/web dev       # :3000
 pnpm --filter @retailos/worker dev    # extraction, embeddings, notifications
 ```
 
-The worker is not optional for the full experience—document extraction, embeddings and notification
-delivery are all driven by it. The seeded demo remains useful without a Gemini key; live model calls
-degrade explicitly instead of fabricating an answer.
+The worker is not optional for the full experience — document extraction, embeddings and
+notification delivery are all driven by it.
 
-Scripts load `.env.local` themselves (`packages/config`), so no manual `export` step is
-needed. Real environment variables always take precedence, which is why CI — which sets them
-explicitly and ships no `.env.local` — is unaffected.
-
-```bash
-pnpm typecheck && pnpm lint && pnpm boundaries && pnpm test
-```
+Scripts load `.env.local` themselves (`packages/config`), so no manual `export` step is needed. Real
+environment variables always take precedence, which is why CI — which sets them explicitly and ships
+no `.env.local` — is unaffected.
 
 ### Demo data
 
 The repository contains a **generator**, not a dataset. `mock-data/generate/` is committed; the
-corpus it produces is gitignored, so a fresh clone reproduces it rather than downloading it:
+corpus it produces is gitignored, so a fresh clone reproduces it rather than downloading it.
 
 `pnpm demo` runs all of it. The individual steps, if you need them separately:
 
@@ -372,12 +576,12 @@ pnpm --filter @retailos/api exec tsx src/scripts/seed-demo-engagement.mts    # a
 ```
 
 Run them in the order listed: each builds on the one before, and `seed-demo.mts` wipes the demo org
-before rebuilding it. Stop the worker before `seed-demo-invoices.mts` — it will otherwise pick up the
-extraction jobs and re-extract over the seeded rows.
+before rebuilding it. Stop the worker before `seed-demo-invoices.mts` — it will otherwise pick up
+the extraction jobs and re-extract over the seeded rows.
 
-**Do not regenerate the corpus against a database already seeded from it.** Generated dates anchor to
-generation time, so a regenerated corpus describes a different dataset than the one already in the
-database, and the two can only be reconciled by re-running the whole seed.
+**Do not regenerate the corpus against a database already seeded from it.** Generated dates anchor
+to generation time, so a regenerated corpus describes a different dataset than the one already in
+the database, and the two can only be reconciled by re-running the whole seed.
 
 A three-outlet Bengaluru café chain: 180 days of history, ~50k sales transactions, ~455k stock
 movements, 75 GST tax invoices with real GSTIN/HSN/CGST-SGST across four distinct supplier layouts.
@@ -415,6 +619,10 @@ formula is correct and explainable.
 "Profit" is never reported — rent, labour, and tax are outside the system's data boundary. The
 number is **contribution margin**, and it's labelled as such.
 
+The demo corpus is **synthetic and deterministic**. It demonstrates seeded failure modes, not
+measured customer outcomes. The repository has not been load-tested. Outbound email is recorded but
+not sent.
+
 ---
 
 ## Roadmap
@@ -427,3 +635,9 @@ Deliberately deferred rather than missing: **email delivery is recorded but not 
 notification fans out to real per-recipient, per-channel delivery rows, and the in-app channel is
 marked delivered while email stays `PENDING`, because claiming a send that never happened is the
 same class of lie as a fabricated number.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).
